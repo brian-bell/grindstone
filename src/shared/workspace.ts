@@ -1,7 +1,35 @@
+export type RepositorySource = 'scan_root' | 'explicit'
+
+export type CatalogDiagnosticCode =
+  | 'config_parse_error'
+  | 'config_type_error'
+  | 'scan_root_missing'
+  | 'scan_root_unreadable'
+  | 'explicit_repo_missing'
+
+export type CatalogDiagnostic = {
+  severity: 'error' | 'warning'
+  code: CatalogDiagnosticCode
+  message: string
+  configuredPath: string
+  resolvedPath: string
+}
+
+export type RepositoryRow = {
+  id: string
+  name: string
+  path: string
+  canonicalPath: string
+  sources: RepositorySource[]
+}
+
 export type RepositoryPaneState = {
-  status: 'empty'
+  status: 'ready' | 'error'
   title: string
   description: string
+  repositories: RepositoryRow[]
+  selectedRepositoryId: string | null
+  diagnostics: CatalogDiagnostic[]
 }
 
 export type FlowPaneState =
@@ -31,9 +59,12 @@ export type InitialWorkspaceState = {
 
 export const defaultInitialWorkspaceState: InitialWorkspaceState = {
   repository: {
-    status: 'empty',
-    title: 'No repository selected',
-    description: 'Repository catalog integration will connect this area to Flow setup.'
+    status: 'ready',
+    title: 'No repositories configured',
+    description: 'Add scan_roots or repos to Grindstone config to populate this pane.',
+    repositories: [],
+    selectedRepositoryId: null,
+    diagnostics: []
   },
   flow: {
     status: 'empty',

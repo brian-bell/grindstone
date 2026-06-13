@@ -2,15 +2,109 @@ import type { IpcMain } from 'electron'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import {
   defaultInitialWorkspaceState,
-  type InitialWorkspaceState
+  type CatalogDiagnostic,
+  type InitialWorkspaceState,
+  type RepositoryPaneState
 } from '@shared/workspace'
+import { loadGrindstoneConfig, type LoadGrindstoneConfigOptions } from './config'
+import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 
-export async function loadInitialWorkspaceState(): Promise<InitialWorkspaceState> {
-  return defaultInitialWorkspaceState
+let currentWorkspaceState: InitialWorkspaceState | undefined
+
+export async function loadInitialWorkspaceState(
+  options: LoadGrindstoneConfigOptions = {}
+): Promise<InitialWorkspaceState> {
+  const config = await loadGrindstoneConfig(options)
+
+  if (!config.ok) {
+    currentWorkspaceState = {
+      ...defaultInitialWorkspaceState,
+      repository: createRepositoryErrorState(config.diagnostics)
+    }
+    return currentWorkspaceState
+  }
+
+  const catalog = await scanRepositoryCatalog({
+    scanRoots: config.scanRoots,
+    repos: config.repos
+  })
+
+  currentWorkspaceState = {
+    ...defaultInitialWorkspaceState,
+    repository: createRepositoryReadyState(catalog)
+  }
+  return currentWorkspaceState
+}
+
+export async function selectRepository(request: {
+  repositoryId: string
+}): Promise<InitialWorkspaceState> {
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  const repository = workspaceState.repository.repositories.find(
+    (row) => row.id === request.repositoryId
+  )
+
+  if (repository === undefined) {
+    return workspaceState
+  }
+
+  currentWorkspaceState = {
+    ...workspaceState,
+    repository: {
+      ...workspaceState.repository,
+      title: repository.name,
+      description: repository.path,
+      selectedRepositoryId: repository.id
+    },
+    flow: {
+      status: 'empty',
+      title: `${repository.name} Flow workspace`,
+      description: `Flow context is scoped to ${repository.path}.`
+    }
+  }
+  return currentWorkspaceState
 }
 
 export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): void {
   handleTypedIpc(ipcMain, ipcChannels.workspace.getInitialState, () =>
     loadInitialWorkspaceState()
   )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.selectRepository, (request) =>
+    selectRepository(request)
+  )
+}
+
+function createRepositoryReadyState(catalog: RepositoryCatalogResult): RepositoryPaneState {
+  const repositoryCount = catalog.repositories.length
+
+  return {
+    status: 'ready',
+    title: repositoryCount === 0 ? 'No repositories configured' : 'Repository catalog',
+    description:
+      repositoryCount === 0
+        ? 'Add scan_roots or repos to Grindstone config to populate this pane.'
+        : `${repositoryCount} ${pluralize('repository', repositoryCount)} configured.`,
+    repositories: catalog.repositories,
+    selectedRepositoryId: null,
+    diagnostics: catalog.diagnostics
+  }
+}
+
+function createRepositoryErrorState(diagnostics: CatalogDiagnostic[]): RepositoryPaneState {
+  return {
+    status: 'error',
+    title: 'Repository catalog unavailable',
+    description: firstDiagnosticMessage(diagnostics),
+    repositories: [],
+    selectedRepositoryId: null,
+    diagnostics
+  }
+}
+
+function firstDiagnosticMessage(diagnostics: CatalogDiagnostic[]): string {
+  return diagnostics[0]?.message ?? 'Unable to load repository catalog.'
+}
+
+function pluralize(label: string, count: number): string {
+  return count === 1 ? label : `${label}s`
 }

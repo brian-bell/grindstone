@@ -1,7 +1,13 @@
 import { CirclePlus, GitBranch, RotateCcw, Sparkles } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
-import type { FlowPaneState, InitialWorkspaceState } from '@shared/workspace'
+import type {
+  CatalogDiagnostic,
+  FlowPaneState,
+  InitialWorkspaceState,
+  RepositoryPaneState,
+  RepositoryRow
+} from '@shared/workspace'
 import { defaultInitialWorkspaceState } from '@shared/workspace'
 
 export function App(): ReactElement {
@@ -39,6 +45,22 @@ export function App(): ReactElement {
   }, [routeFlowState])
 
   const shellState = workspace ?? defaultInitialWorkspaceState
+  const isWorkspaceLoading = workspace === null
+
+  async function handleRepositorySelect(repositoryId: string): Promise<void> {
+    try {
+      const nextWorkspace = await window.grindstone.workspace.selectRepository({
+        repositoryId
+      })
+      setWorkspace(nextWorkspace)
+      setFlowState(routeFlowState ?? nextWorkspace.flow)
+    } catch (error: unknown) {
+      setFlowState({
+        status: 'error',
+        message: getErrorMessage(error)
+      })
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -50,11 +72,11 @@ export function App(): ReactElement {
           <GitBranch aria-hidden="true" size={18} />
           <h2 id="repository-pane-title">Repository Area</h2>
         </div>
-        <div className="empty-block">
-          <p className="eyebrow">Repository</p>
-          <h3>{shellState.repository.title}</h3>
-          <p>{shellState.repository.description}</p>
-        </div>
+        <RepositoryCatalogView
+          isLoading={isWorkspaceLoading}
+          repository={shellState.repository}
+          onSelect={handleRepositorySelect}
+        />
       </section>
 
       <main
@@ -105,6 +127,103 @@ export function App(): ReactElement {
           ))}
         </div>
       </section>
+    </div>
+  )
+}
+
+function RepositoryCatalogView({
+  isLoading,
+  repository,
+  onSelect
+}: {
+  isLoading: boolean
+  repository: RepositoryPaneState
+  onSelect: (repositoryId: string) => Promise<void>
+}): ReactElement {
+  if (isLoading) {
+    return (
+      <div
+        className="repository-summary"
+        role="status"
+        aria-label="Repository catalog loading"
+      >
+        <p className="eyebrow">Repository</p>
+        <h3>Loading repositories</h3>
+        <p>Reading configured scan roots and explicit repositories.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="repository-catalog">
+      <div className="repository-summary">
+        <p className="eyebrow">Repository</p>
+        <h3>{repository.title}</h3>
+        <p>{repository.description}</p>
+      </div>
+
+      {repository.repositories.length > 0 ? (
+        <div className="repository-list" aria-label="Configured repositories">
+          {repository.repositories.map((row) => (
+            <RepositoryRowButton
+              isSelected={row.id === repository.selectedRepositoryId}
+              key={row.id}
+              repository={row}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {repository.diagnostics.length > 0 ? (
+        <div className="diagnostic-list" aria-label="Repository diagnostics">
+          {repository.diagnostics.map((diagnostic) => (
+            <CatalogDiagnosticRow
+              diagnostic={diagnostic}
+              key={`${diagnostic.code}:${diagnostic.resolvedPath}`}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function RepositoryRowButton({
+  isSelected,
+  repository,
+  onSelect
+}: {
+  isSelected: boolean
+  repository: RepositoryRow
+  onSelect: (repositoryId: string) => Promise<void>
+}): ReactElement {
+  return (
+    <button
+      aria-pressed={isSelected}
+      className="repository-row"
+      onClick={() => void onSelect(repository.id)}
+      type="button"
+    >
+      <span className="repository-row-main">
+        <span className="repository-name">{repository.name}</span>
+        <span className="repository-path">{repository.path}</span>
+      </span>
+      <span className="repository-sources">{repository.sources.join(', ')}</span>
+    </button>
+  )
+}
+
+function CatalogDiagnosticRow({
+  diagnostic
+}: {
+  diagnostic: CatalogDiagnostic
+}): ReactElement {
+  return (
+    <div className="diagnostic-row" role="alert">
+      <span className="diagnostic-code">{diagnostic.code}</span>
+      <span className="diagnostic-message">{diagnostic.message}</span>
+      <span className="diagnostic-path">{diagnostic.configuredPath}</span>
     </div>
   )
 }

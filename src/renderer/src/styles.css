@@ -74,15 +74,14 @@ select {
   letter-spacing: 0;
 }
 
-.empty-block,
+.repository-summary,
 .state-block {
   display: grid;
   align-content: center;
-  min-height: 280px;
   max-width: 560px;
 }
 
-.empty-block h3,
+.repository-summary h3,
 .state-block h2,
 .hint-row h3 {
   margin: 0;
@@ -90,12 +89,12 @@ select {
   letter-spacing: 0;
 }
 
-.empty-block h3,
+.repository-summary h3,
 .state-block h2 {
   font-size: 1.5rem;
 }
 
-.empty-block p,
+.repository-summary p,
 .state-block p,
 .hint-row p {
   margin: 10px 0 0;
@@ -110,6 +109,103 @@ select {
   font-weight: 700;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.repository-catalog {
+  display: grid;
+  gap: 18px;
+  margin-top: 28px;
+}
+
+.repository-summary {
+  min-height: 128px;
+}
+
+.state-block {
+  min-height: 280px;
+}
+
+.repository-list {
+  display: grid;
+  gap: 8px;
+}
+
+.repository-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid #d1d7d4;
+  border-radius: 7px;
+  background: #fffdf8;
+  color: #1f2524;
+  text-align: left;
+}
+
+.repository-row:hover {
+  border-color: #8e9995;
+}
+
+.repository-row[aria-pressed="true"] {
+  border-color: #244c5a;
+  background: #eaf4f5;
+}
+
+.repository-row-main {
+  display: grid;
+  min-width: 0;
+}
+
+.repository-name {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-path,
+.repository-sources,
+.diagnostic-path {
+  overflow-wrap: anywhere;
+  color: #65706c;
+  font-size: 0.78rem;
+}
+
+.repository-sources {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e7ece8;
+  color: #44504b;
+  white-space: nowrap;
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diagnostic-row {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border-left: 3px solid #a65f1b;
+  border-radius: 6px;
+  background: #fff5e9;
+}
+
+.diagnostic-code {
+  color: #7a3c08;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.diagnostic-message {
+  color: #5b3921;
+  font-size: 0.86rem;
+  line-height: 1.4;
 }
 
 .error-block {
@@ -176,7 +272,7 @@ select {
     border-bottom: 1px solid #d9d4ca;
   }
 
-  .empty-block,
+  .repository-summary,
   .state-block {
     min-height: 180px;
   }
