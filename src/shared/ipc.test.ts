@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import {
+  handleTypedIpc,
+  invokeTypedIpc,
   ipcChannels,
   normalizeIpcError,
   type IpcRequestMap,
   type IpcResponseMap
 } from './ipc'
-import type { InitialWorkspaceState } from './workspace'
+import { defaultInitialWorkspaceState, type InitialWorkspaceState } from './workspace'
 
 describe('IPC contract', () => {
   it('pins the initial workspace channel name', () => {
@@ -13,11 +15,44 @@ describe('IPC contract', () => {
   })
 
   it('maps workspace:getInitialState to an empty request and InitialWorkspaceState response', () => {
-    const request: IpcRequestMap['workspace:getInitialState'] = undefined
-    const response = {} as IpcResponseMap['workspace:getInitialState']
+    type InitialWorkspaceChannel = typeof ipcChannels.workspace.getInitialState
+    const request = undefined satisfies IpcRequestMap[InitialWorkspaceChannel]
+    const response = defaultInitialWorkspaceState satisfies IpcResponseMap[InitialWorkspaceChannel]
 
     expect(request).toBeUndefined()
-    expect(response).toEqual({} as InitialWorkspaceState)
+    expect(response).toEqual(defaultInitialWorkspaceState)
+    expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
+  })
+
+  it('invokes IPC through the typed request and response map', async () => {
+    const invoke = vi.fn().mockResolvedValue(defaultInitialWorkspaceState)
+
+    await expect(
+      invokeTypedIpc(invoke, ipcChannels.workspace.getInitialState, undefined)
+    ).resolves.toEqual(defaultInitialWorkspaceState)
+
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.getInitialState)
+  })
+
+  it('registers IPC handlers through the typed request and response map', async () => {
+    const ipcMain = {
+      handle: vi.fn()
+    }
+
+    handleTypedIpc(ipcMain, ipcChannels.workspace.getInitialState, () => {
+      return defaultInitialWorkspaceState
+    })
+
+    const handler = ipcMain.handle.mock.calls[0]?.[1] as (
+      event: unknown,
+      request: undefined
+    ) => Promise<InitialWorkspaceState>
+
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.getInitialState,
+      expect.any(Function)
+    )
+    await expect(handler({}, undefined)).resolves.toEqual(defaultInitialWorkspaceState)
   })
 
   it('normalizes rejected IPC errors to a stable renderer-safe shape', () => {

@@ -55,6 +55,7 @@ const setWorkspaceApi = (getInitialState: () => Promise<typeof defaultInitialSta
 describe('App shell', () => {
   afterEach(() => {
     Reflect.deleteProperty(window, 'grindstone')
+    window.history.pushState({}, '', '/')
   })
 
   it('opens into the three-pane Flow workspace with default state', async () => {
@@ -93,6 +94,18 @@ describe('App shell', () => {
     expect(
       await screen.findByRole('alert', { name: /flow workspace error/i })
     ).toHaveTextContent('IPC offline')
+  })
+
+  it('shows a Flow-scoped error for standalone middle-pane route attempts', async () => {
+    window.history.pushState({}, '', '/plans')
+    setWorkspaceApi(vi.fn().mockResolvedValue(defaultInitialState))
+
+    render(<App />)
+
+    expect(
+      await screen.findByRole('alert', { name: /flow workspace error/i })
+    ).toHaveTextContent('Only Flow workspace routes are available in this shell.')
+    expect(screen.queryByText('No Flow selected')).not.toBeInTheDocument()
   })
 
   it('renders disabled Flow shortcut affordances in the right pane', async () => {

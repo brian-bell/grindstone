@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron'
-import { ipcChannels } from '@shared/ipc'
+import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import {
   defaultInitialWorkspaceState,
   type InitialWorkspaceState
@@ -10,5 +10,7 @@ export async function loadInitialWorkspaceState(): Promise<InitialWorkspaceState
 }
 
 export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): void {
-  ipcMain.handle(ipcChannels.workspace.getInitialState, () => loadInitialWorkspaceState())
+  handleTypedIpc(ipcMain, ipcChannels.workspace.getInitialState, () =>
+    loadInitialWorkspaceState()
+  )
 }

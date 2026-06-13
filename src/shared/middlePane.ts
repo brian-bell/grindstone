@@ -21,8 +21,10 @@ export type MiddlePaneRouteResolution =
   | { surface: (typeof middlePaneManifest)[number]; flowState: FlowPaneState }
 
 export function resolveMiddlePaneRoute(path: string): MiddlePaneRouteResolution {
-  if (path === '/' || path === '/flow') {
-    return { surface: middlePaneManifest[0] }
+  const declaredSurface = middlePaneManifest.find((surface) => surface.route === path)
+
+  if (declaredSurface) {
+    return { surface: declaredSurface }
   }
 
   return {

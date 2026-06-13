@@ -1,11 +1,16 @@
 import { CirclePlus, GitBranch, RotateCcw, Sparkles } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
+import { resolveMiddlePaneRoute } from '@shared/middlePane'
 import type { FlowPaneState, InitialWorkspaceState } from '@shared/workspace'
 import { defaultInitialWorkspaceState } from '@shared/workspace'
 
 export function App(): ReactElement {
   const [workspace, setWorkspace] = useState<InitialWorkspaceState | null>(null)
-  const [flowState, setFlowState] = useState<FlowPaneState>({ status: 'loading' })
+  const [routeResolution] = useState(() => resolveMiddlePaneRoute(getRendererPath()))
+  const routeFlowState = 'flowState' in routeResolution ? routeResolution.flowState : null
+  const [flowState, setFlowState] = useState<FlowPaneState>(
+    routeFlowState ?? { status: 'loading' }
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -15,7 +20,7 @@ export function App(): ReactElement {
       .then((initialState) => {
         if (!cancelled) {
           setWorkspace(initialState)
-          setFlowState(initialState.flow)
+          setFlowState(routeFlowState ?? initialState.flow)
         }
       })
       .catch((error: unknown) => {
@@ -31,7 +36,7 @@ export function App(): ReactElement {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [routeFlowState])
 
   const shellState = workspace ?? defaultInitialWorkspaceState
 
@@ -102,6 +107,18 @@ export function App(): ReactElement {
       </section>
     </div>
   )
+}
+
+function getRendererPath(): string {
+  if (window.location.protocol === 'file:') {
+    return '/'
+  }
+
+  if (window.location.pathname.endsWith('/index.html')) {
+    return '/'
+  }
+
+  return window.location.pathname || '/'
 }
 
 function getErrorMessage(error: unknown): string {
