@@ -358,8 +358,13 @@ function RepositoryCreatePanel({
   const [localError, setLocalError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [retryError, setRetryError] = useState<{
+    message: string
+    repositoryName: string
+  } | null>(null)
   const [isOpen, setIsOpen] = useState(false)
   const createButtonRef = useRef<HTMLButtonElement | null>(null)
+  const scanRootSelectRef = useRef<HTMLSelectElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const nameInputRef = useRef<HTMLInputElement | null>(null)
   const shouldRestoreFocusRef = useRef(false)
@@ -395,12 +400,15 @@ function RepositoryCreatePanel({
   function closeCreateDialog(): void {
     shouldRestoreFocusRef.current = true
     setName('')
+    setScanRootId(create.scanRoots[0]?.id ?? '')
+    setGithubEnabled(false)
+    setVisibility('private')
     setLocalError(null)
     setIsOpen(false)
   }
 
   function focusFirstDialogElement(): void {
-    nameInputRef.current?.focus()
+    scanRootSelectRef.current?.focus()
   }
 
   function focusLastDialogElement(): void {
@@ -418,7 +426,7 @@ function RepositoryCreatePanel({
       return
     }
 
-    const firstElement = nameInputRef.current
+    const firstElement = scanRootSelectRef.current
     const lastElement = closeButtonRef.current
 
     if (firstElement === null || lastElement === null) {
@@ -470,14 +478,17 @@ function RepositoryCreatePanel({
 
   async function handleRetry(retry: RepositoryRemoteRetryRecord): Promise<void> {
     setRetryingId(retry.id)
-    setLocalError(null)
+    setRetryError(null)
     try {
       const nextWorkspace = await window.grindstone.workspace.retryRepositoryRemote({
         retryId: retry.id
       })
       onWorkspaceUpdate(nextWorkspace)
     } catch (error: unknown) {
-      setLocalError(getErrorMessage(error))
+      setRetryError({
+        message: getErrorMessage(error),
+        repositoryName: retry.githubRepositoryName
+      })
     } finally {
       setRetryingId(null)
     }
@@ -527,6 +538,7 @@ function RepositoryCreatePanel({
                 <select
                   disabled={!isAvailable || isSubmitting}
                   onChange={(event) => setScanRootId(event.target.value)}
+                  ref={scanRootSelectRef}
                   value={scanRootId}
                 >
                   {create.scanRoots.length === 0 ? (
@@ -641,6 +653,16 @@ function RepositoryCreatePanel({
               onRetry={handleRetry}
             />
           ))}
+        </div>
+      ) : null}
+
+      {retryError !== null ? (
+        <div
+          aria-label="Repository remote retry error"
+          className="create-error"
+          role="alert"
+        >
+          {retryError.repositoryName}: {retryError.message}
         </div>
       ) : null}
     </div>

@@ -374,18 +374,18 @@ describe('App shell', () => {
 
     const dialog = await screen.findByRole('dialog', { name: /create repository/i })
     expect(dialog).toHaveAttribute('aria-modal', 'true')
-    expect(within(dialog).getByLabelText(/scan root/i)).toBeInTheDocument()
+    const scanRootSelect = within(dialog).getByLabelText(/scan root/i)
+    expect(scanRootSelect).toBeInTheDocument()
     const nameInput = within(dialog).getByLabelText(/repository name/i)
     expect(nameInput).toHaveFocus()
     expect(within(dialog).getByLabelText(/create on github/i)).toBeInTheDocument()
     expect(within(dialog).getByLabelText(/github visibility/i)).toBeInTheDocument()
     const closeButton = within(dialog).getByRole('button', { name: /close repository creation/i })
-    const sentinels = dialog.querySelectorAll<HTMLElement>('[data-focus-sentinel="true"]')
-    expect(sentinels).toHaveLength(2)
-    sentinels[0]?.focus()
+    scanRootSelect.focus()
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
     expect(closeButton).toHaveFocus()
-    sentinels[1]?.focus()
-    expect(nameInput).toHaveFocus()
+    await user.tab()
+    expect(scanRootSelect).toHaveFocus()
 
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
@@ -883,7 +883,25 @@ describe('App shell', () => {
 
   it('resets transient repository creation input when the modal is dismissed', async () => {
     const user = userEvent.setup()
-    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+    const multipleScanRootState: InitialWorkspaceState = {
+      ...catalogState,
+      repository: {
+        ...catalogState.repository,
+        create: {
+          ...catalogState.repository.create,
+          scanRoots: [
+            ...catalogState.repository.create.scanRoots,
+            {
+              id: 'scan-root:1:archive',
+              configuredPath: '/archive',
+              resolvedPath: '/archive',
+              displayPath: '/archive'
+            }
+          ]
+        }
+      }
+    }
+    setWorkspaceApi(vi.fn().mockResolvedValue(multipleScanRootState))
 
     render(<App />)
 
@@ -891,7 +909,10 @@ describe('App shell', () => {
     const launcher = within(repositoryPane).getByRole('button', { name: /create repository/i })
     await user.click(launcher)
     let dialog = await screen.findByRole('dialog', { name: /create repository/i })
+    await user.selectOptions(within(dialog).getByLabelText(/scan root/i), 'scan-root:1:archive')
     await user.type(within(dialog).getByLabelText(/repository name/i), 'draft-repo')
+    await user.click(within(dialog).getByLabelText(/create on github/i))
+    await user.selectOptions(within(dialog).getByLabelText(/github visibility/i), 'public')
     await user.click(within(dialog).getByRole('button', { name: /cancel/i }))
 
     expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
@@ -901,6 +922,7 @@ describe('App shell', () => {
     dialog = await screen.findByRole('dialog', { name: /create repository/i })
     expect(within(dialog).getByLabelText(/repository name/i)).toHaveValue('')
     expect(within(dialog).getByLabelText(/scan root/i)).toHaveValue('scan-root:0:test')
+    expect(within(dialog).getByLabelText(/create on github/i)).not.toBeChecked()
     expect(within(dialog).getByLabelText(/github visibility/i)).toHaveValue('private')
   })
 
@@ -961,6 +983,54 @@ describe('App shell', () => {
       retryId: 'remote-retry:/repos/new-repo'
     })
     expect(screen.queryByText('gh auth failed')).not.toBeInTheDocument()
+  })
+
+  it('shows remote retry failures outside the create modal', async () => {
+    const user = userEvent.setup()
+    const retryState: InitialWorkspaceState = {
+      ...catalogState,
+      repository: {
+        ...catalogState.repository,
+        create: {
+          ...catalogState.repository.create,
+          remoteRetries: [
+            {
+              id: 'remote-retry:/repos/new-repo',
+              repositoryId: '/repos/new-repo',
+              repositoryPath: '/repos/new-repo',
+              githubRepositoryName: 'new-repo',
+              visibility: 'private',
+              status: 'remote_create_failed',
+              lastError: 'gh auth failed',
+              expectedOriginUrl: null
+            }
+          ]
+        }
+      }
+    }
+    const retryRepositoryRemote = vi.fn().mockRejectedValue(new Error('gh auth expired'))
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(retryState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: catalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      retryRepositoryRemote
+    )
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /retry remote for new-repo/i }))
+
+    expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
+    expect(await screen.findByRole('alert', { name: /repository remote retry error/i }))
+      .toHaveTextContent('gh auth expired')
+    expect(screen.getByRole('alert', { name: /repository remote retry error/i }))
+      .toHaveTextContent('new-repo')
   })
 
   it('opens the common config panel with existing editable values', async () => {
