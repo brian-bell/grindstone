@@ -14,6 +14,17 @@ const grindstoneApi = {
       } catch (error) {
         throw normalizeIpcError(error)
       }
+    },
+    async selectRepository(request: { repositoryId: string }): Promise<InitialWorkspaceState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.selectRepository,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
     }
   }
 }

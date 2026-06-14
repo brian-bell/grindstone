@@ -5,6 +5,7 @@ import { defaultInitialWorkspaceState, type InitialWorkspaceState } from '@share
 type PreloadApi = {
   workspace: {
     getInitialState: () => Promise<InitialWorkspaceState>
+    selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
   }
 }
 
@@ -42,7 +43,7 @@ describe('preload bridge', () => {
     expect(exposeInMainWorld).toHaveBeenCalledTimes(1)
     expect(exposeInMainWorld).toHaveBeenCalledWith('grindstone', expect.any(Object))
     expect(Object.keys(api)).toEqual(['workspace'])
-    expect(Object.keys(api.workspace)).toEqual(['getInitialState'])
+    expect(Object.keys(api.workspace)).toEqual(['getInitialState', 'selectRepository'])
     expect('process' in api).toBe(false)
     expect('fs' in api).toBe(false)
   })
@@ -53,6 +54,18 @@ describe('preload bridge', () => {
 
     await expect(api.workspace.getInitialState()).resolves.toEqual(defaultInitialWorkspaceState)
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.getInitialState)
+  })
+
+  it('invokes repository selection through the shared channel', async () => {
+    const { invoke, api } = await loadPreload()
+    invoke.mockResolvedValue(defaultInitialWorkspaceState)
+
+    await expect(
+      api.workspace.selectRepository({ repositoryId: '/repos/example' })
+    ).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.selectRepository, {
+      repositoryId: '/repos/example'
+    })
   })
 
   it('normalizes rejected IPC errors before they cross into the renderer API', async () => {

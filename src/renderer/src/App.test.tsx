@@ -1,12 +1,17 @@
 import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
+import type { InitialWorkspaceState } from '@shared/workspace'
 
-const defaultInitialState = {
+const defaultInitialState: InitialWorkspaceState = {
   repository: {
-    status: 'empty',
-    title: 'No repository selected',
-    description: 'Repository catalog integration will connect this area to Flow setup.'
+    status: 'ready',
+    title: 'No repositories configured',
+    description: 'Add scan_roots or repos to Grindstone config to populate this pane.',
+    repositories: [],
+    selectedRepositoryId: null,
+    diagnostics: []
   },
   flow: {
     status: 'empty',
@@ -41,12 +46,59 @@ const defaultInitialState = {
   ]
 }
 
-const setWorkspaceApi = (getInitialState: () => Promise<typeof defaultInitialState>): void => {
+const catalogState: InitialWorkspaceState = {
+  ...defaultInitialState,
+  repository: {
+    status: 'ready',
+    title: 'Repository catalog',
+    description: '1 repository configured.',
+    repositories: [
+      {
+        id: '/repos/grindstone',
+        name: 'grindstone',
+        path: '/repos/grindstone',
+        canonicalPath: '/repos/grindstone',
+        sources: ['explicit']
+      }
+    ],
+    selectedRepositoryId: null,
+    diagnostics: [
+      {
+        severity: 'warning',
+        code: 'explicit_repo_missing',
+        message: 'Explicit repository does not exist or is not a Git repository: /missing/repo',
+        configuredPath: '/missing/repo',
+        resolvedPath: '/missing/repo'
+      }
+    ]
+  }
+}
+
+const selectedCatalogState: InitialWorkspaceState = {
+  ...catalogState,
+  repository: {
+    ...catalogState.repository,
+    title: 'grindstone',
+    description: '/repos/grindstone',
+    selectedRepositoryId: '/repos/grindstone'
+  },
+  flow: {
+    status: 'empty',
+    title: 'grindstone Flow workspace',
+    description: 'Flow context is scoped to /repos/grindstone.'
+  }
+}
+
+const setWorkspaceApi = (
+  getInitialState: () => Promise<InitialWorkspaceState>,
+  selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
+): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
     value: {
       workspace: {
-        getInitialState
+        getInitialState,
+        selectRepository
       }
     }
   })
@@ -71,9 +123,47 @@ describe('App shell', () => {
     const flowPane = screen.getByRole('main', { name: /flow workspace/i })
     const contextPane = screen.getByRole('region', { name: /contextual hints/i })
 
-    expect(within(repositoryPane).getByText('No repository selected')).toBeInTheDocument()
+    expect(within(repositoryPane).getByText('No repositories configured')).toBeInTheDocument()
     expect(within(flowPane).getByText('No Flow selected')).toBeInTheDocument()
     expect(within(contextPane).getByText('Select a repository')).toBeInTheDocument()
+  })
+
+  it('renders configured repositories and non-fatal catalog diagnostics', async () => {
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+
+    render(<App />)
+
+    const repositoryPane = await screen.findByRole('region', { name: /repository area/i })
+    expect(within(repositoryPane).getByRole('button', { name: /grindstone/i })).toHaveTextContent(
+      '/repos/grindstone'
+    )
+    expect(within(repositoryPane).getByText('explicit')).toBeInTheDocument()
+    expect(within(repositoryPane).getByRole('alert')).toHaveTextContent('/missing/repo')
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
+      'No Flow selected'
+    )
+  })
+
+  it('selects a repository through preload and scopes the Flow workspace', async () => {
+    const user = userEvent.setup()
+    const selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /grindstone/i }))
+
+    expect(selectRepository).toHaveBeenCalledWith({ repositoryId: '/repos/grindstone' })
+    expect(screen.getByRole('button', { name: /grindstone/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
+      'grindstone Flow workspace'
+    )
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
+      'Flow context is scoped to /repos/grindstone.'
+    )
   })
 
   it('shows a Flow-only loading state while the initial workspace state is pending', () => {

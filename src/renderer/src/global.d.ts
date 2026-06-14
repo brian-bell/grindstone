@@ -5,6 +5,7 @@ declare global {
     grindstone: {
       workspace: {
         getInitialState: () => Promise<InitialWorkspaceState>
+        selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
       }
     }
   }

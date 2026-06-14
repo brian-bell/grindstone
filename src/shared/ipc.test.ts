@@ -12,6 +12,7 @@ import { defaultInitialWorkspaceState, type InitialWorkspaceState } from './work
 describe('IPC contract', () => {
   it('pins the initial workspace channel name', () => {
     expect(ipcChannels.workspace.getInitialState).toBe('workspace:getInitialState')
+    expect(ipcChannels.workspace.selectRepository).toBe('workspace:selectRepository')
   })
 
   it('maps workspace:getInitialState to an empty request and InitialWorkspaceState response', () => {
@@ -24,6 +25,18 @@ describe('IPC contract', () => {
     expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
   })
 
+  it('maps workspace:selectRepository to a repository id request and workspace response', () => {
+    type SelectRepositoryChannel = typeof ipcChannels.workspace.selectRepository
+    const request = {
+      repositoryId: '/repos/example'
+    } satisfies IpcRequestMap[SelectRepositoryChannel]
+    const response = defaultInitialWorkspaceState satisfies IpcResponseMap[SelectRepositoryChannel]
+
+    expect(request.repositoryId).toBe('/repos/example')
+    expect(response).toEqual(defaultInitialWorkspaceState)
+    expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
+  })
+
   it('invokes IPC through the typed request and response map', async () => {
     const invoke = vi.fn().mockResolvedValue(defaultInitialWorkspaceState)
 
@@ -32,6 +45,15 @@ describe('IPC contract', () => {
     ).resolves.toEqual(defaultInitialWorkspaceState)
 
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.getInitialState)
+
+    await expect(
+      invokeTypedIpc(invoke, ipcChannels.workspace.selectRepository, {
+        repositoryId: '/repos/example'
+      })
+    ).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.selectRepository, {
+      repositoryId: '/repos/example'
+    })
   })
 
   it('registers IPC handlers through the typed request and response map', async () => {

@@ -6,14 +6,13 @@ Grindstone is currently an Electron, Vite, React, and TypeScript app shell for a
 Flow-first workspace. The checked-in UI opens directly into a three-pane
 workspace:
 
-- Left pane: repository area with a static empty/default state.
+- Left pane: config-driven repository catalog with diagnostics and selection.
 - Middle pane: Flow Workspace only, with explicit loading, empty, and error
   states.
 - Right pane: contextual hints and disabled Flow shortcut affordances.
 
-This slice intentionally uses static shell data. Real repository cataloging,
-Flow persistence, terminal/session integration, settings, and Git operations
-are not implemented here yet.
+Real Flow persistence, terminal/session integration, settings, and Git
+operations are not implemented here yet.
 
 ## Development Workflow
 
@@ -56,12 +55,14 @@ Generated outputs such as `node_modules/`, `out/`, `dist/`, `coverage/`, and
 
 ## Architecture Notes
 
-- The only renderer-facing preload API is
-  `window.grindstone.workspace.getInitialState()`.
-- The only IPC channel is `workspace:getInitialState`.
+- The renderer-facing preload API is `window.grindstone.workspace` with
+  `getInitialState()` and `selectRepository()`.
+- Workspace IPC channels are `workspace:getInitialState` and
+  `workspace:selectRepository`.
 - Add new IPC endpoints through `src/shared/ipc.ts` so request/response maps,
   typed invocation, and handler registration stay in sync.
-- The main process returns `defaultInitialWorkspaceState` for this shell slice.
+- The main process loads TOML config, scans repositories, and keeps selection
+  in memory for this shell slice.
 - The renderer must not import Electron or Node authority directly. Keep
   filesystem/process access in main/preload.
 - Browser windows use `contextIsolation: true`, `nodeIntegration: false`, and

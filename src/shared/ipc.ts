@@ -2,7 +2,8 @@ import type { InitialWorkspaceState } from './workspace'
 
 export const ipcChannels = {
   workspace: {
-    getInitialState: 'workspace:getInitialState'
+    getInitialState: 'workspace:getInitialState',
+    selectRepository: 'workspace:selectRepository'
   }
 } as const
 
@@ -10,10 +11,14 @@ export type IpcChannel = (typeof ipcChannels.workspace)[keyof typeof ipcChannels
 
 export type IpcRequestMap = {
   'workspace:getInitialState': undefined
+  'workspace:selectRepository': {
+    repositoryId: string
+  }
 }
 
 export type IpcResponseMap = {
   'workspace:getInitialState': InitialWorkspaceState
+  'workspace:selectRepository': InitialWorkspaceState
 }
 
 export type NormalizedIpcError = {
