@@ -288,7 +288,10 @@ function validateCatalogConfig(rawConfig: RawConfig, configPath: string): Catalo
         configuredPath: 'artifacts',
         resolvedPath: configPath
       })
-    } else if (typeof rawConfig.artifacts.root !== 'string') {
+    } else if (
+      typeof rawConfig.artifacts.root !== 'string' ||
+      rawConfig.artifacts.root.trim() === ''
+    ) {
       diagnostics.push({
         severity: 'error',
         code: 'config_type_error',

@@ -241,9 +241,11 @@ describe('Grindstone config loader', () => {
     const invalidArtifactsPath = join(root, 'invalid-artifacts.toml')
     const missingRootPath = join(root, 'missing-artifact-root.toml')
     const invalidRootPath = join(root, 'invalid-artifact-root.toml')
+    const emptyRootPath = join(root, 'empty-artifact-root.toml')
     await writeFile(invalidArtifactsPath, 'artifacts = "not-a-table"\n')
     await writeFile(missingRootPath, '[artifacts]\n')
     await writeFile(invalidRootPath, '[artifacts]\nroot = 42\n')
+    await writeFile(emptyRootPath, '[artifacts]\nroot = "  "\n')
 
     await expect(loadGrindstoneConfig({ configPath: invalidArtifactsPath })).resolves.toMatchObject({
       ok: false,
@@ -277,6 +279,18 @@ describe('Grindstone config loader', () => {
           code: 'config_type_error',
           configuredPath: 'artifacts.root',
           resolvedPath: invalidRootPath
+        }
+      ]
+    })
+
+    await expect(loadGrindstoneConfig({ configPath: emptyRootPath })).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'config_type_error',
+          configuredPath: 'artifacts.root',
+          resolvedPath: emptyRootPath
         }
       ]
     })
