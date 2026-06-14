@@ -55,12 +55,22 @@ export type RetryRepositoryRemoteResult =
 export async function createRepository({
   scanRoots,
   request,
-  runCommand = runProcess
+  runCommand = runProcess,
+  removeTarget = removeTargetPath
 }: {
   scanRoots: RepositoryScanRoot[]
   request: CreateRepositoryRequest
   runCommand?: CommandRunner
+  removeTarget?: (path: string) => Promise<void>
 }): Promise<CreateRepositoryResult> {
+  const requestError = validateCreateRepositoryRequest(request)
+  if (requestError !== null) {
+    return {
+      ok: false,
+      error: requestError
+    }
+  }
+
   const scanRoot = scanRoots.find((candidate) => candidate.id === request.scanRootId)
   if (scanRoot === undefined) {
     return createFailure('scan_root_unavailable', 'Selected scan root is unavailable.')
@@ -96,7 +106,7 @@ export async function createRepository({
   try {
     const canonicalTarget = await realpath(targetPath)
     if (!isContainedPath(canonicalRoot, canonicalTarget)) {
-      await removeCreatedTarget(targetPath)
+      await removeCreatedTarget(targetPath, removeTarget)
       return createFailure(
         'validation_error',
         'Created repository path escaped the selected scan root.'
@@ -157,8 +167,10 @@ export async function createRepository({
       }
     }
   } catch (error) {
-    await removeCreatedTarget(targetPath)
-    return createFailure('local_creation_failed', getErrorMessage(error))
+    const cleanupError = await removeCreatedTarget(targetPath, removeTarget)
+    const cleanupMessage =
+      cleanupError === null ? '' : ` Cleanup also failed: ${cleanupError}`
+    return createFailure('local_creation_failed', `${getErrorMessage(error)}${cleanupMessage}`)
   }
 }
 
@@ -275,6 +287,32 @@ export function runProcess(
   })
 }
 
+function validateCreateRepositoryRequest(request: CreateRepositoryRequest): RepositoryCreateError | null {
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof request.scanRootId !== 'string' ||
+    typeof request.name !== 'string' ||
+    typeof request.github !== 'object' ||
+    request.github === null ||
+    typeof request.github.enabled !== 'boolean'
+  ) {
+    return {
+      code: 'validation_error',
+      message: 'Create repository request is invalid.'
+    }
+  }
+
+  if (request.github.visibility !== 'public' && request.github.visibility !== 'private') {
+    return {
+      code: 'validation_error',
+      message: 'GitHub visibility must be public or private.'
+    }
+  }
+
+  return null
+}
+
 function validateRepositoryName(name: string): string | null {
   if (name.trim() === '') {
     return 'Repository name is required.'
@@ -309,12 +347,20 @@ function isContainedPath(root: string, target: string): boolean {
   return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath)
 }
 
-async function removeCreatedTarget(path: string): Promise<void> {
+async function removeCreatedTarget(
+  path: string,
+  removeTarget: (path: string) => Promise<void>
+): Promise<string | null> {
   try {
-    await rm(path, { recursive: true, force: true })
-  } catch {
-    // The caller reports the original local creation error.
+    await removeTarget(path)
+    return null
+  } catch (error) {
+    return getErrorMessage(error)
   }
+}
+
+async function removeTargetPath(path: string): Promise<void> {
+  await rm(path, { recursive: true, force: true })
 }
 
 async function runGitHubCreate({
@@ -402,7 +448,10 @@ async function getOriginUrl(
       cwd: retry.repositoryPath
     })
     const originUrl = result.stdout.trim()
-    if (retry.expectedOriginUrl !== null && originUrl === retry.expectedOriginUrl) {
+    if (
+      retry.expectedOriginUrl !== null &&
+      isSameGitHubRepositoryRemote(originUrl, retry.expectedOriginUrl)
+    ) {
       return { kind: 'matches' }
     }
 
@@ -413,6 +462,50 @@ async function getOriginUrl(
   } catch {
     return { kind: 'missing' }
   }
+}
+
+function isSameGitHubRepositoryRemote(left: string, right: string): boolean {
+  const normalizedLeft = normalizeGitHubRepositoryRemote(left)
+  const normalizedRight = normalizeGitHubRepositoryRemote(right)
+
+  if (normalizedLeft !== null && normalizedRight !== null) {
+    return normalizedLeft === normalizedRight
+  }
+
+  return left.trim() === right.trim()
+}
+
+function normalizeGitHubRepositoryRemote(remoteUrl: string): string | null {
+  const trimmedUrl = remoteUrl.trim()
+  const scpLikeRemote = /^git@([^:]+):([^/]+)\/(.+?)(?:\.git)?$/.exec(trimmedUrl)
+  if (scpLikeRemote !== null) {
+    return normalizeRepositoryParts(scpLikeRemote[1], scpLikeRemote[2], scpLikeRemote[3])
+  }
+
+  try {
+    const url = new URL(trimmedUrl)
+    const [owner, repo] = url.pathname.replace(/^\/+/, '').split('/')
+    return normalizeRepositoryParts(url.hostname, owner, repo)
+  } catch {
+    return null
+  }
+}
+
+function normalizeRepositoryParts(
+  host: string | undefined,
+  owner: string | undefined,
+  repo: string | undefined
+): string | null {
+  if (host === undefined || owner === undefined || repo === undefined) {
+    return null
+  }
+
+  const normalizedRepo = repo.endsWith('.git') ? repo.slice(0, -4) : repo
+  if (host === '' || owner === '' || normalizedRepo === '') {
+    return null
+  }
+
+  return `${host.toLowerCase()}/${owner.toLowerCase()}/${normalizedRepo.toLowerCase()}`
 }
 
 function createRetryRecord({

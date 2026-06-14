@@ -91,6 +91,35 @@ describe('repository creation service', () => {
     expect(runCommand).not.toHaveBeenCalled()
   })
 
+  it('rejects malformed create requests before filesystem mutation', async () => {
+    const root = await makeTempDir()
+    const runCommand = vi.fn<CommandRunner>()
+
+    await expect(
+      createRepository({
+        scanRoots: [scanRoot(root)],
+        request: {
+          scanRootId: 'scan-root:0:test',
+          name: 'new-repo',
+          github: {
+            enabled: true,
+            visibility: 'internal'
+          }
+        } as unknown as CreateRepositoryRequest,
+        runCommand
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'GitHub visibility must be public or private.'
+      }
+    })
+
+    expect(runCommand).not.toHaveBeenCalled()
+    expect(await readdir(root)).toEqual([])
+  })
+
   it('rejects existing target directories before running git', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'new-repo'))
@@ -249,6 +278,30 @@ describe('repository creation service', () => {
     expect(await pathExists(join(root, 'new-repo'))).toBe(false)
   })
 
+  it('reports cleanup failures when git init leaves a partial target behind', async () => {
+    const root = await makeTempDir()
+    const runCommand: CommandRunner = vi.fn(async () => {
+      throw new CommandRunError('git', ['init'], 'git init failed')
+    })
+
+    await expect(
+      createRepository({
+        scanRoots: [scanRoot(root)],
+        request: request(),
+        runCommand,
+        removeTarget: async () => {
+          throw new Error('permission denied')
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'local_creation_failed',
+        message: 'git init failed Cleanup also failed: permission denied'
+      }
+    })
+  })
+
   it('retries only the remote setup without recreating the local repository', async () => {
     const root = await makeTempDir()
     const repositoryPath = join(root, 'new-repo')
@@ -362,6 +415,46 @@ describe('repository creation service', () => {
       retry: {
         status: 'origin_conflict',
         lastError: 'Existing origin points to https://github.com/other/repo.git.'
+      }
+    })
+
+    expect(runCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    'https://github.com/example/new-repo.git',
+    'git@github.com:example/new-repo.git',
+    'ssh://git@github.com/example/new-repo.git'
+  ])('treats equivalent GitHub origin %s as already matching', async (originUrl) => {
+    const root = await makeTempDir()
+    const repositoryPath = join(root, 'new-repo')
+    await mkdir(repositoryPath)
+    const runCommand: CommandRunner = vi.fn(async (command, args) => {
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+        return { stdout: `${originUrl}\n` }
+      }
+      return { stdout: '' }
+    })
+
+    await expect(
+      retryRepositoryRemote({
+        retry: {
+          id: `remote-retry:${repositoryPath}`,
+          repositoryId: repositoryPath,
+          repositoryPath,
+          githubRepositoryName: 'new-repo',
+          visibility: 'private',
+          status: 'remote_maybe_created_origin_failed',
+          lastError: 'origin add failed',
+          expectedOriginUrl: 'https://github.com/example/new-repo'
+        },
+        runCommand
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      retry: {
+        status: 'succeeded',
+        lastError: ''
       }
     })
 

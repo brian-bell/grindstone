@@ -225,7 +225,26 @@ describe('workspace main handlers', () => {
     ])
   })
 
-  it('retries remote setup from stored retry metadata', async () => {
+  it('returns structured errors for malformed remote retry requests', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+    await loadInitialWorkspaceState({ configPath })
+
+    const state = await retryRepositoryRemoteInWorkspace(
+      null as unknown as { retryId: string },
+      { runCommand: vi.fn<CommandRunner>() }
+    )
+
+    expect(state.repository.create.error).toMatchObject({
+      code: 'remote_creation_failed',
+      message: 'Remote retry request is invalid.'
+    })
+  })
+
+  it('removes stored retry metadata after remote setup succeeds', async () => {
     const root = await makeTempDir()
     const scanRoot = join(root, 'repos')
     await mkdir(scanRoot)
@@ -261,13 +280,7 @@ describe('workspace main handlers', () => {
 
     const state = await retryRepositoryRemoteInWorkspace({ retryId }, { runCommand: retryRunCommand })
 
-    expect(state.repository.create.remoteRetries).toEqual([
-      expect.objectContaining({
-        id: retryId,
-        status: 'succeeded',
-        lastError: ''
-      })
-    ])
+    expect(state.repository.create.remoteRetries).toEqual([])
   })
 
   it('rejects selection for an unknown repository id', async () => {

@@ -350,13 +350,7 @@ describe('App shell', () => {
         ...retryState.repository,
         create: {
           ...retryState.repository.create,
-          remoteRetries: [
-            {
-              ...retryState.repository.create.remoteRetries[0],
-              status: 'succeeded',
-              lastError: ''
-            }
-          ]
+          remoteRetries: []
         }
       }
     }
@@ -376,6 +370,6 @@ describe('App shell', () => {
     expect(retryRepositoryRemote).toHaveBeenCalledWith({
       retryId: 'remote-retry:/repos/new-repo'
     })
-    expect(await screen.findByText(/Remote setup succeeded/i)).toBeInTheDocument()
+    expect(screen.queryByText('gh auth failed')).not.toBeInTheDocument()
   })
 })

@@ -154,6 +154,20 @@ export async function retryRepositoryRemoteInWorkspace(
   options: { runCommand?: CommandRunner } = {}
 ): Promise<InitialWorkspaceState> {
   const context = await getWorkspaceContext()
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof request.retryId !== 'string' ||
+    request.retryId.trim() === ''
+  ) {
+    const error: RepositoryCreateError = {
+      code: 'remote_creation_failed',
+      message: 'Remote retry request is invalid.'
+    }
+    context.state = updateRepositoryCreateState(context, error)
+    return context.state
+  }
+
   const retry = context.remoteRetries.find((candidate) => candidate.id === request.retryId)
   if (retry === undefined) {
     const error: RepositoryCreateError = {
@@ -169,7 +183,9 @@ export async function retryRepositoryRemoteInWorkspace(
     runCommand: options.runCommand
   })
 
-  context.remoteRetries = upsertRetry(context.remoteRetries, result.retry)
+  context.remoteRetries = result.ok
+    ? context.remoteRetries.filter((candidate) => candidate.id !== result.retry.id)
+    : upsertRetry(context.remoteRetries, result.retry)
   context.state = createWorkspaceState(
     context,
     result.ok
