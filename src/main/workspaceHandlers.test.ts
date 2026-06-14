@@ -94,6 +94,19 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('rejects selection for an unknown repository id', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-gamma')
+    await makeGitRepository(repoPath)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\n`)
+    await loadInitialWorkspaceState({ configPath })
+
+    await expect(selectRepository({ repositoryId: '/repos/missing' })).rejects.toThrow(
+      'Repository not found: /repos/missing'
+    )
+  })
+
   it('registers workspace IPC handlers on shared channels', async () => {
     const ipcMain = {
       handle: vi.fn()

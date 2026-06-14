@@ -45,7 +45,7 @@ export async function selectRepository(request: {
   )
 
   if (repository === undefined) {
-    return workspaceState
+    throw new Error(`Repository not found: ${request.repositoryId}`)
   }
 
   currentWorkspaceState = {

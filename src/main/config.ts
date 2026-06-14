@@ -97,7 +97,9 @@ async function resolveConfigPath(
   const homeDirectory = options.homeDir ?? homedir()
   const xdgConfigHome =
     options.env === undefined ? process.env.XDG_CONFIG_HOME : options.env.XDG_CONFIG_HOME
-  const userConfigRoot = xdgConfigHome ?? join(homeDirectory, '.config')
+  const userConfigRoot = xdgConfigHome === undefined || xdgConfigHome === ''
+    ? join(homeDirectory, '.config')
+    : xdgConfigHome
 
   const candidates = [
     join(cwd, 'grindstone.toml'),

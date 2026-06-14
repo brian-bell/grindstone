@@ -1,8 +1,8 @@
-import { chmod, mkdir, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { mkdtemp } from 'node:fs/promises'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { scanRepositoryCatalog } from './repositoryCatalog'
 import type { ConfiguredPath } from './config'
 
@@ -27,12 +27,6 @@ function configuredPath(path: string): ConfiguredPath {
 }
 
 describe('repository catalog scanner', () => {
-  const chmodRestores: string[] = []
-
-  afterEach(async () => {
-    await Promise.all(chmodRestores.splice(0).map((path) => chmod(path, 0o700)))
-  })
-
   it('discovers Git repositories under scan roots and prunes generated worktree directories', async () => {
     const root = await makeTempDir()
     const scanRoot = join(root, 'projects')
@@ -115,21 +109,34 @@ describe('repository catalog scanner', () => {
     })
   })
 
-  it('reports missing and unreadable scan roots without blocking valid repositories', async () => {
+  it('ignores scanned directories with invalid .git entries', async () => {
+    const root = await makeTempDir()
+    const fakeRepo = join(root, 'not-a-repo')
+    await mkdir(fakeRepo)
+    await symlink(join(root, 'missing-git-dir'), join(fakeRepo, '.git'))
+
+    const catalog = await scanRepositoryCatalog({
+      scanRoots: [configuredPath(root)],
+      repos: []
+    })
+
+    expect(catalog.repositories).toEqual([])
+    expect(catalog.diagnostics).toEqual([])
+  })
+
+  it('reports missing and invalid scan roots without blocking valid repositories', async () => {
     const root = await makeTempDir()
     const validRoot = join(root, 'valid')
     const validRepo = join(validRoot, 'repo')
     const missingRoot = join(root, 'missing')
-    const unreadableRoot = join(root, 'unreadable')
+    const invalidRoot = join(root, 'invalid-root')
     await makeGitRepository(validRepo)
-    await mkdir(unreadableRoot)
-    await chmod(unreadableRoot, 0)
-    chmodRestores.push(unreadableRoot)
+    await writeFile(invalidRoot, 'not a directory')
 
     const catalog = await scanRepositoryCatalog({
       scanRoots: [
         configuredPath(missingRoot),
-        configuredPath(unreadableRoot),
+        configuredPath(invalidRoot),
         configuredPath(validRoot)
       ],
       repos: []
@@ -147,9 +154,9 @@ describe('repository catalog scanner', () => {
       {
         severity: 'warning',
         code: 'scan_root_unreadable',
-        message: `Scan root is not readable: ${unreadableRoot}`,
-        configuredPath: unreadableRoot,
-        resolvedPath: unreadableRoot
+        message: `Scan root is not readable: ${invalidRoot}`,
+        configuredPath: invalidRoot,
+        resolvedPath: invalidRoot
       }
     ])
   })

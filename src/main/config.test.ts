@@ -99,6 +99,27 @@ describe('Grindstone config loader', () => {
     })
   })
 
+  it('treats an empty XDG_CONFIG_HOME as unset', async () => {
+    const root = await makeTempDir()
+    const cwd = join(root, 'cwd')
+    const homeDir = join(root, 'home')
+    await mkdir(cwd)
+    await mkdir(join(homeDir, '.config', 'grindstone'), { recursive: true })
+    await writeFile(join(homeDir, '.config', 'grindstone', 'config.toml'), 'repos = ["repo"]\n')
+
+    await expect(loadGrindstoneConfig({ cwd, env: { XDG_CONFIG_HOME: '' }, homeDir }))
+      .resolves.toMatchObject({
+        ok: true,
+        configPath: join(homeDir, '.config', 'grindstone', 'config.toml'),
+        repos: [
+          {
+            configuredPath: 'repo',
+            resolvedPath: join(homeDir, '.config', 'grindstone', 'repo')
+          }
+        ]
+      })
+  })
+
   it('returns actionable diagnostics for invalid TOML and invalid value types', async () => {
     const root = await makeTempDir()
     const invalidTomlPath = join(root, 'invalid.toml')

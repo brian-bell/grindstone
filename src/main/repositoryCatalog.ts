@@ -97,7 +97,7 @@ async function walk(
     return
   }
 
-  if (entries.some((entry) => entry.name === '.git')) {
+  if (entries.some((entry) => entry.name === '.git') && await isGitRepository(currentPath)) {
     await addRepository(currentPath, 'scan_root', repositoryMap)
     return
   }

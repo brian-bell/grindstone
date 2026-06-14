@@ -180,7 +180,7 @@ function RepositoryCatalogView({
           {repository.diagnostics.map((diagnostic) => (
             <CatalogDiagnosticRow
               diagnostic={diagnostic}
-              key={`${diagnostic.code}:${diagnostic.resolvedPath}`}
+              key={`${diagnostic.code}:${diagnostic.configuredPath}:${diagnostic.resolvedPath}`}
             />
           ))}
         </div>
