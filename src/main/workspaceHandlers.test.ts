@@ -369,6 +369,89 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('does not let a selection from an old catalog overwrite a completed reload', async () => {
+    const root = await makeTempDir()
+    const alphaPath = join(root, 'repo-alpha')
+    const betaPath = join(root, 'repo-beta')
+    const alphaArtifactRoot = join(root, 'alpha-artifacts')
+    const betaArtifactRoot = join(root, 'beta-artifacts')
+    await makeGitRepository(alphaPath)
+    await makeGitRepository(betaPath)
+    const alphaConfigPath = join(root, 'alpha-grindstone.toml')
+    await writeFile(alphaConfigPath, `repos = ["${alphaPath}"]\n[artifacts]\nroot = "${alphaArtifactRoot}"\n`)
+
+    let resolveAlpha: ((flows: FlowListRow[]) => void) | undefined
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> => ({
+      async readFlow() {
+        return undefined
+      },
+      listFlowsForRepository(repository) {
+        return new Promise<FlowListRow[]>((resolve) => {
+          resolveAlpha = (flows) => resolve(flows.length > 0 ? flows : [flowRow('alpha-flow', repository)])
+        })
+      }
+    }))
+
+    const initialState = await loadInitialWorkspaceState({
+      configPath: alphaConfigPath,
+      flowStoreFactory
+    })
+    const alphaRepository = initialState.repository.repositories[0]
+    expect(alphaRepository).toBeDefined()
+
+    let resolveReloadConfig: (() => void) | undefined
+    const reloadConfigStarted = new Promise<void>((resolve) => {
+      resolveReloadConfig = resolve
+    })
+    const reload = loadInitialWorkspaceState({
+      configLoader: async () => {
+        await reloadConfigStarted
+        return {
+          ok: true,
+          configPath: join(root, 'beta-grindstone.toml'),
+          scanRoots: [],
+          repos: [
+            {
+              configuredPath: betaPath,
+              resolvedPath: betaPath
+            }
+          ],
+          artifactRoot: {
+            configuredPath: betaArtifactRoot,
+            resolvedPath: betaArtifactRoot
+          },
+          diagnostics: []
+        }
+      },
+      flowStoreFactory
+    })
+    await flushMicrotasks()
+
+    const alphaSelection = selectRepository({ repositoryId: alphaRepository?.id ?? '' })
+    await flushMicrotasks()
+    expect(resolveAlpha).toBeDefined()
+
+    resolveReloadConfig?.()
+    const reloadedState = await reload
+    const betaRepository = reloadedState.repository.repositories[0]
+    expect(betaRepository).toBeDefined()
+
+    resolveAlpha?.([flowRow('alpha-flow', alphaRepository as RepositoryRow)])
+    await expect(alphaSelection).resolves.toMatchObject({
+      repository: {
+        selectedRepositoryId: null,
+        repositories: [
+          {
+            id: betaRepository?.id
+          }
+        ]
+      },
+      flow: {
+        title: 'No Flow selected'
+      }
+    })
+  })
+
   it('rejects selection for an unknown repository id', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-gamma')

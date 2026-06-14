@@ -88,7 +88,7 @@ export async function selectRepository(request: {
     flow: await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory)
   }
 
-  if (requestId !== currentSelectionRequestId) {
+  if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
     return currentWorkspaceState ?? nextWorkspaceState
   }
 
