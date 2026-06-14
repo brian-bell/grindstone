@@ -4,31 +4,55 @@ import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/conf
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
+  type FlowPaneState,
   type InitialWorkspaceState,
-  type RepositoryPaneState
+  type RepositoryPaneState,
+  type RepositoryRow
 } from '@shared/workspace'
 import {
   getEditableConfig,
   loadGrindstoneConfig,
   updateCommonConfigFile,
+  type GrindstoneConfigResult,
   type LoadGrindstoneConfigOptions
 } from './config'
+import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 
+type FlowStoreFactory = (options: CreateFlowStoreOptions) => Promise<FlowStore>
+type ConfigLoader = (options: LoadGrindstoneConfigOptions) => Promise<GrindstoneConfigResult>
+
+export type LoadWorkspaceStateOptions = LoadGrindstoneConfigOptions & {
+  configLoader?: ConfigLoader
+  flowStoreFactory?: FlowStoreFactory
+}
+
 let currentWorkspaceState: InitialWorkspaceState | undefined
+let currentArtifactRoot: string | undefined
+let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
+let currentSelectionRequestId = 0
 
 export async function loadInitialWorkspaceState(
-  options: LoadGrindstoneConfigOptions = {}
+  options: LoadWorkspaceStateOptions = {}
 ): Promise<InitialWorkspaceState> {
-  currentWorkspaceState = await buildWorkspaceState(options)
+  currentSelectionRequestId += 1
+  const {
+    configLoader = loadGrindstoneConfig,
+    flowStoreFactory = createFlowStore,
+    ...configOptions
+  } = options
+  currentFlowStoreFactory = flowStoreFactory
+  currentWorkspaceState = await buildWorkspaceState(configOptions, null, configLoader)
   return currentWorkspaceState
 }
 
 async function buildWorkspaceState(
   options: LoadGrindstoneConfigOptions = {},
-  selectedRepositoryId: string | null = null
+  selectedRepositoryId: string | null = null,
+  configLoader: ConfigLoader = loadGrindstoneConfig
 ): Promise<InitialWorkspaceState> {
-  const config = await loadGrindstoneConfig(options)
+  const config = await configLoader(options)
+  currentArtifactRoot = config.artifactRoot.resolvedPath
 
   if (!config.ok) {
     return {
@@ -72,8 +96,17 @@ export async function selectRepository(request: {
     throw new Error(`Repository not found: ${request.repositoryId}`)
   }
 
-  currentWorkspaceState = createSelectedRepositoryState(workspaceState, repository.id)
-  return currentWorkspaceState
+  const requestId = currentSelectionRequestId + 1
+  currentSelectionRequestId = requestId
+
+  const nextWorkspaceState = await createSelectedRepositoryState(workspaceState, repository.id)
+
+  if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
+    return currentWorkspaceState ?? nextWorkspaceState
+  }
+
+  currentWorkspaceState = nextWorkspaceState
+  return nextWorkspaceState
 }
 
 export async function updateCommonConfig(
@@ -88,6 +121,7 @@ export async function updateCommonConfig(
   }
 
   try {
+    currentSelectionRequestId += 1
     const workspace = await buildWorkspaceState(
       {
         ...options,
@@ -130,10 +164,10 @@ export function getCurrentEditableConfig(
   return getEditableConfig(options)
 }
 
-function createSelectedRepositoryState(
+async function createSelectedRepositoryState(
   workspaceState: InitialWorkspaceState,
   repositoryId: string
-): InitialWorkspaceState {
+): Promise<InitialWorkspaceState> {
   const repository = workspaceState.repository.repositories.find((row) => row.id === repositoryId)
   if (repository === undefined) {
     return workspaceState
@@ -147,11 +181,7 @@ function createSelectedRepositoryState(
       description: repository.path,
       selectedRepositoryId: repository.id
     },
-    flow: {
-      status: 'empty',
-      title: `${repository.name} Flow workspace`,
-      description: `Flow context is scoped to ${repository.path}.`
-    }
+    flow: await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory)
   }
 }
 
@@ -197,6 +227,47 @@ function createRepositoryErrorState(diagnostics: CatalogDiagnostic[]): Repositor
   }
 }
 
+async function createFlowPaneState(
+  repository: RepositoryRow,
+  artifactRoot: string | undefined,
+  flowStoreFactory: FlowStoreFactory
+): Promise<Exclude<FlowPaneState, { status: 'loading' }>> {
+  try {
+    if (artifactRoot === undefined) {
+      throw new Error('Flow artifact root is not configured.')
+    }
+
+    const store = await flowStoreFactory({
+      artifactRoot
+    })
+    const flows = await store.listFlowsForRepository(repository)
+
+    if (flows.length === 0) {
+      return {
+        status: 'empty',
+        title: `No Flows for ${repository.name}`,
+        description: `No Flow records were found for ${repository.path}.`,
+        repositoryId: repository.id,
+        repositoryName: repository.name
+      }
+    }
+
+    return {
+      status: 'ready',
+      repositoryId: repository.id,
+      repositoryName: repository.name,
+      flows
+    }
+  } catch (error) {
+    return {
+      status: 'error',
+      message: getErrorMessage(error),
+      repositoryId: repository.id,
+      repositoryName: repository.name
+    }
+  }
+}
+
 function firstDiagnosticMessage(diagnostics: CatalogDiagnostic[]): string {
   return diagnostics[0]?.message ?? 'Unable to load repository catalog.'
 }
@@ -210,5 +281,5 @@ function getErrorMessage(error: unknown): string {
     return error.message
   }
 
-  return 'Unable to reload Grindstone config.'
+  return 'Unable to load workspace state.'
 }

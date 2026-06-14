@@ -9,7 +9,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
 import type {
   CommonConfigUpdateInput,
@@ -67,6 +67,7 @@ export function App(): ReactElement {
   const [flowState, setFlowState] = useState<FlowPaneState>(
     routeFlowState ?? { status: 'loading' }
   )
+  const selectionRequestIdRef = useRef(0)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>('hints')
   const [editableConfig, setEditableConfig] = useState<EditableConfigState | null>(null)
   const [configLoadError, setConfigLoadError] = useState<string | null>(null)
@@ -122,17 +123,38 @@ export function App(): ReactElement {
   const shellState = workspace ?? defaultInitialWorkspaceState
   const isWorkspaceLoading = workspace === null
 
-  async function handleRepositorySelect(repositoryId: string): Promise<void> {
+  async function handleRepositorySelect(repository: RepositoryRow): Promise<void> {
+    const requestId = selectionRequestIdRef.current + 1
+    selectionRequestIdRef.current = requestId
+
+    if (routeFlowState === null) {
+      setFlowState({
+        status: 'loading',
+        repositoryId: repository.id,
+        repositoryName: repository.name
+      })
+    }
+
     try {
       const nextWorkspace = await window.grindstone.workspace.selectRepository({
-        repositoryId
+        repositoryId: repository.id
       })
+      if (requestId !== selectionRequestIdRef.current) {
+        return
+      }
+
       setWorkspace(nextWorkspace)
       setFlowState(routeFlowState ?? nextWorkspace.flow)
     } catch (error: unknown) {
+      if (requestId !== selectionRequestIdRef.current) {
+        return
+      }
+
       setFlowState({
         status: 'error',
-        message: getErrorMessage(error)
+        message: getErrorMessage(error),
+        repositoryId: repository.id,
+        repositoryName: repository.name
       })
     }
   }
@@ -230,7 +252,7 @@ function RepositoryCatalogView({
 }: {
   isLoading: boolean
   repository: RepositoryPaneState
-  onSelect: (repositoryId: string) => Promise<void>
+  onSelect: (repository: RepositoryRow) => Promise<void>
   onConfigure: () => void
 }): ReactElement {
   if (isLoading) {
@@ -293,13 +315,13 @@ function RepositoryRowButton({
 }: {
   isSelected: boolean
   repository: RepositoryRow
-  onSelect: (repositoryId: string) => Promise<void>
+  onSelect: (repository: RepositoryRow) => Promise<void>
 }): ReactElement {
   return (
     <button
       aria-pressed={isSelected}
       className="repository-row"
-      onClick={() => void onSelect(repository.id)}
+      onClick={() => void onSelect(repository)}
       type="button"
     >
       <span className="repository-row-main">
@@ -845,6 +867,13 @@ function getErrorMessage(error: unknown): string {
 
 function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactElement {
   if (state.status === 'loading') {
+    const title = state.repositoryName === undefined
+      ? 'Loading Flow workspace'
+      : `Loading ${state.repositoryName} Flows`
+    const description = state.repositoryName === undefined
+      ? 'Preparing the Flow-only workspace surface.'
+      : `Reading Flow artifacts for ${state.repositoryName}.`
+
     return (
       <div
         className="state-block"
@@ -852,8 +881,8 @@ function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactEleme
         aria-label="Flow workspace loading"
       >
         <p className="eyebrow">Flow</p>
-        <h2>Loading Flow workspace</h2>
-        <p>Preparing the Flow-only workspace surface.</p>
+        <h2>{title}</h2>
+        <p>{description}</p>
       </div>
     )
   }
@@ -868,6 +897,47 @@ function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactEleme
         <p className="eyebrow">Flow</p>
         <h2>Flow workspace unavailable</h2>
         <p>{state.message}</p>
+      </div>
+    )
+  }
+
+  if (state.status === 'ready') {
+    return (
+      <div className="flow-list-view">
+        <div className="flow-list-header">
+          <p className="eyebrow">Flow</p>
+          <h2>{state.repositoryName} Flows</h2>
+          <p>{state.flows.length} {state.flows.length === 1 ? 'Flow' : 'Flows'} found.</p>
+        </div>
+
+        <div className="flow-list" aria-label={`${state.repositoryName} Flow records`}>
+          {state.flows.map((flow) => (
+            <article className="flow-row" key={flow.id}>
+              <div className="flow-row-header">
+                <h3>{flow.title}</h3>
+                <span className="flow-status">{flow.status}</span>
+              </div>
+              <p className="flow-updated">Updated {flow.updatedAt}</p>
+              <div className="flow-labels" aria-label={`${flow.title} metadata`}>
+                <span>{flow.repositoryPath}</span>
+                {flow.branch === undefined ? null : <span>{flow.branch}</span>}
+                {flow.worktreePath === undefined ? null : <span>{flow.worktreePath}</span>}
+                {flow.planId === undefined ? null : <span>{flow.planId}</span>}
+                {flow.planPath === undefined ? null : <span>{flow.planPath}</span>}
+              </div>
+              {flow.phases === undefined ? null : (
+                <div className="phase-summary" aria-label={`${flow.title} phases`}>
+                  {flow.phases.map((phase) => (
+                    <span key={phase.id}>
+                      {phase.title} - {phase.status}
+                      {phase.summary === undefined ? '' : ` - ${phase.summary}`}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
       </div>
     )
   }

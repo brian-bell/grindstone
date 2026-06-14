@@ -22,17 +22,20 @@ export type GrindstoneConfigResult = {
   configPath: string | undefined
   scanRoots: ConfiguredPath[]
   repos: ConfiguredPath[]
+  artifactRoot: ConfiguredPath
   diagnostics: CatalogDiagnostic[]
 }
 
 export type LoadGrindstoneConfigOptions = {
+  artifactRoot?: string
   configPath?: string
   cwd?: string
-  env?: Partial<Pick<NodeJS.ProcessEnv, 'XDG_CONFIG_HOME'>>
+  env?: Partial<Pick<NodeJS.ProcessEnv, 'XDG_CONFIG_HOME' | 'XDG_STATE_HOME'>>
   homeDir?: string
 }
 
 type RawConfig = {
+  artifacts?: unknown
   scan_roots?: unknown
   repos?: unknown
   default_agent?: unknown
@@ -40,6 +43,8 @@ type RawConfig = {
   bootstrap_hooks?: unknown
   [key: string]: unknown
 }
+
+const DEFAULT_ARTIFACT_ROOT = '~/.local/state/wtui/sessions/v1'
 
 const EDITABLE_CONFIG_KEYS = [
   'scan_roots',
@@ -55,7 +60,7 @@ export async function loadGrindstoneConfig(
   const configPath = await resolveConfigPath(options)
 
   if (configPath === undefined) {
-    return emptyConfig(undefined)
+    return emptyConfig(undefined, options)
   }
 
   let rawConfig: RawConfig
@@ -63,7 +68,7 @@ export async function loadGrindstoneConfig(
     rawConfig = parse(await readFile(configPath, 'utf8')) as RawConfig
   } catch (error) {
     return {
-      ...emptyConfig(configPath),
+      ...emptyConfig(configPath, options),
       ok: false,
       diagnostics: [
         {
@@ -80,7 +85,7 @@ export async function loadGrindstoneConfig(
   const diagnostics = validateCatalogConfig(rawConfig, configPath)
   if (diagnostics.length > 0) {
     return {
-      ...emptyConfig(configPath),
+      ...emptyConfig(configPath, options),
       ok: false,
       diagnostics
     }
@@ -88,6 +93,14 @@ export async function loadGrindstoneConfig(
 
   const configDir = dirname(configPath)
   const homeDirectory = options.homeDir ?? homedir()
+  const artifactRoot = resolveConfiguredPath(
+    options.artifactRoot ??
+      getConfiguredArtifactRoot(rawConfig) ??
+      getConfiguredLegacyArtifactRoot(rawConfig) ??
+      getDefaultArtifactRoot(options),
+    configDir,
+    homeDirectory
+  )
 
   return {
     ok: true,
@@ -98,6 +111,7 @@ export async function loadGrindstoneConfig(
     repos: getConfiguredPathValues(rawConfig.repos).map((path) =>
       resolveConfiguredPath(path, configDir, homeDirectory)
     ),
+    artifactRoot,
     diagnostics: []
   }
 }
@@ -257,13 +271,65 @@ function validateCatalogConfig(rawConfig: RawConfig, configPath: string): Catalo
   validatePathArray(rawConfig.scan_roots, 'scan_roots', errors, true)
   validatePathArray(rawConfig.repos, 'repos', errors, true)
 
-  return errors.map((error) => ({
+  const diagnostics: CatalogDiagnostic[] = errors.map((error) => ({
     severity: 'error',
     code: 'config_type_error',
     message: error.message,
     configuredPath: error.field,
     resolvedPath: configPath
   }))
+
+  if (rawConfig.artifacts !== undefined) {
+    if (!isPlainObject(rawConfig.artifacts)) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'config_type_error',
+        message: 'artifacts must be a table.',
+        configuredPath: 'artifacts',
+        resolvedPath: configPath
+      })
+    } else if (
+      typeof rawConfig.artifacts.root !== 'string' ||
+      rawConfig.artifacts.root.trim() === ''
+    ) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'config_type_error',
+        message: 'artifacts.root must be a string.',
+        configuredPath: 'artifacts.root',
+        resolvedPath: configPath
+      })
+    }
+  }
+
+  return diagnostics
+}
+
+function getConfiguredArtifactRoot(rawConfig: RawConfig): string | undefined {
+  return typeof rawConfig.artifact_root === 'string' && rawConfig.artifact_root.trim() !== ''
+    ? rawConfig.artifact_root
+    : undefined
+}
+
+function getConfiguredLegacyArtifactRoot(rawConfig: RawConfig): string | undefined {
+  if (!isPlainObject(rawConfig.artifacts)) {
+    return undefined
+  }
+
+  return typeof rawConfig.artifacts.root === 'string' ? rawConfig.artifacts.root : undefined
+}
+
+function getDefaultArtifactRoot(options: LoadGrindstoneConfigOptions): string {
+  const xdgStateHome =
+    options.env === undefined ? process.env.XDG_STATE_HOME : options.env.XDG_STATE_HOME
+
+  return xdgStateHome === undefined || xdgStateHome === ''
+    ? DEFAULT_ARTIFACT_ROOT
+    : join(xdgStateHome, 'wtui', 'sessions', 'v1')
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function resolveConfiguredPath(
@@ -290,12 +356,23 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-function emptyConfig(configPath: string | undefined): GrindstoneConfigResult {
+function emptyConfig(
+  configPath: string | undefined,
+  options: LoadGrindstoneConfigOptions = {}
+): GrindstoneConfigResult {
+  const homeDirectory = options.homeDir ?? homedir()
+  const configDir = configPath === undefined ? options.cwd ?? process.cwd() : dirname(configPath)
+
   return {
     ok: true,
     configPath,
     scanRoots: [],
     repos: [],
+    artifactRoot: resolveConfiguredPath(
+      options.artifactRoot ?? getDefaultArtifactRoot(options),
+      configDir,
+      homeDirectory
+    ),
     diagnostics: []
   }
 }

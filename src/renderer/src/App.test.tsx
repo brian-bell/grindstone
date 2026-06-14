@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
@@ -88,9 +88,128 @@ const selectedCatalogState: InitialWorkspaceState = {
     selectedRepositoryId: '/repos/grindstone'
   },
   flow: {
+    status: 'ready',
+    repositoryId: '/repos/grindstone',
+    repositoryName: 'grindstone',
+    flows: [
+      {
+        id: 'artifact-backed-flow',
+        title: 'Artifact backed Flow',
+        status: 'active',
+        repositoryId: '/repos/grindstone',
+        repositoryPath: '/repos/grindstone',
+        branch: 'flow/list',
+        planId: 'plan-flow-list',
+        createdAt: '2026-06-10T10:00:00.000Z',
+        updatedAt: '2026-06-11T12:30:00.000Z',
+        phases: [
+          {
+            id: 'phase-render',
+            title: 'Render list',
+            status: 'done',
+            order: 1,
+            summary: 'Rows are visible'
+          }
+        ]
+      }
+    ]
+  }
+}
+
+const emptySelectedCatalogState: InitialWorkspaceState = {
+  ...selectedCatalogState,
+  flow: {
     status: 'empty',
-    title: 'grindstone Flow workspace',
-    description: 'Flow context is scoped to /repos/grindstone.'
+    title: 'No Flows for grindstone',
+    description: 'No Flow records were found for /repos/grindstone.',
+    repositoryId: '/repos/grindstone',
+    repositoryName: 'grindstone'
+  }
+}
+
+const errorSelectedCatalogState: InitialWorkspaceState = {
+  ...selectedCatalogState,
+  flow: {
+    status: 'error',
+    message: 'Flow artifact store unavailable: permission denied',
+    repositoryId: '/repos/grindstone',
+    repositoryName: 'grindstone'
+  }
+}
+
+const multiRepositoryCatalogState: InitialWorkspaceState = {
+  ...catalogState,
+  repository: {
+    ...catalogState.repository,
+    description: '2 repositories configured.',
+    repositories: [
+      {
+        id: '/repos/alpha',
+        name: 'alpha',
+        path: '/repos/alpha',
+        canonicalPath: '/repos/alpha',
+        sources: ['explicit']
+      },
+      {
+        id: '/repos/beta',
+        name: 'beta',
+        path: '/repos/beta',
+        canonicalPath: '/repos/beta',
+        sources: ['explicit']
+      }
+    ]
+  }
+}
+
+const alphaSelectedCatalogState: InitialWorkspaceState = {
+  ...multiRepositoryCatalogState,
+  repository: {
+    ...multiRepositoryCatalogState.repository,
+    title: 'alpha',
+    description: '/repos/alpha',
+    selectedRepositoryId: '/repos/alpha'
+  },
+  flow: {
+    status: 'ready',
+    repositoryId: '/repos/alpha',
+    repositoryName: 'alpha',
+    flows: [
+      {
+        id: 'alpha-flow',
+        title: 'Alpha Flow',
+        status: 'active',
+        repositoryId: '/repos/alpha',
+        repositoryPath: '/repos/alpha',
+        createdAt: '2026-06-10T10:00:00.000Z',
+        updatedAt: '2026-06-11T10:00:00.000Z'
+      }
+    ]
+  }
+}
+
+const betaSelectedCatalogState: InitialWorkspaceState = {
+  ...multiRepositoryCatalogState,
+  repository: {
+    ...multiRepositoryCatalogState.repository,
+    title: 'beta',
+    description: '/repos/beta',
+    selectedRepositoryId: '/repos/beta'
+  },
+  flow: {
+    status: 'ready',
+    repositoryId: '/repos/beta',
+    repositoryName: 'beta',
+    flows: [
+      {
+        id: 'beta-flow',
+        title: 'Beta Flow',
+        status: 'active',
+        repositoryId: '/repos/beta',
+        repositoryPath: '/repos/beta',
+        createdAt: '2026-06-10T10:00:00.000Z',
+        updatedAt: '2026-06-12T10:00:00.000Z'
+      }
+    ]
   }
 }
 
@@ -178,7 +297,7 @@ describe('App shell', () => {
     )
   })
 
-  it('selects a repository through preload and scopes the Flow workspace', async () => {
+  it('selects a repository through preload and renders its Flow rows', async () => {
     const user = userEvent.setup()
     const selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
     setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
@@ -192,12 +311,89 @@ describe('App shell', () => {
       'aria-pressed',
       'true'
     )
-    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
-      'grindstone Flow workspace'
+    const flowPane = screen.getByRole('main', { name: /flow workspace/i })
+    expect(flowPane).toHaveTextContent('Artifact backed Flow')
+    expect(flowPane).toHaveTextContent('active')
+    expect(flowPane).toHaveTextContent('Updated 2026-06-11T12:30:00.000Z')
+    expect(flowPane).toHaveTextContent('flow/list')
+    expect(flowPane).toHaveTextContent('plan-flow-list')
+    expect(flowPane).toHaveTextContent('Render list')
+  })
+
+  it('shows repo-scoped loading while repository selection is pending', async () => {
+    const user = userEvent.setup()
+    let resolveSelection: (state: InitialWorkspaceState) => void = () => undefined
+    const selectRepository = vi.fn(
+      () => new Promise<InitialWorkspaceState>((resolve) => {
+        resolveSelection = resolve
+      })
     )
-    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
-      'Flow context is scoped to /repos/grindstone.'
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /grindstone/i }))
+
+    expect(screen.getByRole('status', { name: /flow workspace loading/i })).toHaveTextContent(
+      'Loading grindstone Flows'
     )
+
+    resolveSelection(selectedCatalogState)
+    expect(await screen.findByText('Artifact backed Flow')).toBeInTheDocument()
+  })
+
+  it('keeps the latest repository selection when earlier IPC responses finish later', async () => {
+    const user = userEvent.setup()
+    let resolveAlpha: (state: InitialWorkspaceState) => void = () => undefined
+    let resolveBeta: (state: InitialWorkspaceState) => void = () => undefined
+    const selectRepository = vi.fn(({ repositoryId }: { repositoryId: string }) =>
+      new Promise<InitialWorkspaceState>((resolve) => {
+        if (repositoryId === '/repos/alpha') {
+          resolveAlpha = resolve
+        } else {
+          resolveBeta = resolve
+        }
+      })
+    )
+    setWorkspaceApi(vi.fn().mockResolvedValue(multiRepositoryCatalogState), selectRepository)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /alpha/i }))
+    await user.click(screen.getByRole('button', { name: /beta/i }))
+
+    await act(async () => {
+      resolveBeta(betaSelectedCatalogState)
+    })
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
+
+    await act(async () => {
+      resolveAlpha(alphaSelectedCatalogState)
+    })
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
+    expect(screen.getByRole('main', { name: /flow workspace/i })).not.toHaveTextContent('Alpha Flow')
+    expect(screen.getByRole('button', { name: /beta/i })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('renders selected repository empty and artifact error Flow states', async () => {
+    const user = userEvent.setup()
+    const selectRepository = vi
+      .fn()
+      .mockResolvedValueOnce(emptySelectedCatalogState)
+      .mockResolvedValueOnce(errorSelectedCatalogState)
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /grindstone/i }))
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
+      'No Flows for grindstone'
+    )
+
+    await user.click(screen.getByRole('button', { name: /grindstone/i }))
+    expect(
+      await screen.findByRole('alert', { name: /flow workspace error/i })
+    ).toHaveTextContent('Flow artifact store unavailable')
   })
 
   it('shows a Flow-only loading state while the initial workspace state is pending', () => {

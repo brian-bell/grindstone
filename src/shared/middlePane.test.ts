@@ -51,16 +51,23 @@ describe('middle pane Flow-only surface', () => {
     const flowPaneStatusCoverage = {
       loading: true,
       empty: true,
-      error: true
+      error: true,
+      ready: true
     } satisfies Record<FlowPaneState['status'], true>
 
     const allowedStates: FlowPaneState[] = [
       { status: 'loading' },
       { status: 'empty', title: 'No Flow selected', description: 'No Flow is active.' },
-      { status: 'error', message: 'Only Flow workspace routes are available in this shell.' }
+      { status: 'error', message: 'Only Flow workspace routes are available in this shell.' },
+      {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        flows: []
+      }
     ]
 
-    expect(Object.keys(flowPaneStatusCoverage)).toEqual(['loading', 'empty', 'error'])
+    expect(Object.keys(flowPaneStatusCoverage)).toEqual(['loading', 'empty', 'error', 'ready'])
     expect(allowedStates.map((state) => state.status)).toEqual(Object.keys(flowPaneStatusCoverage))
   })
 })

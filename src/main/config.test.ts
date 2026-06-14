@@ -31,7 +31,7 @@ describe('Grindstone config loader', () => {
       'scan_roots = ["../projects"]\nrepos = ["/opt/explicit-repo"]\nunknown_key = true\n'
     )
 
-    await expect(loadGrindstoneConfig({ configPath })).resolves.toEqual({
+    await expect(loadGrindstoneConfig({ configPath, homeDir: root })).resolves.toEqual({
       ok: true,
       configPath,
       scanRoots: [
@@ -46,7 +46,67 @@ describe('Grindstone config loader', () => {
           resolvedPath: '/opt/explicit-repo'
         }
       ],
+      artifactRoot: {
+        configuredPath: '~/.local/state/wtui/sessions/v1',
+        resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
+      },
       diagnostics: []
+    })
+  })
+
+  it('resolves the default wtui artifact root when no config exists', async () => {
+    const root = await makeTempDir()
+
+    await expect(
+      loadGrindstoneConfig({
+        cwd: join(root, 'missing-cwd'),
+        env: { XDG_CONFIG_HOME: join(root, 'missing-xdg') },
+        homeDir: root
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      artifactRoot: {
+        configuredPath: '~/.local/state/wtui/sessions/v1',
+        resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
+      }
+    })
+  })
+
+  it('resolves the default wtui artifact root below XDG_STATE_HOME when set', async () => {
+    const root = await makeTempDir()
+    const stateRoot = join(root, 'state-home')
+
+    await expect(
+      loadGrindstoneConfig({
+        cwd: join(root, 'missing-cwd'),
+        env: {
+          XDG_CONFIG_HOME: join(root, 'missing-xdg'),
+          XDG_STATE_HOME: stateRoot
+        },
+        homeDir: root
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      artifactRoot: {
+        configuredPath: join(stateRoot, 'wtui', 'sessions', 'v1'),
+        resolvedPath: join(stateRoot, 'wtui', 'sessions', 'v1')
+      }
+    })
+  })
+
+  it('resolves configured artifact roots with the existing path rules', async () => {
+    const root = await makeTempDir()
+    const configDir = join(root, 'config')
+    await mkdir(configDir)
+    const configPath = join(configDir, 'grindstone.toml')
+    await writeFile(configPath, '[artifacts]\nroot = "../wtui-state"\n')
+
+    await expect(loadGrindstoneConfig({ configPath, homeDir: root })).resolves.toMatchObject({
+      ok: true,
+      artifactRoot: {
+        configuredPath: '../wtui-state',
+        resolvedPath: join(root, 'wtui-state')
+      }
     })
   })
 
@@ -83,6 +143,10 @@ describe('Grindstone config loader', () => {
       configPath: undefined,
       scanRoots: [],
       repos: [],
+      artifactRoot: {
+        configuredPath: '~/.local/state/wtui/sessions/v1',
+        resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
+      },
       diagnostics: []
     })
   })
@@ -167,6 +231,66 @@ describe('Grindstone config loader', () => {
           code: 'config_type_error',
           configuredPath: 'repos[0]',
           resolvedPath: invalidTypePath
+        }
+      ]
+    })
+  })
+
+  it('returns diagnostics for invalid artifact root config', async () => {
+    const root = await makeTempDir()
+    const invalidArtifactsPath = join(root, 'invalid-artifacts.toml')
+    const missingRootPath = join(root, 'missing-artifact-root.toml')
+    const invalidRootPath = join(root, 'invalid-artifact-root.toml')
+    const emptyRootPath = join(root, 'empty-artifact-root.toml')
+    await writeFile(invalidArtifactsPath, 'artifacts = "not-a-table"\n')
+    await writeFile(missingRootPath, '[artifacts]\n')
+    await writeFile(invalidRootPath, '[artifacts]\nroot = 42\n')
+    await writeFile(emptyRootPath, '[artifacts]\nroot = "  "\n')
+
+    await expect(loadGrindstoneConfig({ configPath: invalidArtifactsPath })).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'config_type_error',
+          configuredPath: 'artifacts',
+          resolvedPath: invalidArtifactsPath
+        }
+      ]
+    })
+
+    await expect(loadGrindstoneConfig({ configPath: missingRootPath })).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'config_type_error',
+          configuredPath: 'artifacts.root',
+          resolvedPath: missingRootPath
+        }
+      ]
+    })
+
+    await expect(loadGrindstoneConfig({ configPath: invalidRootPath })).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'config_type_error',
+          configuredPath: 'artifacts.root',
+          resolvedPath: invalidRootPath
+        }
+      ]
+    })
+
+    await expect(loadGrindstoneConfig({ configPath: emptyRootPath })).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'config_type_error',
+          configuredPath: 'artifacts.root',
+          resolvedPath: emptyRootPath
         }
       ]
     })
