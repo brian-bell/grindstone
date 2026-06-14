@@ -315,17 +315,32 @@ describe('App shell', () => {
 
     render(<App />)
 
-    expect(
-      await screen.findByRole('region', { name: /repository area/i })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: /^repos$/i })).toBeInTheDocument()
 
-    const repositoryPane = screen.getByRole('region', { name: /repository area/i })
+    const repositoryPane = screen.getByRole('region', { name: /^repos$/i })
     const flowPane = screen.getByRole('main', { name: /flow workspace/i })
     const contextPane = screen.getByRole('region', { name: /contextual hints/i })
 
+    expect(screen.queryByText('Repository Area')).not.toBeInTheDocument()
+    expect(within(repositoryPane).getAllByRole('heading')).toHaveLength(1)
+    expect(within(repositoryPane).getByRole('heading', { name: /^repos$/i })).toBeInTheDocument()
     expect(within(repositoryPane).getByText('No repositories configured')).toBeInTheDocument()
     expect(within(flowPane).getByText('No Flow selected')).toBeInTheDocument()
     expect(within(contextPane).getByText('Select a repository')).toBeInTheDocument()
+  })
+
+  it('keeps repository loading copy out of secondary left-pane headings', () => {
+    setWorkspaceApi(vi.fn(() => new Promise<typeof defaultInitialState>(() => undefined)))
+
+    render(<App />)
+
+    const repositoryPane = screen.getByRole('region', { name: /^repos$/i })
+    expect(within(repositoryPane).getByRole('status', { name: /repository catalog loading/i }))
+      .toHaveTextContent('Loading repositories')
+    expect(within(repositoryPane).getAllByRole('heading')).toHaveLength(1)
+    expect(
+      within(repositoryPane).queryByRole('heading', { name: /loading repositories/i })
+    ).not.toBeInTheDocument()
   })
 
   it('renders configured repositories and non-fatal catalog diagnostics', async () => {
@@ -333,7 +348,7 @@ describe('App shell', () => {
 
     render(<App />)
 
-    const repositoryPane = await screen.findByRole('region', { name: /repository area/i })
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
     expect(within(repositoryPane).getByRole('button', { name: /grindstone/i })).toHaveTextContent(
       '/repos/grindstone'
     )
@@ -342,6 +357,39 @@ describe('App shell', () => {
     expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
       'No Flow selected'
     )
+  })
+
+  it('opens repository creation in a modal from the left pane', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+
+    render(<App />)
+
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
+    const launcher = within(repositoryPane).getByRole('button', { name: /create repository/i })
+    expect(launcher).toBeEnabled()
+    expect(within(repositoryPane).queryByLabelText(/repository name/i)).not.toBeInTheDocument()
+
+    await user.click(launcher)
+
+    const dialog = await screen.findByRole('dialog', { name: /create repository/i })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(within(dialog).getByLabelText(/scan root/i)).toBeInTheDocument()
+    const nameInput = within(dialog).getByLabelText(/repository name/i)
+    expect(nameInput).toHaveFocus()
+    expect(within(dialog).getByLabelText(/create on github/i)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/github visibility/i)).toBeInTheDocument()
+    const closeButton = within(dialog).getByRole('button', { name: /close repository creation/i })
+    const sentinels = dialog.querySelectorAll<HTMLElement>('[data-focus-sentinel="true"]')
+    expect(sentinels).toHaveLength(2)
+    sentinels[0]?.focus()
+    expect(closeButton).toHaveFocus()
+    sentinels[1]?.focus()
+    expect(nameInput).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
+    expect(launcher).toHaveFocus()
   })
 
   it('selects a repository through preload and renders its Flow records in a table', async () => {
@@ -354,7 +402,7 @@ describe('App shell', () => {
     await user.click(await screen.findByRole('button', { name: /grindstone/i }))
 
     expect(selectRepository).toHaveBeenCalledWith({ repositoryId: '/repos/grindstone' })
-    const repositoryPane = screen.getByRole('region', { name: /repository area/i })
+    const repositoryPane = screen.getByRole('region', { name: /^repos$/i })
     expect(within(repositoryPane).getByRole('button', { name: /grindstone/i })).toHaveAttribute(
       'aria-pressed',
       'true'
@@ -632,7 +680,7 @@ describe('App shell', () => {
 
     render(<App />)
 
-    const repositoryPane = await screen.findByRole('region', { name: /repository area/i })
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
     await user.click(within(repositoryPane).getByRole('button', { name: /alpha/i }))
     await user.click(within(repositoryPane).getByRole('button', { name: /beta/i }))
 
@@ -665,7 +713,7 @@ describe('App shell', () => {
     )
 
     await user.click(
-      within(screen.getByRole('region', { name: /repository area/i }))
+      within(screen.getByRole('region', { name: /^repos$/i }))
         .getByRole('button', { name: /grindstone/i })
     )
     expect(
@@ -724,11 +772,11 @@ describe('App shell', () => {
 
     render(<App />)
 
-    const repositoryPane = await screen.findByRole('region', { name: /repository area/i })
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
     expect(
       within(repositoryPane).getByRole('button', { name: /create repository/i })
     ).toBeDisabled()
-    expect(within(repositoryPane).getByLabelText(/repository name/i)).toBeDisabled()
+    expect(within(repositoryPane).queryByLabelText(/repository name/i)).not.toBeInTheDocument()
   })
 
   it('submits repository creation through preload and updates the catalog', async () => {
@@ -765,10 +813,13 @@ describe('App shell', () => {
 
     render(<App />)
 
-    await user.type(await screen.findByLabelText(/repository name/i), 'new-repo')
-    await user.click(screen.getByLabelText(/create on github/i))
-    await user.selectOptions(screen.getByLabelText(/github visibility/i), 'private')
-    await user.click(screen.getByRole('button', { name: /create repository/i }))
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
+    await user.click(within(repositoryPane).getByRole('button', { name: /create repository/i }))
+    const dialog = await screen.findByRole('dialog', { name: /create repository/i })
+    await user.type(within(dialog).getByLabelText(/repository name/i), 'new-repo')
+    await user.click(within(dialog).getByLabelText(/create on github/i))
+    await user.selectOptions(within(dialog).getByLabelText(/github visibility/i), 'private')
+    await user.click(within(dialog).getByRole('button', { name: /^create repository$/i }))
 
     expect(createRepository).toHaveBeenCalledWith({
       scanRootId: 'scan-root:0:test',
@@ -779,6 +830,7 @@ describe('App shell', () => {
       }
     } satisfies CreateRepositoryRequest)
     expect(await screen.findByRole('button', { name: /new-repo/i })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
   })
 
   it('shows create errors returned by the workspace handler', async () => {
@@ -810,11 +862,46 @@ describe('App shell', () => {
 
     render(<App />)
 
-    await user.type(await screen.findByLabelText(/repository name/i), 'new-repo')
-    await user.click(screen.getByRole('button', { name: /create repository/i }))
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
+    const launcher = within(repositoryPane).getByRole('button', { name: /create repository/i })
+    await user.click(launcher)
+    let dialog = await screen.findByRole('dialog', { name: /create repository/i })
+    await user.type(within(dialog).getByLabelText(/repository name/i), 'new-repo')
+    await user.click(within(dialog).getByRole('button', { name: /^create repository$/i }))
 
-    expect(await screen.findByRole('alert', { name: /repository creation error/i }))
+    expect(await within(dialog).findByRole('alert', { name: /repository creation error/i }))
       .toHaveTextContent('Repository already exists: /repos/new-repo')
+    expect(screen.getByRole('dialog', { name: /create repository/i })).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: /close repository creation/i }))
+    expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
+    await user.click(launcher)
+    dialog = await screen.findByRole('dialog', { name: /create repository/i })
+    expect(within(dialog).getByRole('alert', { name: /repository creation error/i }))
+      .toHaveTextContent('Repository already exists: /repos/new-repo')
+  })
+
+  it('resets transient repository creation input when the modal is dismissed', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+
+    render(<App />)
+
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
+    const launcher = within(repositoryPane).getByRole('button', { name: /create repository/i })
+    await user.click(launcher)
+    let dialog = await screen.findByRole('dialog', { name: /create repository/i })
+    await user.type(within(dialog).getByLabelText(/repository name/i), 'draft-repo')
+    await user.click(within(dialog).getByRole('button', { name: /cancel/i }))
+
+    expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
+    expect(launcher).toHaveFocus()
+
+    await user.click(launcher)
+    dialog = await screen.findByRole('dialog', { name: /create repository/i })
+    expect(within(dialog).getByLabelText(/repository name/i)).toHaveValue('')
+    expect(within(dialog).getByLabelText(/scan root/i)).toHaveValue('scan-root:0:test')
+    expect(within(dialog).getByLabelText(/github visibility/i)).toHaveValue('private')
   })
 
   it('renders partial GitHub failure retry controls and retries remote setup', async () => {
@@ -866,6 +953,7 @@ describe('App shell', () => {
 
     render(<App />)
 
+    expect(screen.queryByRole('dialog', { name: /create repository/i })).not.toBeInTheDocument()
     expect(await screen.findByText('gh auth failed')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /retry remote for new-repo/i }))
 
@@ -1044,7 +1132,7 @@ describe('App shell', () => {
     await user.click(await screen.findByRole('button', { name: /configure/i }))
     await user.click(screen.getByRole('button', { name: /^save$/i }))
 
-    const repositoryPane = screen.getByRole('region', { name: /repository area/i })
+    const repositoryPane = screen.getByRole('region', { name: /^repos$/i })
     expect(await within(repositoryPane).findByRole('button', { name: /another/i }))
       .toBeInTheDocument()
     expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
@@ -1107,7 +1195,7 @@ describe('App shell', () => {
 
     expect(getInitialState).toHaveBeenCalledTimes(2)
     expect(getEditableConfig).toHaveBeenCalledTimes(2)
-    const repositoryPane = screen.getByRole('region', { name: /repository area/i })
+    const repositoryPane = screen.getByRole('region', { name: /^repos$/i })
     expect(await within(repositoryPane).findByRole('button', { name: /reloaded/i }))
       .toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Config reloaded')
