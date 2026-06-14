@@ -1,9 +1,15 @@
-import type { InitialWorkspaceState } from './workspace'
+import type {
+  CreateRepositoryRequest,
+  InitialWorkspaceState,
+  RetryRepositoryRemoteRequest
+} from './workspace'
 
 export const ipcChannels = {
   workspace: {
     getInitialState: 'workspace:getInitialState',
-    selectRepository: 'workspace:selectRepository'
+    selectRepository: 'workspace:selectRepository',
+    createRepository: 'workspace:createRepository',
+    retryRepositoryRemote: 'workspace:retryRepositoryRemote'
   }
 } as const
 
@@ -14,11 +20,15 @@ export type IpcRequestMap = {
   'workspace:selectRepository': {
     repositoryId: string
   }
+  'workspace:createRepository': CreateRepositoryRequest
+  'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
 }
 
 export type IpcResponseMap = {
   'workspace:getInitialState': InitialWorkspaceState
   'workspace:selectRepository': InitialWorkspaceState
+  'workspace:createRepository': InitialWorkspaceState
+  'workspace:retryRepositoryRemote': InitialWorkspaceState
 }
 
 export type NormalizedIpcError = {

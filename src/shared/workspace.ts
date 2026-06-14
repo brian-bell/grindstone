@@ -23,6 +23,65 @@ export type RepositoryRow = {
   sources: RepositorySource[]
 }
 
+export type RepositoryScanRoot = {
+  id: string
+  configuredPath: string
+  resolvedPath: string
+  displayPath: string
+}
+
+export type GitHubVisibility = 'public' | 'private'
+
+export type CreateRepositoryRequest = {
+  scanRootId: string
+  name: string
+  github: {
+    enabled: boolean
+    visibility: GitHubVisibility
+  }
+}
+
+export type RetryRepositoryRemoteRequest = {
+  retryId: string
+}
+
+export type RepositoryCreateError = {
+  code:
+    | 'validation_error'
+    | 'scan_root_unavailable'
+    | 'target_exists'
+    | 'local_creation_failed'
+    | 'remote_creation_failed'
+    | 'remote_origin_conflict'
+  message: string
+}
+
+export type RepositoryRemoteSetupStatus =
+  | 'remote_create_failed'
+  | 'remote_maybe_created_origin_failed'
+  | 'origin_missing'
+  | 'origin_matches'
+  | 'origin_conflict'
+  | 'succeeded'
+
+export type RepositoryRemoteRetryRecord = {
+  id: string
+  repositoryId: string
+  repositoryPath: string
+  githubRepositoryName: string
+  visibility: GitHubVisibility
+  status: RepositoryRemoteSetupStatus
+  lastError: string
+  expectedOriginUrl: string | null
+}
+
+export type RepositoryCreateState = {
+  scanRoots: RepositoryScanRoot[]
+  available: boolean
+  error: RepositoryCreateError | null
+  remoteRetries: RepositoryRemoteRetryRecord[]
+}
+
 export type RepositoryPaneState = {
   status: 'ready' | 'error'
   title: string
@@ -30,6 +89,7 @@ export type RepositoryPaneState = {
   repositories: RepositoryRow[]
   selectedRepositoryId: string | null
   diagnostics: CatalogDiagnostic[]
+  create: RepositoryCreateState
 }
 
 export type FlowPaneState =
@@ -64,7 +124,13 @@ export const defaultInitialWorkspaceState: InitialWorkspaceState = {
     description: 'Add scan_roots or repos to Grindstone config to populate this pane.',
     repositories: [],
     selectedRepositoryId: null,
-    diagnostics: []
+    diagnostics: [],
+    create: {
+      scanRoots: [],
+      available: false,
+      error: null,
+      remoteRetries: []
+    }
   },
   flow: {
     status: 'empty',
