@@ -20,6 +20,7 @@ import type {
 import type {
   CatalogDiagnostic,
   CreateFlowRequest,
+  FlowListRow,
   FlowPaneState,
   GitHubVisibility,
   InitialWorkspaceState,
@@ -1119,56 +1120,22 @@ function FlowWorkspaceStateView({
             </thead>
             <tbody>
               {state.flows.map((flow) => (
-                <tr key={flow.id}>
+                <tr key={flow.id} title={formatFlowTooltip(flow)}>
                   <td>
                     <span className="flow-title">{flow.title}</span>
-                    <span className="flow-muted">{flow.repositoryPath}</span>
-                    {flow.worktreePath === undefined ? null : (
-                      <span className="flow-muted">{flow.worktreePath}</span>
-                    )}
                   </td>
                   <td>
                     <span className="flow-status">{flow.status}</span>
-                    {flow.failure === undefined ? null : (
-                      <div
-                        className="flow-failure"
-                        role="alert"
-                      >
-                        <strong>{flow.failure.stage}</strong>
-                        <span>{flow.failure.message}</span>
-                        {flow.failure.command === undefined ? null : <span>{flow.failure.command}</span>}
-                        {flow.failure.output === undefined ? null : <span>{flow.failure.output}</span>}
-                      </div>
-                    )}
                   </td>
                   <td>{flow.updatedAt}</td>
                   <td>
                     {flow.branch === undefined ? '-' : flow.branch}
-                    {flow.baseRef === undefined ? null : (
-                      <span className="flow-muted">base {flow.baseRef}</span>
-                    )}
-                    {flow.commit === undefined ? null : (
-                      <span className="flow-muted">{flow.commit}</span>
-                    )}
                   </td>
                   <td>
-                    {flow.planId === undefined && flow.planPath === undefined ? '-' : null}
-                    {flow.planId === undefined ? null : <span>{flow.planId}</span>}
-                    {flow.planPath === undefined ? null : (
-                      <span className="flow-muted">{flow.planPath}</span>
-                    )}
+                    {flow.planId ?? '-'}
                   </td>
                   <td>
-                    {flow.phases === undefined ? '-' : (
-                      <div className="phase-summary" aria-label={`${flow.title} phases`}>
-                        {flow.phases.map((phase) => (
-                          <span key={phase.id}>
-                            {phase.title} - {phase.status}
-                            {phase.summary === undefined ? '' : ` - ${phase.summary}`}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    {formatPhaseSummary(flow)}
                   </td>
                 </tr>
               ))}
@@ -1194,6 +1161,39 @@ function FlowWorkspaceStateView({
       </div>
     </div>
   )
+}
+
+function formatFlowTooltip(flow: FlowListRow): string {
+  return [
+    `Repository: ${flow.repositoryPath}`,
+    flow.worktreePath === undefined ? null : `Worktree: ${flow.worktreePath}`,
+    flow.branch === undefined ? null : `Branch: ${flow.branch}`,
+    flow.baseRef === undefined ? null : `Base ref: ${flow.baseRef}`,
+    flow.commit === undefined ? null : `Commit: ${flow.commit}`,
+    flow.planId === undefined ? null : `Plan: ${flow.planId}`,
+    flow.planPath === undefined ? null : `Plan path: ${flow.planPath}`,
+    flow.failure === undefined ? null : `Failure: ${flow.failure.stage} - ${flow.failure.message}`,
+    flow.failure?.command === undefined ? null : `Command: ${flow.failure.command}`,
+    flow.failure?.output === undefined ? null : `Output: ${flow.failure.output}`,
+    ...(flow.phases ?? []).map((phase) =>
+      `Phase: ${phase.title} - ${phase.status}${phase.summary === undefined ? '' : ` - ${phase.summary}`}`
+    )
+  ].filter((line): line is string => line !== null).join('\n')
+}
+
+function formatPhaseSummary(flow: FlowListRow): string {
+  if (flow.phases === undefined || flow.phases.length === 0) {
+    return '-'
+  }
+
+  const statusCounts = flow.phases.reduce<Record<string, number>>((counts, phase) => {
+    counts[phase.status] = (counts[phase.status] ?? 0) + 1
+    return counts
+  }, {})
+
+  return Object.entries(statusCounts)
+    .map(([status, count]) => `${count} ${status}`)
+    .join(', ')
 }
 
 function FlowCreatePanel({

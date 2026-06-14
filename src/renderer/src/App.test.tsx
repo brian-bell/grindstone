@@ -368,7 +368,17 @@ describe('App shell', () => {
     expect(rows[1]).toHaveTextContent('2026-06-11T12:30:00.000Z')
     expect(rows[1]).toHaveTextContent('flow/list')
     expect(rows[1]).toHaveTextContent('plan-flow-list')
-    expect(rows[1]).toHaveTextContent('Render list')
+    expect(rows[1]).toHaveTextContent('1 done')
+    expect(rows[1]).not.toHaveTextContent('/repos/grindstone')
+    expect(rows[1]).not.toHaveTextContent('Render list')
+    expect(rows[1]).toHaveAttribute(
+      'title',
+      expect.stringContaining('Repository: /repos/grindstone')
+    )
+    expect(rows[1]).toHaveAttribute(
+      'title',
+      expect.stringContaining('Phase: Render list - done - Rows are visible')
+    )
   })
 
   it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {
@@ -507,8 +517,16 @@ describe('App shell', () => {
 
     expect(await within(dialog).findByRole('alert', { name: /flow creation error/i }))
       .toHaveTextContent('npm install failed')
-    expect(within(flowPane).getByText('npm install')).toBeInTheDocument()
-    expect(within(flowPane).getByText('missing package')).toBeInTheDocument()
+    const failedRow = within(flowPane)
+      .getByRole('table', { name: /grindstone flow records/i })
+      .querySelector('tbody tr')
+    expect(failedRow).toHaveTextContent('Broken bootstrap')
+    expect(failedRow).toHaveTextContent('failed')
+    expect(failedRow).not.toHaveTextContent('npm install')
+    expect(failedRow).not.toHaveTextContent('missing package')
+    expect(failedRow).toHaveAttribute('title', expect.stringContaining('Failure: bootstrap'))
+    expect(failedRow).toHaveAttribute('title', expect.stringContaining('Command: npm install'))
+    expect(failedRow).toHaveAttribute('title', expect.stringContaining('Output: missing package'))
     expect(within(dialog).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
   })
 

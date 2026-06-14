@@ -281,10 +281,10 @@ textarea {
 
 .flow-table th,
 .flow-table td {
-  padding: 10px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid #e2ddd3;
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 .flow-table th {
@@ -299,8 +299,9 @@ textarea {
 
 .flow-table td {
   color: #25302d;
-  font-size: 0.84rem;
-  line-height: 1.4;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  white-space: nowrap;
 }
 
 .flow-table tbody tr:last-child td {
@@ -316,15 +317,7 @@ textarea {
   font-weight: 800;
 }
 
-.flow-muted {
-  margin-top: 3px;
-  color: #65706c;
-  font-size: 0.76rem;
-  overflow-wrap: anywhere;
-}
-
-.flow-status,
-.phase-summary span {
+.flow-status {
   border: 1px solid #ccd6d1;
   border-radius: 999px;
   background: #f3f7f4;
@@ -335,41 +328,9 @@ textarea {
 
 .flow-status {
   display: inline-flex;
-  padding: 4px 8px;
+  padding: 2px 7px;
   font-weight: 700;
   white-space: nowrap;
-}
-
-.phase-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-
-.phase-summary span {
-  max-width: 100%;
-  padding: 4px 7px;
-  overflow-wrap: anywhere;
-}
-
-.phase-summary span {
-  background: #fff9ee;
-  border-color: #dfd0ae;
-  color: #534631;
-}
-
-.flow-failure {
-  display: grid;
-  gap: 4px;
-  padding: 9px 10px;
-  border-left: 3px solid #a23535;
-  border-radius: 6px;
-  background: #fff0ee;
-  color: #7e2525;
-  font-size: 0.82rem;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
 }
 
 .repository-list {
