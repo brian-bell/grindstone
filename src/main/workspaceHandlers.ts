@@ -1,12 +1,18 @@
 import type { IpcMain } from 'electron'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
+import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/config'
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
   type InitialWorkspaceState,
   type RepositoryPaneState
 } from '@shared/workspace'
-import { loadGrindstoneConfig, type LoadGrindstoneConfigOptions } from './config'
+import {
+  getEditableConfig,
+  loadGrindstoneConfig,
+  updateCommonConfigFile,
+  type LoadGrindstoneConfigOptions
+} from './config'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 
 let currentWorkspaceState: InitialWorkspaceState | undefined
@@ -14,14 +20,21 @@ let currentWorkspaceState: InitialWorkspaceState | undefined
 export async function loadInitialWorkspaceState(
   options: LoadGrindstoneConfigOptions = {}
 ): Promise<InitialWorkspaceState> {
+  currentWorkspaceState = await buildWorkspaceState(options)
+  return currentWorkspaceState
+}
+
+async function buildWorkspaceState(
+  options: LoadGrindstoneConfigOptions = {},
+  selectedRepositoryId: string | null = null
+): Promise<InitialWorkspaceState> {
   const config = await loadGrindstoneConfig(options)
 
   if (!config.ok) {
-    currentWorkspaceState = {
+    return {
       ...defaultInitialWorkspaceState,
       repository: createRepositoryErrorState(config.diagnostics)
     }
-    return currentWorkspaceState
   }
 
   const catalog = await scanRepositoryCatalog({
@@ -29,11 +42,22 @@ export async function loadInitialWorkspaceState(
     repos: config.repos
   })
 
-  currentWorkspaceState = {
+  const workspaceState: InitialWorkspaceState = {
     ...defaultInitialWorkspaceState,
     repository: createRepositoryReadyState(catalog)
   }
-  return currentWorkspaceState
+
+  if (selectedRepositoryId === null) {
+    return workspaceState
+  }
+
+  const selectedRepository = workspaceState.repository.repositories.find(
+    (row) => row.id === selectedRepositoryId
+  )
+
+  return selectedRepository === undefined
+    ? workspaceState
+    : createSelectedRepositoryState(workspaceState, selectedRepository.id)
 }
 
 export async function selectRepository(request: {
@@ -48,7 +72,74 @@ export async function selectRepository(request: {
     throw new Error(`Repository not found: ${request.repositoryId}`)
   }
 
-  currentWorkspaceState = {
+  currentWorkspaceState = createSelectedRepositoryState(workspaceState, repository.id)
+  return currentWorkspaceState
+}
+
+export async function updateCommonConfig(
+  input: CommonConfigUpdateInput,
+  options: LoadGrindstoneConfigOptions = {}
+): Promise<ConfigUpdateResponse> {
+  const previousSelectedRepositoryId = currentWorkspaceState?.repository.selectedRepositoryId ?? null
+  const update = await updateCommonConfigFile(input, options)
+
+  if (!update.ok) {
+    return update
+  }
+
+  try {
+    const workspace = await buildWorkspaceState(
+      {
+        ...options,
+        configPath: update.configPath
+      },
+      previousSelectedRepositoryId
+    )
+
+    if (workspace.repository.status === 'error') {
+      return {
+        ok: false,
+        kind: 'reload_failed',
+        configPath: update.configPath,
+        message: workspace.repository.description,
+        config: update.config
+      }
+    }
+
+    currentWorkspaceState = workspace
+
+    return {
+      ok: true,
+      workspace,
+      config: update.config
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      kind: 'reload_failed',
+      configPath: update.configPath,
+      message: getErrorMessage(error),
+      config: update.config
+    }
+  }
+}
+
+export function getCurrentEditableConfig(
+  options: LoadGrindstoneConfigOptions = {}
+): Promise<Awaited<ReturnType<typeof getEditableConfig>>> {
+  return getEditableConfig(options)
+}
+
+function createSelectedRepositoryState(
+  workspaceState: InitialWorkspaceState,
+  repositoryId: string
+): InitialWorkspaceState {
+  const repository = workspaceState.repository.repositories.find((row) => row.id === repositoryId)
+  if (repository === undefined) {
+    return workspaceState
+  }
+
+  return {
     ...workspaceState,
     repository: {
       ...workspaceState.repository,
@@ -62,7 +153,6 @@ export async function selectRepository(request: {
       description: `Flow context is scoped to ${repository.path}.`
     }
   }
-  return currentWorkspaceState
 }
 
 export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): void {
@@ -71,6 +161,12 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.selectRepository, (request) =>
     selectRepository(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.config.getEditableConfig, () =>
+    getCurrentEditableConfig()
+  )
+  handleTypedIpc(ipcMain, ipcChannels.config.updateCommonConfig, (request) =>
+    updateCommonConfig(request)
   )
 }
 
@@ -107,4 +203,12 @@ function firstDiagnosticMessage(diagnostics: CatalogDiagnostic[]): string {
 
 function pluralize(label: string, count: number): string {
   return count === 1 ? label : `${label}s`
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return 'Unable to reload Grindstone config.'
 }
