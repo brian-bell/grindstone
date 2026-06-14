@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { access, mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -77,7 +77,7 @@ export async function loadGrindstoneConfig(
     }
   }
 
-  const diagnostics = validateConfig(rawConfig, configPath)
+  const diagnostics = validateCatalogConfig(rawConfig, configPath)
   if (diagnostics.length > 0) {
     return {
       ...emptyConfig(configPath),
@@ -157,10 +157,37 @@ export function mergeCommonConfig(
   }
 
   if (input.bootstrap_hooks.length > 0) {
-    nextConfig.bootstrap_hooks = input.bootstrap_hooks.map((hook) => ({
-      ...hook,
-      env: hook.env === undefined ? undefined : { ...hook.env }
-    }))
+    const existingHooks = Array.isArray(rawConfig.bootstrap_hooks) ? rawConfig.bootstrap_hooks : []
+    nextConfig.bootstrap_hooks = input.bootstrap_hooks.map((hook) => {
+      const sourceIndex = getHookSourceIndex(hook)
+      const existingHook =
+        sourceIndex !== undefined && isRecord(existingHooks[sourceIndex])
+          ? { ...existingHooks[sourceIndex] }
+          : {}
+      delete existingHook.name
+      delete existingHook.command
+      delete existingHook.cwd
+      delete existingHook.env
+
+      const nextHook: RawConfig = {
+        ...existingHook,
+        command: hook.command
+      }
+
+      if (hook.name !== undefined) {
+        nextHook.name = hook.name
+      }
+
+      if (hook.cwd !== undefined) {
+        nextHook.cwd = hook.cwd
+      }
+
+      if (hook.env !== undefined) {
+        nextHook.env = { ...hook.env }
+      }
+
+      return nextHook
+    })
   }
 
   return nextConfig
@@ -225,8 +252,12 @@ async function resolveConfigPath(
   return undefined
 }
 
-function validateConfig(rawConfig: RawConfig, configPath: string): CatalogDiagnostic[] {
-  return validateRawConfig(rawConfig).map((error) => ({
+function validateCatalogConfig(rawConfig: RawConfig, configPath: string): CatalogDiagnostic[] {
+  const errors: ConfigFieldError[] = []
+  validatePathArray(rawConfig.scan_roots, 'scan_roots', errors, true)
+  validatePathArray(rawConfig.repos, 'repos', errors, true)
+
+  return errors.map((error) => ({
     severity: 'error',
     code: 'config_type_error',
     message: error.message,
@@ -447,8 +478,9 @@ function normalizeBootstrapHooks(value: unknown): EditableBootstrapHook[] {
     return []
   }
 
-  return value.filter(isRecord).map((hook) => {
+  return value.filter(isRecord).map((hook, index) => {
     const normalizedHook: EditableBootstrapHook = {
+      sourceIndex: index,
       command: typeof hook.command === 'string' ? hook.command : ''
     }
 
@@ -472,6 +504,14 @@ function normalizeBootstrapHooks(value: unknown): EditableBootstrapHook[] {
   })
 }
 
+function getHookSourceIndex(hook: EditableBootstrapHook): number | undefined {
+  return hook.sourceIndex !== undefined &&
+    Number.isInteger(hook.sourceIndex) &&
+    hook.sourceIndex >= 0
+    ? hook.sourceIndex
+    : undefined
+}
+
 function resolveDefaultUserConfigPath(options: LoadGrindstoneConfigOptions): string {
   const homeDirectory = options.homeDir ?? homedir()
   const xdgConfigHome =
@@ -490,14 +530,31 @@ async function writeConfigAtomically(configPath: string, contents: string): Prom
   const tempPath = join(configDir, `.config.toml.${process.pid}.${randomUUID()}.tmp`)
   const existingMode = await getExistingMode(configPath)
   const mode = existingMode ?? 0o600
+  let tempFile: Awaited<ReturnType<typeof open>> | undefined
 
   try {
-    await writeFile(tempPath, contents, { mode })
-    await chmod(tempPath, mode)
+    tempFile = await open(tempPath, 'w', mode)
+    await tempFile.writeFile(contents, 'utf8')
+    await tempFile.chmod(mode)
+    await tempFile.sync()
+    await tempFile.close()
+    tempFile = undefined
     await rename(tempPath, configPath)
+    await syncDirectory(configDir)
   } catch (error) {
+    await tempFile?.close().catch(() => undefined)
     await unlink(tempPath).catch(() => undefined)
     throw error
+  }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  let directory: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    directory = await open(path, 'r')
+    await directory.sync()
+  } finally {
+    await directory?.close().catch(() => undefined)
   }
 }
 

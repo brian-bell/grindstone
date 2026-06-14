@@ -3,6 +3,7 @@ import type { InitialWorkspaceState } from './workspace'
 export type DefaultAgent = 'codex' | 'claude'
 
 export type EditableBootstrapHook = {
+  sourceIndex?: number
   name?: string
   command: string
   cwd?: string

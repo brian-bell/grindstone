@@ -171,6 +171,36 @@ describe('Grindstone config loader', () => {
       ]
     })
   })
+
+  it('keeps repository loading scoped to path fields when other editable fields are invalid', async () => {
+    const root = await makeTempDir()
+    const configPath = join(root, 'invalid-editor-fields.toml')
+    await writeFile(
+      configPath,
+      [
+        'repos = ["./repo"]',
+        'default_agent = "unsupported"',
+        'artifact_root = ""',
+        '',
+        '[[bootstrap_hooks]]',
+        'command = ""'
+      ].join('\n')
+    )
+
+    await expect(loadGrindstoneConfig({ configPath })).resolves.toMatchObject({
+      ok: true,
+      configPath,
+      repos: [
+        {
+          configuredPath: './repo',
+          resolvedPath: join(root, 'repo')
+        }
+      ],
+      diagnostics: []
+    })
+
+    await expect(getEditableConfig({ configPath })).rejects.toThrow('Invalid Grindstone config')
+  })
 })
 
 describe('editable Grindstone config', () => {
@@ -202,6 +232,7 @@ describe('editable Grindstone config', () => {
       artifact_root: './artifacts',
       bootstrap_hooks: [
         {
+          sourceIndex: 0,
           name: 'Install',
           command: 'npm install',
           cwd: './app',
@@ -280,6 +311,11 @@ describe('editable Grindstone config', () => {
         'name = "standup"',
         'body = "Preserve arrays of tables"',
         '',
+        '[[bootstrap_hooks]]',
+        'command = "before"',
+        'timeout = 30',
+        'shell = "zsh"',
+        '',
         '[unknown.nested]',
         'enabled = true'
       ].join('\n')
@@ -292,7 +328,9 @@ describe('editable Grindstone config', () => {
       artifact_root: 'artifacts',
       bootstrap_hooks: [
         {
-          command: 'npm test'
+          sourceIndex: 0,
+          command: 'npm test',
+          name: 'Tests'
         }
       ]
     }
@@ -311,7 +349,10 @@ describe('editable Grindstone config', () => {
       artifact_root: 'artifacts',
       bootstrap_hooks: [
         {
-          command: 'npm test'
+          command: 'npm test',
+          name: 'Tests',
+          timeout: 30,
+          shell: 'zsh'
         }
       ],
       unknown_scalar: 42,
@@ -362,6 +403,48 @@ describe('editable Grindstone config', () => {
     })
 
     await expect(readFile(configPath, 'utf8')).resolves.toBe('repos = ["before"]\n')
+  })
+
+  it('preserves unknown bootstrap hook fields by source index instead of draft position', async () => {
+    const root = await makeTempDir()
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(
+      configPath,
+      [
+        '[[bootstrap_hooks]]',
+        'command = "first"',
+        'timeout = 10',
+        '',
+        '[[bootstrap_hooks]]',
+        'command = "second"',
+        'shell = "zsh"'
+      ].join('\n')
+    )
+
+    await updateCommonConfigFile(
+      {
+        scan_roots: [],
+        repos: [],
+        default_agent: null,
+        artifact_root: null,
+        bootstrap_hooks: [
+          {
+            sourceIndex: 1,
+            command: 'second edited'
+          }
+        ]
+      },
+      { configPath }
+    )
+
+    expect(parse(await readFile(configPath, 'utf8'))).toMatchObject({
+      bootstrap_hooks: [
+        {
+          command: 'second edited',
+          shell: 'zsh'
+        }
+      ]
+    })
   })
 
   it('creates a missing default user config under XDG_CONFIG_HOME', async () => {

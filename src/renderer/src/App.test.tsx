@@ -102,6 +102,7 @@ const editableConfigState: EditableConfigState = {
   artifact_root: './artifacts',
   bootstrap_hooks: [
     {
+      sourceIndex: 0,
       name: 'Install',
       command: 'npm install',
       cwd: './app',
@@ -262,6 +263,27 @@ describe('App shell', () => {
     expect(screen.getByLabelText('Hook 1 environment')).toHaveValue('NODE_ENV=test')
   })
 
+  it('does not save an empty draft when editable config fails to load', async () => {
+    const user = userEvent.setup()
+    const updateCommonConfig = vi.fn()
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockRejectedValue({ name: 'Error', message: 'Invalid Grindstone config' }),
+      updateCommonConfig
+    )
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /configure/i }))
+
+    expect(await screen.findByText('Invalid Grindstone config')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(updateCommonConfig).not.toHaveBeenCalled()
+  })
+
   it('saves edited common config through preload', async () => {
     const user = userEvent.setup()
     const updateCommonConfig = vi.fn().mockResolvedValue({
@@ -296,6 +318,7 @@ describe('App shell', () => {
       artifact_root: './new-artifacts',
       bootstrap_hooks: [
         {
+          sourceIndex: 0,
           name: 'Install',
           command: 'npm install',
           cwd: './app',
@@ -342,6 +365,29 @@ describe('App shell', () => {
     expect(await screen.findByText('scan_roots entries must be non-empty strings.'))
       .toBeInTheDocument()
     expect(screen.getByLabelText('Scan root 1')).toHaveValue('')
+  })
+
+  it('shows malformed bootstrap hook env lines without submitting the edit', async () => {
+    const user = userEvent.setup()
+    const updateCommonConfig = vi.fn()
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      updateCommonConfig
+    )
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /configure/i }))
+    await user.clear(screen.getByLabelText('Hook 1 environment'))
+    await user.type(screen.getByLabelText('Hook 1 environment'), 'BROKEN')
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(updateCommonConfig).not.toHaveBeenCalled()
+    expect(await screen.findByText('Environment lines must use KEY=value.'))
+      .toBeInTheDocument()
+    expect(screen.getByLabelText('Hook 1 environment')).toHaveValue('BROKEN')
   })
 
   it('refreshes repository catalog state returned by a successful config save', async () => {

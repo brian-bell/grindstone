@@ -42,7 +42,18 @@ type ConfigDraft = {
   bootstrap_hooks: BootstrapHookDraft[]
 }
 
+type ConfigInputResult =
+  | {
+    ok: true
+    input: CommonConfigUpdateInput
+  }
+  | {
+    ok: false
+    errors: ConfigFieldError[]
+  }
+
 type BootstrapHookDraft = {
+  sourceIndex?: number
   name: string
   command: string
   cwd: string
@@ -381,12 +392,23 @@ function ConfigEditorPanel({
   const errorsByField = new Map(fieldErrors.map((error) => [error.field, error.message]))
 
   async function handleSave(): Promise<void> {
+    if (config === null || loadError !== null) {
+      return
+    }
+
     setIsSaving(true)
     setStatusMessage(null)
     setFieldErrors([])
 
     try {
-      const result = await onSave(createConfigInput(draft))
+      const inputResult = createConfigInput(draft)
+      if (!inputResult.ok) {
+        setFieldErrors(inputResult.errors)
+        setShowReloadAction(false)
+        return
+      }
+
+      const result = await onSave(inputResult.input)
       setFieldErrors(result.errors)
       setStatusMessage(result.message ?? (result.errors.length === 0 ? 'Config saved' : null))
       setShowReloadAction(result.canReload)
@@ -512,7 +534,12 @@ function ConfigEditorPanel({
             <X aria-hidden="true" size={16} />
             <span>Cancel</span>
           </button>
-          <button className="primary-button" type="button" onClick={() => void handleSave()}>
+          <button
+            className="primary-button"
+            disabled={config === null || loadError !== null || isSaving}
+            type="button"
+            onClick={() => void handleSave()}
+          >
             <Save aria-hidden="true" size={16} />
             <span>{isSaving ? 'Saving' : 'Save'}</span>
           </button>
@@ -626,7 +653,7 @@ function BootstrapHookEditor({
                 replaceHook(hooks, index, { ...hook, env: event.currentTarget.value }, onChange)
               }
             />
-            <FieldError message={errorsByField.get(`bootstrap_hooks[${index}].env`)} />
+            <FieldError message={getFieldError(errorsByField, `bootstrap_hooks[${index}].env`)} />
           </label>
         </div>
       ))}
@@ -677,6 +704,7 @@ function createDraft(config: EditableConfigState | null): ConfigDraft {
     default_agent: config?.default_agent ?? '',
     artifact_root: config?.artifact_root ?? '',
     bootstrap_hooks: (config?.bootstrap_hooks ?? []).map((hook) => ({
+      sourceIndex: hook.sourceIndex,
       name: hook.name ?? '',
       command: hook.command,
       cwd: hook.cwd ?? '',
@@ -685,32 +713,51 @@ function createDraft(config: EditableConfigState | null): ConfigDraft {
   }
 }
 
-function createConfigInput(draft: ConfigDraft): CommonConfigUpdateInput {
+function createConfigInput(draft: ConfigDraft): ConfigInputResult {
+  const errors: ConfigFieldError[] = []
+  const bootstrapHooks = draft.bootstrap_hooks.map((hook, index) => {
+    const nextHook: EditableBootstrapHook = {
+      command: hook.command
+    }
+
+    if (hook.sourceIndex !== undefined) {
+      nextHook.sourceIndex = hook.sourceIndex
+    }
+
+    if (hook.name.trim() !== '') {
+      nextHook.name = hook.name
+    }
+
+    if (hook.cwd.trim() !== '') {
+      nextHook.cwd = hook.cwd
+    }
+
+    const parsedEnv = parseEnv(hook.env, `bootstrap_hooks[${index}].env`)
+    if (!parsedEnv.ok) {
+      errors.push(...parsedEnv.errors)
+    } else if (Object.keys(parsedEnv.env).length > 0) {
+      nextHook.env = parsedEnv.env
+    }
+
+    return nextHook
+  })
+
+  if (errors.length > 0) {
+    return {
+      ok: false,
+      errors
+    }
+  }
+
   return {
-    scan_roots: draft.scan_roots,
-    repos: draft.repos,
-    default_agent: draft.default_agent === '' ? null : draft.default_agent,
-    artifact_root: draft.artifact_root.trim() === '' ? null : draft.artifact_root,
-    bootstrap_hooks: draft.bootstrap_hooks.map((hook) => {
-      const nextHook: EditableBootstrapHook = {
-        command: hook.command
-      }
-
-      if (hook.name.trim() !== '') {
-        nextHook.name = hook.name
-      }
-
-      if (hook.cwd.trim() !== '') {
-        nextHook.cwd = hook.cwd
-      }
-
-      const env = parseEnv(hook.env)
-      if (Object.keys(env).length > 0) {
-        nextHook.env = env
-      }
-
-      return nextHook
-    })
+    ok: true,
+    input: {
+      scan_roots: draft.scan_roots,
+      repos: draft.repos,
+      default_agent: draft.default_agent === '' ? null : draft.default_agent,
+      artifact_root: draft.artifact_root.trim() === '' ? null : draft.artifact_root,
+      bootstrap_hooks: bootstrapHooks
+    }
   }
 }
 
@@ -735,17 +782,36 @@ function formatEnv(env: Record<string, string> | undefined): string {
     .join('\n')
 }
 
-function parseEnv(value: string): Record<string, string> {
-  return Object.fromEntries(
-    value
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line !== '' && line.includes('='))
-      .map((line) => {
-        const separatorIndex = line.indexOf('=')
-        return [line.slice(0, separatorIndex), line.slice(separatorIndex + 1)]
-      })
-  )
+function parseEnv(
+  value: string,
+  field: string
+): { ok: true; env: Record<string, string> } | { ok: false; errors: ConfigFieldError[] } {
+  const env: Record<string, string> = {}
+  const errors: ConfigFieldError[] = []
+
+  value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .forEach((line) => {
+      const separatorIndex = line.indexOf('=')
+      if (separatorIndex <= 0) {
+        errors.push({
+          field,
+          message: 'Environment lines must use KEY=value.'
+        })
+        return
+      }
+
+      env[line.slice(0, separatorIndex)] = line.slice(separatorIndex + 1)
+    })
+
+  return errors.length === 0 ? { ok: true, env } : { ok: false, errors }
+}
+
+function getFieldError(errorsByField: Map<string, string>, field: string): string | undefined {
+  return errorsByField.get(field) ??
+    [...errorsByField.entries()].find(([errorField]) => errorField.startsWith(`${field}.`))?.[1]
 }
 
 function getRendererPath(): string {
