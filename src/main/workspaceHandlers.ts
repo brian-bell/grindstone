@@ -376,6 +376,10 @@ async function createSelectedRepositoryState(
     return workspaceState
   }
 
+  const flow = await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory)
+  const canCreateFlow = (flow.status === 'ready' || flow.status === 'empty') &&
+    flow.create?.available === true
+
   return {
     ...workspaceState,
     repository: {
@@ -384,10 +388,10 @@ async function createSelectedRepositoryState(
       description: repository.path,
       selectedRepositoryId: repository.id
     },
-    flow: await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory),
+    flow,
     shortcuts: workspaceState.shortcuts.map((shortcut) =>
       shortcut.id === 'new-flow'
-        ? { ...shortcut, disabled: false }
+        ? { ...shortcut, disabled: !canCreateFlow }
         : shortcut
     )
   }

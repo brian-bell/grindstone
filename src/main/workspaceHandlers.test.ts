@@ -600,6 +600,27 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('keeps the New Flow shortcut disabled when selected repository Flow creation is unavailable', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-shortcut-error')
+    const artifactRoot = join(root, 'artifact-root-file')
+    await makeGitRepository(repoPath)
+    await writeFile(artifactRoot, '')
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    const selectedState = await selectRepository({ repositoryId })
+
+    expect(selectedState.flow).toMatchObject({
+      status: 'error'
+    })
+    expect(selectedState.shortcuts.find((shortcut) => shortcut.id === 'new-flow')).toMatchObject({
+      disabled: true
+    })
+  })
+
   it('keeps main workspace memory on the latest repository when earlier selections finish later', async () => {
     const root = await makeTempDir()
     const alphaPath = join(root, 'repo-alpha')
