@@ -99,7 +99,10 @@ async function buildWorkspaceState(
     repos: config.repos
   })
   const scanRoots = createRepositoryScanRoots(config.scanRoots)
-  const remoteRetries: RepositoryPaneState['create']['remoteRetries'] = []
+  const remoteRetries = preserveRemoteRetries(
+    currentWorkspaceContext?.remoteRetries ?? [],
+    catalog
+  )
   currentWorkspaceContext = {
     catalogInput: {
       scanRoots: config.scanRoots,
@@ -497,6 +500,19 @@ function upsertRetry(
   retry: RepositoryPaneState['create']['remoteRetries'][number]
 ): RepositoryPaneState['create']['remoteRetries'] {
   return [...retries.filter((candidate) => candidate.id !== retry.id), retry]
+}
+
+function preserveRemoteRetries(
+  retries: RepositoryPaneState['create']['remoteRetries'],
+  catalog: RepositoryCatalogResult
+): RepositoryPaneState['create']['remoteRetries'] {
+  return retries.filter((retry) =>
+    catalog.repositories.some(
+      (repository) =>
+        repository.id === retry.repositoryId &&
+        repository.canonicalPath === retry.repositoryPath
+    )
+  )
 }
 
 async function createFlowPaneState(

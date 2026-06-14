@@ -297,6 +297,52 @@ describe('workspace main handlers', () => {
     ])
   })
 
+  it('preserves remote retry records when the workspace catalog reloads', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+    const initialState = await loadInitialWorkspaceState({ configPath })
+    const scanRootId = initialState.repository.create.scanRoots[0]?.id ?? ''
+    const runCommand: CommandRunner = async (command, _args, options) => {
+      if (command === 'gh') {
+        throw new CommandRunError('gh', ['repo', 'create'], 'gh auth failed')
+      }
+      await makeGitRepository(options.cwd)
+      return { stdout: '' }
+    }
+
+    const partialState = await createRepositoryInWorkspace(
+      {
+        scanRootId,
+        name: 'reload-retry',
+        github: {
+          enabled: true,
+          visibility: 'private'
+        }
+      },
+      { runCommand }
+    )
+    const retry = partialState.repository.create.remoteRetries[0]
+    expect(retry).toBeDefined()
+
+    await expect(loadInitialWorkspaceState({ configPath })).resolves.toMatchObject({
+      repository: {
+        create: {
+          remoteRetries: [
+            {
+              id: retry?.id,
+              repositoryPath: retry?.repositoryPath,
+              githubRepositoryName: 'reload-retry',
+              status: 'remote_create_failed'
+            }
+          ]
+        }
+      }
+    })
+  })
+
   it('returns structured errors for malformed remote retry requests', async () => {
     const root = await makeTempDir()
     const scanRoot = join(root, 'repos')
