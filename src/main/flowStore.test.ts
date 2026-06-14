@@ -142,6 +142,59 @@ describe('Flow artifact store', () => {
     ])
   })
 
+  it('sorts flows by parsed updated time when RFC3339 precisions differ', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const selectedRepository = await makeRepository(root, 'repo-precision')
+
+    await writeFlowMeta(
+      artifactRoot,
+      'whole-second-flow',
+      flowMeta('whole-second-flow', selectedRepository.path, {
+        updated_at: '2026-06-14T03:00:00Z'
+      })
+    )
+    await writeFlowMeta(
+      artifactRoot,
+      'fractional-flow',
+      flowMeta('fractional-flow', selectedRepository.path, {
+        updated_at: '2026-06-14T03:00:00.5Z'
+      })
+    )
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.listFlowsForRepository(selectedRepository)).resolves.toEqual([
+      expect.objectContaining({ id: 'fractional-flow' }),
+      expect.objectContaining({ id: 'whole-second-flow' })
+    ])
+  })
+
+  it('matches worktree-scoped flows when the selected repository is the worktree', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const baseRepository = await makeRepository(root, 'repo-base')
+    const worktreeRepository = await makeRepository(root, 'repo-worktree')
+
+    await writeFlowMeta(
+      artifactRoot,
+      'worktree-flow',
+      flowMeta('worktree-flow', baseRepository.path, {
+        worktree_path: worktreeRepository.path
+      })
+    )
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.listFlowsForRepository(worktreeRepository)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'worktree-flow',
+        repositoryId: baseRepository.id,
+        worktreePath: worktreeRepository.path
+      })
+    ])
+  })
+
   it('exposes the canonical repository path when metadata uses a symlinked repo path', async () => {
     const root = await makeTempDir()
     const artifactRoot = join(root, 'artifacts')

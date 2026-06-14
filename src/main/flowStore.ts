@@ -41,14 +41,14 @@ export async function createFlowStore(options: CreateFlowStoreOptions): Promise<
         }
 
         const flow = await readFlowFromDirectory(flowsRoot, entry.name)
-        if (flow === undefined || flow.repositoryId !== repository.id) {
+        if (flow === undefined || !(await flowMatchesRepository(flow, repository))) {
           continue
         }
 
         flows.push(flow)
       }
 
-      return flows.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      return flows.sort(compareFlowsByUpdatedAtDescending)
     },
 
     async readFlow(flowId) {
@@ -158,6 +158,42 @@ function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+async function flowMatchesRepository(
+  flow: FlowListRow,
+  repository: RepositoryRow
+): Promise<boolean> {
+  if (flow.repositoryId === repository.id) {
+    return true
+  }
+
+  if (flow.worktreePath === undefined) {
+    return false
+  }
+
+  try {
+    return await realpath(flow.worktreePath) === repository.id
+  } catch {
+    return false
+  }
+}
+
+function compareFlowsByUpdatedAtDescending(left: FlowListRow, right: FlowListRow): number {
+  const leftTime = Date.parse(left.updatedAt)
+  const rightTime = Date.parse(right.updatedAt)
+  const leftTimeIsValid = !Number.isNaN(leftTime)
+  const rightTimeIsValid = !Number.isNaN(rightTime)
+
+  if (leftTimeIsValid && rightTimeIsValid && leftTime !== rightTime) {
+    return rightTime - leftTime
+  }
+
+  if (leftTimeIsValid !== rightTimeIsValid) {
+    return leftTimeIsValid ? -1 : 1
+  }
+
+  return right.updatedAt.localeCompare(left.updatedAt)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
