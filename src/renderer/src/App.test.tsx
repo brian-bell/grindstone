@@ -132,6 +132,12 @@ const selectedCatalogState: InitialWorkspaceState = {
             status: 'done',
             order: 1,
             summary: 'Rows are visible'
+          },
+          {
+            id: 'phase-launch',
+            title: 'Launch workspace',
+            status: 'active',
+            order: 2
           }
         ]
       }
@@ -348,7 +354,8 @@ describe('App shell', () => {
     await user.click(await screen.findByRole('button', { name: /grindstone/i }))
 
     expect(selectRepository).toHaveBeenCalledWith({ repositoryId: '/repos/grindstone' })
-    expect(screen.getByRole('button', { name: /grindstone/i })).toHaveAttribute(
+    const repositoryPane = screen.getByRole('region', { name: /repository area/i })
+    expect(within(repositoryPane).getByRole('button', { name: /grindstone/i })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
@@ -368,17 +375,27 @@ describe('App shell', () => {
     expect(rows[1]).toHaveTextContent('2026-06-11T12:30:00.000Z')
     expect(rows[1]).toHaveTextContent('flow/list')
     expect(rows[1]).toHaveTextContent('plan-flow-list')
-    expect(rows[1]).toHaveTextContent('1 done')
+    expect(rows[1]).toHaveTextContent('1/2 done, 1 active')
     expect(rows[1]).not.toHaveTextContent('/repos/grindstone')
     expect(rows[1]).not.toHaveTextContent('Render list')
-    expect(rows[1]).toHaveAttribute(
+    const detailsButton = within(rows[1]).getByRole('button', {
+      name: /artifact backed flow details/i
+    })
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'false')
+    expect(detailsButton).toHaveAttribute(
       'title',
       expect.stringContaining('Repository: /repos/grindstone')
     )
-    expect(rows[1]).toHaveAttribute(
+    expect(detailsButton).toHaveAttribute(
       'title',
       expect.stringContaining('Phase: Render list - done - Rows are visible')
     )
+
+    await user.click(detailsButton)
+
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'true')
+    expect(await within(flowTable).findByRole('region', { name: /artifact backed flow details/i }))
+      .toHaveTextContent('Phase: Launch workspace - active')
   })
 
   it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {
@@ -433,6 +450,16 @@ describe('App shell', () => {
     await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
 
     const dialog = await screen.findByRole('dialog', { name: /create flow/i })
+    const titleInput = within(dialog).getByLabelText(/^title$/i)
+    const closeButton = within(dialog).getByRole('button', { name: /close flow creation/i })
+    expect(titleInput).toHaveFocus()
+    const sentinels = dialog.querySelectorAll<HTMLElement>('[data-focus-sentinel="true"]')
+    expect(sentinels).toHaveLength(2)
+    sentinels[0]?.focus()
+    expect(closeButton).toHaveFocus()
+    sentinels[1]?.focus()
+    expect(titleInput).toHaveFocus()
+    titleInput.focus()
     await user.type(within(dialog).getByLabelText(/^title$/i), 'Ship workspace creation')
     await user.type(within(dialog).getByLabelText(/instructions/i), 'Build the path')
     await user.type(within(dialog).getByLabelText(/base ref/i), 'main')
@@ -450,6 +477,10 @@ describe('App shell', () => {
     await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
     expect(within(await screen.findByRole('dialog', { name: /create flow/i })).getByLabelText(/^title$/i))
       .toHaveValue('')
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: /create flow/i })).not.toBeInTheDocument()
+    expect(within(flowPane).getByRole('button', { name: /new flow/i })).toHaveFocus()
   })
 
   it('keeps failed Flow creation input in the modal and renders persisted start failures', async () => {
@@ -517,16 +548,23 @@ describe('App shell', () => {
 
     expect(await within(dialog).findByRole('alert', { name: /flow creation error/i }))
       .toHaveTextContent('npm install failed')
-    const failedRow = within(flowPane)
-      .getByRole('table', { name: /grindstone flow records/i })
-      .querySelector('tbody tr')
+    const failedRows = within(
+      within(flowPane).getByRole('table', { name: /grindstone flow records/i })
+    ).getAllByRole('row')
+    const failedRow = failedRows[1]
     expect(failedRow).toHaveTextContent('Broken bootstrap')
     expect(failedRow).toHaveTextContent('failed')
-    expect(failedRow).not.toHaveTextContent('npm install')
+    expect(failedRow).toHaveTextContent('bootstrap: npm install failed')
     expect(failedRow).not.toHaveTextContent('missing package')
-    expect(failedRow).toHaveAttribute('title', expect.stringContaining('Failure: bootstrap'))
-    expect(failedRow).toHaveAttribute('title', expect.stringContaining('Command: npm install'))
-    expect(failedRow).toHaveAttribute('title', expect.stringContaining('Output: missing package'))
+    const detailsButton = within(failedRow as HTMLElement).getByRole('button', {
+      name: /broken bootstrap details/i
+    })
+    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Failure: bootstrap'))
+    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Command: npm install'))
+    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Output: missing package'))
+    await user.click(detailsButton)
+    expect(await within(flowPane).findByRole('region', { name: /broken bootstrap details/i }))
+      .toHaveTextContent('Output: missing package')
     expect(within(dialog).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
   })
 
@@ -569,8 +607,9 @@ describe('App shell', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /alpha/i }))
-    await user.click(screen.getByRole('button', { name: /beta/i }))
+    const repositoryPane = await screen.findByRole('region', { name: /repository area/i })
+    await user.click(within(repositoryPane).getByRole('button', { name: /alpha/i }))
+    await user.click(within(repositoryPane).getByRole('button', { name: /beta/i }))
 
     await act(async () => {
       resolveBeta(betaSelectedCatalogState)
@@ -582,7 +621,7 @@ describe('App shell', () => {
     })
     expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
     expect(screen.getByRole('main', { name: /flow workspace/i })).not.toHaveTextContent('Alpha Flow')
-    expect(screen.getByRole('button', { name: /beta/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(repositoryPane).getByRole('button', { name: /beta/i })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('renders selected repository empty and artifact error Flow states', async () => {
@@ -600,7 +639,10 @@ describe('App shell', () => {
       'No Flows for grindstone'
     )
 
-    await user.click(screen.getByRole('button', { name: /grindstone/i }))
+    await user.click(
+      within(screen.getByRole('region', { name: /repository area/i }))
+        .getByRole('button', { name: /grindstone/i })
+    )
     expect(
       await screen.findByRole('alert', { name: /flow workspace error/i })
     ).toHaveTextContent('Flow artifact store unavailable')

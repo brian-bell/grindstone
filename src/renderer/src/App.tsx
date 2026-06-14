@@ -1,6 +1,7 @@
 import {
   CirclePlus,
   GitBranch,
+  Info,
   Plus,
   RotateCcw,
   Save,
@@ -9,7 +10,15 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactElement
+} from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
 import type {
   CommonConfigUpdateInput,
@@ -1106,42 +1115,10 @@ function FlowWorkspaceStateView({
           <p>{state.flows.length} {state.flows.length === 1 ? 'Flow' : 'Flows'} found.</p>
         </div>
 
-        <div className="flow-table-wrap">
-          <table className="flow-table" aria-label={`${state.repositoryName} Flow records`}>
-            <thead>
-              <tr>
-                <th scope="col">Flow</th>
-                <th scope="col">Status</th>
-                <th scope="col">Updated</th>
-                <th scope="col">Branch</th>
-                <th scope="col">Plan</th>
-                <th scope="col">Phases</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.flows.map((flow) => (
-                <tr key={flow.id} title={formatFlowTooltip(flow)}>
-                  <td>
-                    <span className="flow-title">{flow.title}</span>
-                  </td>
-                  <td>
-                    <span className="flow-status">{flow.status}</span>
-                  </td>
-                  <td>{flow.updatedAt}</td>
-                  <td>
-                    {flow.branch === undefined ? '-' : flow.branch}
-                  </td>
-                  <td>
-                    {flow.planId ?? '-'}
-                  </td>
-                  <td>
-                    {formatPhaseSummary(flow)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <FlowRecordTable
+          flows={state.flows}
+          repositoryName={state.repositoryName}
+        />
       </div>
     )
   }
@@ -1159,6 +1136,98 @@ function FlowWorkspaceStateView({
         <h2>{state.title}</h2>
         <p>{state.description}</p>
       </div>
+    </div>
+  )
+}
+
+function FlowRecordTable({
+  flows,
+  repositoryName
+}: {
+  flows: FlowListRow[]
+  repositoryName: string
+}): ReactElement {
+  const [expandedFlowId, setExpandedFlowId] = useState<string | null>(null)
+
+  return (
+    <div className="flow-table-wrap">
+      <table className="flow-table" aria-label={`${repositoryName} Flow records`}>
+        <thead>
+          <tr>
+            <th scope="col">Flow</th>
+            <th scope="col">Status</th>
+            <th scope="col">Updated</th>
+            <th scope="col">Branch</th>
+            <th scope="col">Plan</th>
+            <th scope="col">Phases</th>
+            <th scope="col">Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {flows.map((flow) => {
+            const details = formatFlowTooltip(flow)
+            const detailsId = `flow-details-${flow.id}`
+            const isExpanded = expandedFlowId === flow.id
+
+            return (
+              <Fragment key={flow.id}>
+                <tr>
+                  <td>
+                    <span className="flow-title">{flow.title}</span>
+                  </td>
+                  <td>
+                    <span className="flow-status">{flow.status}</span>
+                    {flow.failure === undefined ? null : (
+                      <span className="flow-failure-summary">
+                        {formatFailureSummary(flow.failure)}
+                      </span>
+                    )}
+                  </td>
+                  <td>{flow.updatedAt}</td>
+                  <td>
+                    {flow.branch === undefined ? '-' : flow.branch}
+                  </td>
+                  <td>
+                    {flow.planId ?? '-'}
+                  </td>
+                  <td>
+                    {formatPhaseSummary(flow)}
+                  </td>
+                  <td>
+                    <button
+                      aria-controls={detailsId}
+                      aria-expanded={isExpanded}
+                      aria-label={`${flow.title} details`}
+                      className="flow-details-button"
+                      onClick={() => setExpandedFlowId(isExpanded ? null : flow.id)}
+                      title={details}
+                      type="button"
+                    >
+                      <Info aria-hidden="true" size={14} />
+                    </button>
+                  </td>
+                </tr>
+                {isExpanded ? (
+                  <tr className="flow-detail-row">
+                    <td colSpan={7}>
+                      <div
+                        className="flow-detail-panel"
+                        id={detailsId}
+                        role="region"
+                        aria-label={`${flow.title} details`}
+                      >
+                        {details.split('\n').map((line, index) => (
+                          <span key={`${index}:${line}`}>{line}</span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -1181,19 +1250,39 @@ function formatFlowTooltip(flow: FlowListRow): string {
   ].filter((line): line is string => line !== null).join('\n')
 }
 
+function formatFailureSummary(failure: NonNullable<FlowListRow['failure']>): string {
+  const firstLine = failure.message
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line !== '') ?? failure.message.trim()
+
+  return `${failure.stage}: ${truncateText(firstLine, 72)}`
+}
+
 function formatPhaseSummary(flow: FlowListRow): string {
   if (flow.phases === undefined || flow.phases.length === 0) {
     return '-'
   }
 
-  const statusCounts = flow.phases.reduce<Record<string, number>>((counts, phase) => {
-    counts[phase.status] = (counts[phase.status] ?? 0) + 1
-    return counts
-  }, {})
+  const doneCount = flow.phases.filter((phase) => phase.status === 'done').length
+  const nonDoneCounts = flow.phases
+    .filter((phase) => phase.status !== 'done')
+    .reduce<Record<string, number>>((counts, phase) => {
+      counts[phase.status] = (counts[phase.status] ?? 0) + 1
+      return counts
+    }, {})
 
-  return Object.entries(statusCounts)
+  const nonDoneSummary = Object.entries(nonDoneCounts)
     .map(([status, count]) => `${count} ${status}`)
     .join(', ')
+
+  return nonDoneSummary === ''
+    ? `${doneCount}/${flow.phases.length} done`
+    : `${doneCount}/${flow.phases.length} done, ${nonDoneSummary}`
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}...`
 }
 
 function FlowCreatePanel({
@@ -1209,13 +1298,71 @@ function FlowCreatePanel({
   const [baseRef, setBaseRef] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const newFlowButtonRef = useRef<HTMLButtonElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const titleInputRef = useRef<HTMLInputElement | null>(null)
+  const shouldRestoreFocusRef = useRef(false)
 
   useEffect(() => {
     if (isOpen) {
       titleInputRef.current?.focus()
+      return
+    }
+
+    if (shouldRestoreFocusRef.current) {
+      shouldRestoreFocusRef.current = false
+      newFlowButtonRef.current?.focus()
     }
   }, [isOpen])
+
+  function openFlowDialog(): void {
+    shouldRestoreFocusRef.current = false
+    setIsOpen(true)
+  }
+
+  function closeFlowDialog(): void {
+    shouldRestoreFocusRef.current = true
+    setIsOpen(false)
+  }
+
+  function focusFirstDialogElement(): void {
+    titleInputRef.current?.focus()
+  }
+
+  function focusLastDialogElement(): void {
+    closeButtonRef.current?.focus()
+  }
+
+  function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeFlowDialog()
+      return
+    }
+
+    if (event.key !== 'Tab') {
+      return
+    }
+
+    const firstElement = titleInputRef.current
+    const lastElement = closeButtonRef.current
+
+    if (firstElement === null || lastElement === null) {
+      event.preventDefault()
+      return
+    }
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault()
+      focusLastDialogElement()
+      return
+    }
+
+    if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault()
+      focusFirstDialogElement()
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -1247,7 +1394,7 @@ function FlowCreatePanel({
         setTitle('')
         setInstructions('')
         setBaseRef('')
-        setIsOpen(false)
+        closeFlowDialog()
       }
     } catch (error: unknown) {
       setLocalError(getErrorMessage(error))
@@ -1263,7 +1410,8 @@ function FlowCreatePanel({
       <button
         className="primary-action"
         disabled={!create.available}
-        onClick={() => setIsOpen(true)}
+        onClick={openFlowDialog}
+        ref={newFlowButtonRef}
         type="button"
       >
         <CirclePlus aria-hidden="true" size={16} />
@@ -1276,19 +1424,17 @@ function FlowCreatePanel({
             aria-labelledby="flow-create-dialog-title"
             aria-modal="true"
             className="modal-dialog"
+            onKeyDown={handleDialogKeyDown}
             role="dialog"
           >
+            <span
+              className="focus-sentinel"
+              data-focus-sentinel="true"
+              onFocus={focusLastDialogElement}
+              tabIndex={0}
+            />
             <div className="modal-header">
               <h2 id="flow-create-dialog-title">Create Flow</h2>
-              <button
-                aria-label="Close Flow creation"
-                className="icon-button"
-                disabled={isSubmitting}
-                onClick={() => setIsOpen(false)}
-                type="button"
-              >
-                <X aria-hidden="true" size={16} />
-              </button>
             </div>
 
             <form
@@ -1339,7 +1485,7 @@ function FlowCreatePanel({
                 <button
                   className="secondary-button"
                   disabled={isSubmitting}
-                  onClick={() => setIsOpen(false)}
+                  onClick={closeFlowDialog}
                   type="button"
                 >
                   <X aria-hidden="true" size={16} />
@@ -1360,6 +1506,22 @@ function FlowCreatePanel({
                 </button>
               </div>
             </form>
+            <button
+              aria-label="Close Flow creation"
+              className="icon-button modal-close-button"
+              disabled={isSubmitting}
+              onClick={closeFlowDialog}
+              ref={closeButtonRef}
+              type="button"
+            >
+              <X aria-hidden="true" size={16} />
+            </button>
+            <span
+              className="focus-sentinel"
+              data-focus-sentinel="true"
+              onFocus={focusFirstDialogElement}
+              tabIndex={0}
+            />
           </div>
         </div>
       ) : null}
