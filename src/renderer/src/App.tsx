@@ -28,6 +28,12 @@ import { defaultInitialWorkspaceState } from '@shared/workspace'
 
 type RightPaneMode = 'hints' | 'config'
 
+type ConfigSaveResult = {
+  errors: ConfigFieldError[]
+  message: string | null
+  canReload: boolean
+}
+
 type ConfigDraft = {
   scan_roots: string[]
   repos: string[]
@@ -120,21 +126,29 @@ export function App(): ReactElement {
     }
   }
 
-  async function handleConfigSave(input: CommonConfigUpdateInput): Promise<{
-    errors: ConfigFieldError[]
-    message: string | null
-  }> {
+  async function handleConfigReload(): Promise<void> {
+    const [nextWorkspace, nextConfig] = await Promise.all([
+      window.grindstone.workspace.getInitialState(),
+      window.grindstone.config.getEditableConfig()
+    ])
+
+    setWorkspace(nextWorkspace)
+    setEditableConfig(nextConfig)
+    setFlowState(routeFlowState ?? nextWorkspace.flow)
+  }
+
+  async function handleConfigSave(input: CommonConfigUpdateInput): Promise<ConfigSaveResult> {
     const response = await window.grindstone.config.updateCommonConfig(input)
 
     if (response.ok) {
       setWorkspace(response.workspace)
       setEditableConfig(response.config)
       setFlowState(routeFlowState ?? response.workspace.flow)
-      return { errors: [], message: null }
+      return { errors: [], message: null, canReload: false }
     }
 
     if (response.kind === 'validation') {
-      return { errors: response.errors, message: null }
+      return { errors: response.errors, message: null, canReload: false }
     }
 
     if (response.config !== undefined) {
@@ -143,7 +157,8 @@ export function App(): ReactElement {
 
     return {
       errors: [],
-      message: `Config saved to ${response.configPath}, but reload failed: ${response.message}`
+      message: `Config saved to ${response.configPath}, but reload failed: ${response.message}`,
+      canReload: true
     }
   }
 
@@ -185,6 +200,7 @@ export function App(): ReactElement {
             config={editableConfig}
             loadError={configLoadError}
             onCancel={() => setRightPaneMode('hints')}
+            onReload={handleConfigReload}
             onSave={handleConfigSave}
           />
         ) : (
@@ -341,20 +357,21 @@ function ConfigEditorPanel({
   config,
   loadError,
   onCancel,
+  onReload,
   onSave
 }: {
   config: EditableConfigState | null
   loadError: string | null
   onCancel: () => void
-  onSave: (input: CommonConfigUpdateInput) => Promise<{
-    errors: ConfigFieldError[]
-    message: string | null
-  }>
+  onReload: () => Promise<void>
+  onSave: (input: CommonConfigUpdateInput) => Promise<ConfigSaveResult>
 }): ReactElement {
   const [draft, setDraft] = useState<ConfigDraft>(() => createDraft(config))
   const [fieldErrors, setFieldErrors] = useState<ConfigFieldError[]>([])
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [isReloading, setIsReloading] = useState(false)
+  const [showReloadAction, setShowReloadAction] = useState(false)
 
   useEffect(() => {
     setDraft(createDraft(config))
@@ -372,10 +389,28 @@ function ConfigEditorPanel({
       const result = await onSave(createConfigInput(draft))
       setFieldErrors(result.errors)
       setStatusMessage(result.message ?? (result.errors.length === 0 ? 'Config saved' : null))
+      setShowReloadAction(result.canReload)
     } catch (error: unknown) {
       setStatusMessage(getErrorMessage(error))
+      setShowReloadAction(false)
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  async function handleReload(): Promise<void> {
+    setIsReloading(true)
+    setStatusMessage(null)
+
+    try {
+      await onReload()
+      setStatusMessage('Config reloaded')
+      setShowReloadAction(false)
+    } catch (error: unknown) {
+      setStatusMessage(getErrorMessage(error))
+      setShowReloadAction(true)
+    } finally {
+      setIsReloading(false)
     }
   }
 
@@ -459,6 +494,17 @@ function ConfigEditorPanel({
           <div className="form-message" role={fieldErrors.length > 0 ? 'alert' : 'status'}>
             {statusMessage}
           </div>
+        ) : null}
+
+        {showReloadAction ? (
+          <button
+            className="secondary-button reload-button"
+            type="button"
+            onClick={() => void handleReload()}
+          >
+            <RotateCcw aria-hidden="true" size={16} />
+            <span>{isReloading ? 'Reloading config' : 'Reload config'}</span>
+          </button>
         ) : null}
 
         <div className="form-actions">

@@ -390,12 +390,39 @@ describe('App shell', () => {
     )
   })
 
-  it('shows reload failures as saved-but-not-refreshed config feedback', async () => {
+  it('shows reload failures as saved-but-not-refreshed config feedback with a manual reload path', async () => {
     const user = userEvent.setup()
+    const refreshedWorkspace: InitialWorkspaceState = {
+      ...catalogState,
+      repository: {
+        ...catalogState.repository,
+        description: '2 repositories configured.',
+        repositories: [
+          ...catalogState.repository.repositories,
+          {
+            id: '/repos/reloaded',
+            name: 'reloaded',
+            path: '/repos/reloaded',
+            canonicalPath: '/repos/reloaded',
+            sources: ['explicit']
+          }
+        ]
+      }
+    }
+    const getInitialState = vi.fn()
+      .mockResolvedValueOnce(catalogState)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    const getEditableConfig = vi.fn()
+      .mockResolvedValueOnce(editableConfigState)
+      .mockResolvedValueOnce({
+        ...editableConfigState,
+        repos: ['/repos/grindstone', '/repos/reloaded']
+      } satisfies EditableConfigState)
+
     setWorkspaceApi(
-      vi.fn().mockResolvedValue(catalogState),
+      getInitialState,
       vi.fn().mockResolvedValue(selectedCatalogState),
-      vi.fn().mockResolvedValue(editableConfigState),
+      getEditableConfig,
       vi.fn().mockResolvedValue({
         ok: false,
         kind: 'reload_failed',
@@ -413,5 +440,14 @@ describe('App shell', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(
       'Config saved to /configs/grindstone.toml, but reload failed: Could not reload repository catalog.'
     )
+
+    await user.click(screen.getByRole('button', { name: /reload config/i }))
+
+    expect(getInitialState).toHaveBeenCalledTimes(2)
+    expect(getEditableConfig).toHaveBeenCalledTimes(2)
+    const repositoryPane = screen.getByRole('region', { name: /repository area/i })
+    expect(await within(repositoryPane).findByRole('button', { name: /reloaded/i }))
+      .toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Config reloaded')
   })
 })
