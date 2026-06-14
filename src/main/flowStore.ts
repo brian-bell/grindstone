@@ -104,7 +104,7 @@ async function mapFlowMetadata(
     title: metadata.title,
     status: metadata.status,
     repositoryId,
-    repositoryPath: metadata.repo_path,
+    repositoryPath: repositoryId,
     branch: optionalString(metadata.branch),
     worktreePath: optionalString(metadata.worktree_path),
     commit: optionalString(metadata.commit),

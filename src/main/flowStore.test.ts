@@ -1,4 +1,4 @@
-import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, stat, symlink, writeFile } from 'node:fs/promises'
 import { mkdtemp, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -119,7 +119,7 @@ describe('Flow artifact store', () => {
         id: 'newer-flow',
         title: 'Newer selected Flow',
         repositoryId: selectedRepository.id,
-        repositoryPath: selectedRepository.path,
+        repositoryPath: selectedRepository.id,
         updatedAt: '2026-06-11T10:00:00.000Z'
       }),
       expect.objectContaining({
@@ -138,6 +138,29 @@ describe('Flow artifact store', () => {
             updatedAt: '2026-06-10T10:30:00.000Z'
           }
         ]
+      })
+    ])
+  })
+
+  it('exposes the canonical repository path when metadata uses a symlinked repo path', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const selectedRepository = await makeRepository(root, 'repo-canonical')
+    const symlinkedRepositoryPath = join(root, 'repo-link')
+    await symlink(selectedRepository.path, symlinkedRepositoryPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'symlinked-flow',
+      flowMeta('symlinked-flow', symlinkedRepositoryPath)
+    )
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.listFlowsForRepository(selectedRepository)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'symlinked-flow',
+        repositoryId: selectedRepository.id,
+        repositoryPath: selectedRepository.id
       })
     ])
   })

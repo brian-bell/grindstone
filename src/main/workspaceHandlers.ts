@@ -8,18 +8,39 @@ import {
   type RepositoryPaneState,
   type RepositoryRow
 } from '@shared/workspace'
-import { loadGrindstoneConfig, type LoadGrindstoneConfigOptions } from './config'
-import { createFlowStore } from './flowStore'
+import {
+  loadGrindstoneConfig,
+  type GrindstoneConfigResult,
+  type LoadGrindstoneConfigOptions
+} from './config'
+import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
+
+type FlowStoreFactory = (options: CreateFlowStoreOptions) => Promise<FlowStore>
+type ConfigLoader = (options: LoadGrindstoneConfigOptions) => Promise<GrindstoneConfigResult>
+
+export type LoadWorkspaceStateOptions = LoadGrindstoneConfigOptions & {
+  configLoader?: ConfigLoader
+  flowStoreFactory?: FlowStoreFactory
+}
 
 let currentWorkspaceState: InitialWorkspaceState | undefined
 let currentArtifactRoot: string | undefined
+let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
+let currentSelectionRequestId = 0
 
 export async function loadInitialWorkspaceState(
-  options: LoadGrindstoneConfigOptions = {}
+  options: LoadWorkspaceStateOptions = {}
 ): Promise<InitialWorkspaceState> {
-  const config = await loadGrindstoneConfig(options)
+  currentSelectionRequestId += 1
+  const {
+    configLoader = loadGrindstoneConfig,
+    flowStoreFactory = createFlowStore,
+    ...configOptions
+  } = options
+  const config = await configLoader(configOptions)
   currentArtifactRoot = config.artifactRoot.resolvedPath
+  currentFlowStoreFactory = flowStoreFactory
 
   if (!config.ok) {
     currentWorkspaceState = {
@@ -53,7 +74,10 @@ export async function selectRepository(request: {
     throw new Error(`Repository not found: ${request.repositoryId}`)
   }
 
-  currentWorkspaceState = {
+  const requestId = currentSelectionRequestId + 1
+  currentSelectionRequestId = requestId
+
+  const nextWorkspaceState: InitialWorkspaceState = {
     ...workspaceState,
     repository: {
       ...workspaceState.repository,
@@ -61,9 +85,15 @@ export async function selectRepository(request: {
       description: repository.path,
       selectedRepositoryId: repository.id
     },
-    flow: await createFlowPaneState(repository, currentArtifactRoot)
+    flow: await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory)
   }
-  return currentWorkspaceState
+
+  if (requestId !== currentSelectionRequestId) {
+    return currentWorkspaceState ?? nextWorkspaceState
+  }
+
+  currentWorkspaceState = nextWorkspaceState
+  return nextWorkspaceState
 }
 
 export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): void {
@@ -104,14 +134,15 @@ function createRepositoryErrorState(diagnostics: CatalogDiagnostic[]): Repositor
 
 async function createFlowPaneState(
   repository: RepositoryRow,
-  artifactRoot: string | undefined
+  artifactRoot: string | undefined,
+  flowStoreFactory: FlowStoreFactory
 ): Promise<Exclude<FlowPaneState, { status: 'loading' }>> {
   try {
     if (artifactRoot === undefined) {
       throw new Error('Flow artifact root is not configured.')
     }
 
-    const store = await createFlowStore({
+    const store = await flowStoreFactory({
       artifactRoot
     })
     const flows = await store.listFlowsForRepository(repository)

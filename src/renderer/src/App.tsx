@@ -1,5 +1,5 @@
 import { CirclePlus, GitBranch, RotateCcw, Sparkles } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
 import type {
   CatalogDiagnostic,
@@ -17,6 +17,7 @@ export function App(): ReactElement {
   const [flowState, setFlowState] = useState<FlowPaneState>(
     routeFlowState ?? { status: 'loading' }
   )
+  const selectionRequestIdRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -48,6 +49,9 @@ export function App(): ReactElement {
   const isWorkspaceLoading = workspace === null
 
   async function handleRepositorySelect(repository: RepositoryRow): Promise<void> {
+    const requestId = selectionRequestIdRef.current + 1
+    selectionRequestIdRef.current = requestId
+
     if (routeFlowState === null) {
       setFlowState({
         status: 'loading',
@@ -60,9 +64,17 @@ export function App(): ReactElement {
       const nextWorkspace = await window.grindstone.workspace.selectRepository({
         repositoryId: repository.id
       })
+      if (requestId !== selectionRequestIdRef.current) {
+        return
+      }
+
       setWorkspace(nextWorkspace)
       setFlowState(routeFlowState ?? nextWorkspace.flow)
     } catch (error: unknown) {
+      if (requestId !== selectionRequestIdRef.current) {
+        return
+      }
+
       setFlowState({
         status: 'error',
         message: getErrorMessage(error),

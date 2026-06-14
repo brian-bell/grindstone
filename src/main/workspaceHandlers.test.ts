@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { ipcChannels } from '@shared/ipc'
+import type { FlowListRow, RepositoryRow } from '@shared/workspace'
 import {
   loadInitialWorkspaceState,
   registerWorkspaceHandlers,
   selectRepository
 } from './workspaceHandlers'
+import type { FlowStore } from './flowStore'
 
 async function makeTempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'grindstone-workspace-'))
@@ -42,6 +44,24 @@ function flowMeta(
     updated_at: '2026-06-10T10:00:00.000Z',
     ...overrides
   }
+}
+
+function flowRow(flowId: string, repository: RepositoryRow): FlowListRow {
+  return {
+    id: flowId,
+    title: `Flow ${flowId}`,
+    status: 'active',
+    repositoryId: repository.id,
+    repositoryPath: repository.id,
+    createdAt: '2026-06-10T10:00:00.000Z',
+    updatedAt: '2026-06-10T10:00:00.000Z'
+  }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 describe('workspace main handlers', () => {
@@ -194,6 +214,157 @@ describe('workspace main handlers', () => {
         repositoryId,
         repositoryName: 'repo-error',
         message: expect.stringContaining('Flow artifact store unavailable')
+      }
+    })
+  })
+
+  it('keeps main workspace memory on the latest repository when earlier selections finish later', async () => {
+    const root = await makeTempDir()
+    const alphaPath = join(root, 'repo-alpha')
+    const betaPath = join(root, 'repo-beta')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(alphaPath)
+    await makeGitRepository(betaPath)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${alphaPath}", "${betaPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+
+    let resolveAlpha: ((flows: FlowListRow[]) => void) | undefined
+    let resolveBeta: ((flows: FlowListRow[]) => void) | undefined
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> => ({
+      async readFlow() {
+        return undefined
+      },
+      listFlowsForRepository(repository) {
+        return new Promise<FlowListRow[]>((resolve) => {
+          if (repository.name === 'repo-alpha') {
+            resolveAlpha = resolve
+          } else {
+            resolveBeta = resolve
+          }
+        })
+      }
+    }))
+
+    const initialState = await loadInitialWorkspaceState({ configPath, flowStoreFactory })
+    const alphaRepository = initialState.repository.repositories.find((repo) => repo.name === 'repo-alpha')
+    const betaRepository = initialState.repository.repositories.find((repo) => repo.name === 'repo-beta')
+    expect(alphaRepository).toBeDefined()
+    expect(betaRepository).toBeDefined()
+
+    const alphaSelection = selectRepository({ repositoryId: alphaRepository?.id ?? '' })
+    const betaSelection = selectRepository({ repositoryId: betaRepository?.id ?? '' })
+    await flushMicrotasks()
+
+    expect(resolveAlpha).toBeDefined()
+    expect(resolveBeta).toBeDefined()
+    resolveBeta?.([flowRow('beta-flow', betaRepository as RepositoryRow)])
+    await expect(betaSelection).resolves.toMatchObject({
+      repository: {
+        selectedRepositoryId: betaRepository?.id
+      },
+      flow: {
+        status: 'ready',
+        repositoryId: betaRepository?.id,
+        flows: [
+          {
+            id: 'beta-flow'
+          }
+        ]
+      }
+    })
+
+    resolveAlpha?.([flowRow('alpha-flow', alphaRepository as RepositoryRow)])
+    await expect(alphaSelection).resolves.toMatchObject({
+      repository: {
+        selectedRepositoryId: betaRepository?.id
+      },
+      flow: {
+        status: 'ready',
+        repositoryId: betaRepository?.id,
+        flows: [
+          {
+            id: 'beta-flow'
+          }
+        ]
+      }
+    })
+  })
+
+  it('invalidates pending repository selections as soon as initial workspace reload starts', async () => {
+    const root = await makeTempDir()
+    const alphaPath = join(root, 'repo-alpha')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(alphaPath)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${alphaPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+
+    let resolveAlpha: ((flows: FlowListRow[]) => void) | undefined
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> => ({
+      async readFlow() {
+        return undefined
+      },
+      listFlowsForRepository(repository) {
+        return new Promise<FlowListRow[]>((resolve) => {
+          resolveAlpha = (flows) => resolve(flows.length > 0 ? flows : [flowRow('alpha-flow', repository)])
+        })
+      }
+    }))
+
+    const initialState = await loadInitialWorkspaceState({ configPath, flowStoreFactory })
+    const alphaRepository = initialState.repository.repositories[0]
+    expect(alphaRepository).toBeDefined()
+
+    const alphaSelection = selectRepository({ repositoryId: alphaRepository?.id ?? '' })
+    await flushMicrotasks()
+    expect(resolveAlpha).toBeDefined()
+
+    let resolveConfigReload: (() => void) | undefined
+    const configReloadStarted = new Promise<void>((resolve) => {
+      resolveConfigReload = resolve
+    })
+    const reload = loadInitialWorkspaceState({
+      configLoader: async () => {
+        await configReloadStarted
+        return {
+          ok: true,
+          configPath,
+          scanRoots: [],
+          repos: [
+            {
+              configuredPath: alphaPath,
+              resolvedPath: alphaPath
+            }
+          ],
+          artifactRoot: {
+            configuredPath: artifactRoot,
+            resolvedPath: artifactRoot
+          },
+          diagnostics: []
+        }
+      },
+      flowStoreFactory
+    })
+    await flushMicrotasks()
+
+    resolveAlpha?.([flowRow('alpha-flow', alphaRepository as RepositoryRow)])
+    await expect(alphaSelection).resolves.toMatchObject({
+      repository: {
+        selectedRepositoryId: null
+      },
+      flow: {
+        title: 'No Flow selected'
+      }
+    })
+
+    resolveConfigReload?.()
+    await expect(reload).resolves.toMatchObject({
+      repository: {
+        selectedRepositoryId: null,
+        repositories: [
+          {
+            id: alphaRepository?.id
+          }
+        ]
       }
     })
   })

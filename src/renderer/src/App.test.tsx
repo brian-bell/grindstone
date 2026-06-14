@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
@@ -132,6 +132,82 @@ const errorSelectedCatalogState: InitialWorkspaceState = {
   }
 }
 
+const multiRepositoryCatalogState: InitialWorkspaceState = {
+  ...catalogState,
+  repository: {
+    ...catalogState.repository,
+    description: '2 repositories configured.',
+    repositories: [
+      {
+        id: '/repos/alpha',
+        name: 'alpha',
+        path: '/repos/alpha',
+        canonicalPath: '/repos/alpha',
+        sources: ['explicit']
+      },
+      {
+        id: '/repos/beta',
+        name: 'beta',
+        path: '/repos/beta',
+        canonicalPath: '/repos/beta',
+        sources: ['explicit']
+      }
+    ]
+  }
+}
+
+const alphaSelectedCatalogState: InitialWorkspaceState = {
+  ...multiRepositoryCatalogState,
+  repository: {
+    ...multiRepositoryCatalogState.repository,
+    title: 'alpha',
+    description: '/repos/alpha',
+    selectedRepositoryId: '/repos/alpha'
+  },
+  flow: {
+    status: 'ready',
+    repositoryId: '/repos/alpha',
+    repositoryName: 'alpha',
+    flows: [
+      {
+        id: 'alpha-flow',
+        title: 'Alpha Flow',
+        status: 'active',
+        repositoryId: '/repos/alpha',
+        repositoryPath: '/repos/alpha',
+        createdAt: '2026-06-10T10:00:00.000Z',
+        updatedAt: '2026-06-11T10:00:00.000Z'
+      }
+    ]
+  }
+}
+
+const betaSelectedCatalogState: InitialWorkspaceState = {
+  ...multiRepositoryCatalogState,
+  repository: {
+    ...multiRepositoryCatalogState.repository,
+    title: 'beta',
+    description: '/repos/beta',
+    selectedRepositoryId: '/repos/beta'
+  },
+  flow: {
+    status: 'ready',
+    repositoryId: '/repos/beta',
+    repositoryName: 'beta',
+    flows: [
+      {
+        id: 'beta-flow',
+        title: 'Beta Flow',
+        status: 'active',
+        repositoryId: '/repos/beta',
+        repositoryPath: '/repos/beta',
+        createdAt: '2026-06-10T10:00:00.000Z',
+        updatedAt: '2026-06-12T10:00:00.000Z'
+      }
+    ]
+  }
+}
+
 const setWorkspaceApi = (
   getInitialState: () => Promise<InitialWorkspaceState>,
   selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
@@ -230,6 +306,39 @@ describe('App shell', () => {
 
     resolveSelection(selectedCatalogState)
     expect(await screen.findByText('Artifact backed Flow')).toBeInTheDocument()
+  })
+
+  it('keeps the latest repository selection when earlier IPC responses finish later', async () => {
+    const user = userEvent.setup()
+    let resolveAlpha: (state: InitialWorkspaceState) => void = () => undefined
+    let resolveBeta: (state: InitialWorkspaceState) => void = () => undefined
+    const selectRepository = vi.fn(({ repositoryId }: { repositoryId: string }) =>
+      new Promise<InitialWorkspaceState>((resolve) => {
+        if (repositoryId === '/repos/alpha') {
+          resolveAlpha = resolve
+        } else {
+          resolveBeta = resolve
+        }
+      })
+    )
+    setWorkspaceApi(vi.fn().mockResolvedValue(multiRepositoryCatalogState), selectRepository)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /alpha/i }))
+    await user.click(screen.getByRole('button', { name: /beta/i }))
+
+    await act(async () => {
+      resolveBeta(betaSelectedCatalogState)
+    })
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
+
+    await act(async () => {
+      resolveAlpha(alphaSelectedCatalogState)
+    })
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
+    expect(screen.getByRole('main', { name: /flow workspace/i })).not.toHaveTextContent('Alpha Flow')
+    expect(screen.getByRole('button', { name: /beta/i })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('renders selected repository empty and artifact error Flow states', async () => {
