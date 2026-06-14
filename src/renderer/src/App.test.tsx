@@ -452,6 +452,7 @@ describe('App shell', () => {
             failure: {
               stage: 'bootstrap',
               message: 'npm install failed',
+              command: 'npm install',
               output: 'missing package'
             },
             createdAt: '2026-06-14T10:00:00.000Z',
@@ -484,6 +485,7 @@ describe('App shell', () => {
 
     expect(await within(flowPane).findByRole('alert', { name: /flow creation error/i }))
       .toHaveTextContent('npm install failed')
+    expect(within(flowPane).getByText('npm install')).toBeInTheDocument()
     expect(within(flowPane).getByText('missing package')).toBeInTheDocument()
     expect(within(flowPane).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
   })

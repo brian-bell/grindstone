@@ -520,6 +520,9 @@ describe('workspace main handlers', () => {
       if (args.join(' ') === 'rev-parse --verify HEAD^{commit}') {
         return { stdout: 'abc123\n' }
       }
+      if (args[0] === 'worktree' && args[1] === 'add' && args[2] !== undefined) {
+        await mkdir(args[2], { recursive: true })
+      }
       if (command === 'npm install') {
         throw new Error('npm install failed')
       }
@@ -984,6 +987,10 @@ describe('workspace main handlers', () => {
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(
       ipcChannels.workspace.selectRepository,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.createFlow,
       expect.any(Function)
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(

@@ -19,6 +19,16 @@ export type FlowCommandRunner = (
 
 export type LaunchPreparer = (flow: FlowListRow) => Promise<void>
 
+type HookCwdResult =
+  | {
+      ok: true
+      cwd: string
+    }
+  | {
+      ok: false
+      message: string
+    }
+
 export type CreateFlowResult =
   | {
       ok: true
@@ -68,27 +78,42 @@ export async function createFlow({
   const title = request.title.trim()
   const instructions = request.instructions.trim()
   const baseRef = normalizeBaseRef(request.baseRef)
-  const allocation = await allocateFlowResources({
-    repositoryPath,
-    title,
-    store,
-    runCommand
-  })
+  let allocation: {
+    flowId: string
+    branch: string
+    worktreePath: string
+  }
+  try {
+    allocation = await allocateFlowResources({
+      repositoryPath,
+      title,
+      store,
+      runCommand
+    })
+  } catch (error) {
+    return createFailure('worktree_creation_failed', getErrorMessage(error))
+  }
   const createdAt = now()
-  let flow = await store.createFlowRecord({
-    id: allocation.flowId,
-    title,
-    instructions,
-    status: 'creating',
-    repositoryPath,
-    branch: allocation.branch,
-    worktreePath: allocation.worktreePath,
-    baseRef,
-    createdAt,
-    updatedAt: createdAt
-  })
+  let flow: FlowListRow
+  try {
+    flow = await store.createFlowRecord({
+      id: allocation.flowId,
+      title,
+      instructions,
+      status: 'creating',
+      repositoryPath,
+      branch: allocation.branch,
+      worktreePath: allocation.worktreePath,
+      baseRef,
+      createdAt,
+      updatedAt: createdAt
+    })
+  } catch (error) {
+    return createFailure('worktree_creation_failed', getErrorMessage(error))
+  }
 
   let commit: string
+  let worktreeCommand = formatCommand('git', ['rev-parse', '--verify', `${baseRef}^{commit}`])
   try {
     commit = (await runCommand('git', ['rev-parse', '--verify', `${baseRef}^{commit}`], {
       cwd: repositoryPath
@@ -97,7 +122,14 @@ export async function createFlow({
       throw new Error(`Base ref did not resolve to a commit: ${baseRef}`)
     }
 
+    worktreeCommand = formatCommand('git', ['branch', allocation.branch, commit])
     await runCommand('git', ['branch', allocation.branch, commit], { cwd: repositoryPath })
+    worktreeCommand = formatCommand('git', [
+      'worktree',
+      'add',
+      allocation.worktreePath,
+      allocation.branch
+    ])
     await runCommand('git', ['worktree', 'add', allocation.worktreePath, allocation.branch], {
       cwd: repositoryPath
     })
@@ -108,6 +140,8 @@ export async function createFlow({
       stage: 'worktree',
       code: 'worktree_creation_failed',
       message: getErrorMessage(error),
+      command: worktreeCommand,
+      output: getErrorOutput(error),
       updatedAt: now()
     })
     return { ok: false, error: { code: 'worktree_creation_failed', message: flow.failure?.message ?? 'Worktree creation failed.' }, flow }
@@ -127,14 +161,14 @@ export async function createFlow({
   })
 
   for (const hook of bootstrapHooks) {
-    const hookCwd = resolveHookCwd(allocation.worktreePath, hook.cwd)
-    if (hookCwd === null) {
+    const hookCwd = await resolveHookCwd(allocation.worktreePath, hook.cwd)
+    if (!hookCwd.ok) {
       flow = await markFlowFailed({
         store,
         flowId: allocation.flowId,
         stage: 'bootstrap',
         code: 'bootstrap_failed',
-        message: `Bootstrap hook cwd escapes the worktree: ${hook.cwd}`,
+        message: hookCwd.message,
         command: hook.command,
         updatedAt: now()
       })
@@ -143,7 +177,7 @@ export async function createFlow({
 
     try {
       await runCommand(hook.command, [], {
-        cwd: hookCwd,
+        cwd: hookCwd.cwd,
         shell: true,
         timeoutMs: 120_000,
         env: {
@@ -182,7 +216,7 @@ export async function createFlow({
 
   flow = await store.updateFlowRecord(allocation.flowId, {
     status: 'active',
-    failure: undefined,
+    failure: null,
     updatedAt: now()
   })
 
@@ -232,7 +266,8 @@ function validateCreateFlowRequest(request: CreateFlowRequest): FlowCreateError 
     typeof request !== 'object' ||
     request === null ||
     typeof request.title !== 'string' ||
-    typeof request.instructions !== 'string'
+    typeof request.instructions !== 'string' ||
+    (request.baseRef !== undefined && typeof request.baseRef !== 'string')
   ) {
     return {
       code: 'validation_error',
@@ -314,18 +349,39 @@ async function gitBranchExists(
   }
 }
 
-function resolveHookCwd(worktreePath: string, configuredCwd: string | undefined): string | null {
+async function resolveHookCwd(
+  worktreePath: string,
+  configuredCwd: string | undefined
+): Promise<HookCwdResult> {
   const target = configuredCwd === undefined
     ? worktreePath
     : isAbsolute(configuredCwd)
       ? configuredCwd
       : resolve(worktreePath, configuredCwd)
-  const relativePath = relative(worktreePath, target)
-  if (relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))) {
-    return target
+  let realWorktreePath: string
+  let realTarget: string
+  try {
+    realWorktreePath = await realpath(worktreePath)
+    realTarget = await realpath(target)
+  } catch {
+    return {
+      ok: false,
+      message: `Bootstrap hook cwd is unavailable: ${target}`
+    }
   }
 
-  return null
+  const relativePath = relative(realWorktreePath, realTarget)
+  if (relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))) {
+    return {
+      ok: true,
+      cwd: realTarget
+    }
+  }
+
+  return {
+    ok: false,
+    message: `Bootstrap hook cwd escapes the worktree: ${configuredCwd ?? worktreePath}`
+  }
 }
 
 async function markFlowFailed({
@@ -454,6 +510,16 @@ async function pathExists(path: string): Promise<boolean> {
 
 function truncate(value: string): string {
   return value.length > 4000 ? value.slice(0, 4000) : value
+}
+
+function formatCommand(command: string, args: string[]): string {
+  return [command, ...args.map(formatCommandArgument)].join(' ')
+}
+
+function formatCommandArgument(arg: string): string {
+  return /^[A-Za-z0-9_/@%+=:,.-]+$/.test(arg)
+    ? arg
+    : `'${arg.replace(/'/g, "'\\''")}'`
 }
 
 function getErrorOutput(error: unknown): string | undefined {

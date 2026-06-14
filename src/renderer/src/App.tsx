@@ -1168,6 +1168,7 @@ function FlowWorkspaceStateView({
                 >
                   <strong>{flow.failure.stage}</strong>
                   <span>{flow.failure.message}</span>
+                  {flow.failure.command === undefined ? null : <span>{flow.failure.command}</span>}
                   {flow.failure.output === undefined ? null : <span>{flow.failure.output}</span>}
                 </div>
               )}

@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, realpath } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { RepositoryRow } from '@shared/workspace'
-import { createFlow, type FlowCommandRunner } from './flowCreation'
+import { createFlow, FlowCommandRunError, type FlowCommandRunner } from './flowCreation'
 import { createFlowStore } from './flowStore'
 
 async function makeTempDir(): Promise<string> {
@@ -30,6 +30,9 @@ function gitRunner(): FlowCommandRunner {
     }
     if (args[0] === 'rev-parse' && args[1] === '--verify') {
       return { stdout: 'abc123\n' }
+    }
+    if (args[0] === 'worktree' && args[1] === 'add' && args[2] !== undefined) {
+      await mkdir(args[2], { recursive: true })
     }
     return { stdout: '' }
   }
@@ -58,6 +61,34 @@ describe('Flow creation engine', () => {
       error: {
         code: 'validation_error',
         message: 'Base ref is not safe to resolve.'
+      }
+    })
+    expect(runCommand).not.toHaveBeenCalled()
+    await expect(store.listFlowsForRepository(repository)).resolves.toEqual([])
+  })
+
+  it('rejects non-string base refs before creating records or running commands', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo-base-ref-type')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+    const runCommand = vi.fn<FlowCommandRunner>()
+
+    await expect(createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [],
+      request: {
+        title: 'Invalid base type',
+        instructions: 'Do not throw.',
+        baseRef: 123
+      } as unknown as Parameters<typeof createFlow>[0]['request'],
+      store,
+      runCommand
+    })).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'Create Flow request is invalid.'
       }
     })
     expect(runCommand).not.toHaveBeenCalled()
@@ -97,6 +128,38 @@ describe('Flow creation engine', () => {
         worktreePath: join(`${repository.path}-worktrees`, 'flow-duplicate-title-2')
       }
     })
+  })
+
+  it('returns a structured worktree error when no collision-free allocation is available', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo-allocation-exhausted')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+    const runCommand: FlowCommandRunner = async (_command, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
+        return { stdout: 'existing\n' }
+      }
+
+      return { stdout: 'abc123\n' }
+    }
+
+    await expect(createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [],
+      request: {
+        title: 'Busy title',
+        instructions: 'Return a normal creation error.'
+      },
+      store,
+      runCommand
+    })).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'worktree_creation_failed',
+        message: 'Could not allocate a collision-free Flow for Busy title.'
+      }
+    })
+    await expect(store.listFlowsForRepository(repository)).resolves.toEqual([])
   })
 
   it('persists launch preparation failures after worktree metadata exists', async () => {
@@ -147,6 +210,54 @@ describe('Flow creation engine', () => {
     })
   })
 
+  it('persists quoted worktree command details when Git worktree setup fails', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo with spaces')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+    const runCommand: FlowCommandRunner = async (command, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
+        throw new Error('branch not found')
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return { stdout: 'abc123\n' }
+      }
+      if (args[0] === 'worktree') {
+        throw new FlowCommandRunError(command, args, 'worktree failed', 'worktree stdout', 'worktree stderr')
+      }
+
+      return { stdout: '' }
+    }
+
+    const result = await createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [],
+      request: {
+        title: 'Worktree failure',
+        instructions: 'Persist command context.'
+      },
+      store,
+      runCommand
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'worktree_creation_failed',
+        message: 'worktree failed'
+      },
+      flow: {
+        status: 'failed',
+        failure: {
+          stage: 'worktree',
+          message: 'worktree failed',
+          command: `git worktree add '${repository.path}-worktrees/flow-worktree-failure' flow/worktree-failure`,
+          output: 'worktree stdout\nworktree stderr'
+        }
+      }
+    })
+  })
+
   it('rejects bootstrap hook cwd values that escape the worktree', async () => {
     const root = await makeTempDir()
     const repository = await makeRepository(root, 'repo-hook-cwd')
@@ -178,6 +289,89 @@ describe('Flow creation engine', () => {
         failure: {
           stage: 'bootstrap',
           command: 'npm install'
+        }
+      }
+    })
+  })
+
+  it('rejects bootstrap hook cwd symlinks that resolve outside the worktree', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo-hook-symlink')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+    const outside = join(root, 'outside')
+    await mkdir(outside)
+    const runCommand = gitRunner()
+    const create = createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [
+        {
+          command: 'npm install',
+          cwd: 'escape'
+        }
+      ],
+      request: {
+        title: 'Symlink hook',
+        instructions: 'Reject symlink cwd escape.'
+      },
+      store,
+      runCommand: async (command, args, options) => {
+        const result = await runCommand(command, args, options)
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          await symlink(outside, join(args[2] ?? '', 'escape'))
+        }
+        return result
+      }
+    })
+
+    await expect(create).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'bootstrap_failed',
+        message: 'Bootstrap hook cwd escapes the worktree: escape'
+      },
+      flow: {
+        status: 'failed',
+        failure: {
+          stage: 'bootstrap',
+          command: 'npm install'
+        }
+      }
+    })
+  })
+
+  it('reports bootstrap hook cwd values that cannot be resolved', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo-hook-missing-cwd')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+
+    await expect(createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [
+        {
+          command: 'npm install',
+          cwd: 'missing'
+        }
+      ],
+      request: {
+        title: 'Missing hook cwd',
+        instructions: 'Report unavailable cwd.'
+      },
+      store,
+      runCommand: gitRunner()
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'bootstrap_failed',
+        message: expect.stringContaining('Bootstrap hook cwd is unavailable:')
+      },
+      flow: {
+        status: 'failed',
+        failure: {
+          stage: 'bootstrap',
+          command: 'npm install',
+          message: expect.stringContaining('flow-missing-hook-cwd/missing')
         }
       }
     })

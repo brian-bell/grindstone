@@ -41,9 +41,11 @@ export type FlowRecordInput = {
 export type FlowRecordUpdate = Partial<
   Pick<
     FlowRecordInput,
-    'status' | 'branch' | 'worktreePath' | 'baseRef' | 'commit' | 'start' | 'failure' | 'updatedAt'
+    'status' | 'branch' | 'worktreePath' | 'baseRef' | 'commit' | 'start' | 'updatedAt'
   >
->
+> & {
+  failure?: FlowFailureSummary | null
+}
 
 const SAFE_FLOW_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
@@ -374,8 +376,11 @@ function applyMetadataUpdate(
     base_ref: update.baseRef ?? metadata.base_ref,
     commit: update.commit ?? metadata.commit,
     start: update.start === undefined ? metadata.start : toRawStart(update.start),
-    failure:
-      update.failure === undefined ? metadata.failure : withoutUndefined(update.failure),
+    failure: update.failure === undefined
+      ? metadata.failure
+      : update.failure === null
+        ? undefined
+        : withoutUndefined(update.failure),
     updated_at: update.updatedAt ?? metadata.updated_at
   })
 }

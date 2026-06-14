@@ -327,6 +327,42 @@ describe('Flow artifact store', () => {
     ])
   })
 
+  it('clears failure metadata when a Flow record update sets failure to null', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-clear-failure')
+    const store = await createFlowStore({ artifactRoot })
+
+    await store.createFlowRecord({
+      id: 'recovering-flow',
+      title: 'Recovering Flow',
+      instructions: 'Clear stale failure metadata.',
+      status: 'failed',
+      repositoryPath: repository.path,
+      failure: {
+        stage: 'launch_prep',
+        message: 'launch failed'
+      },
+      createdAt: '2026-06-14T10:00:00.000Z',
+      updatedAt: '2026-06-14T10:00:00.000Z'
+    })
+
+    await expect(store.updateFlowRecord('recovering-flow', {
+      status: 'active',
+      failure: null,
+      updatedAt: '2026-06-14T10:01:00.000Z'
+    })).resolves.toMatchObject({
+      id: 'recovering-flow',
+      status: 'active',
+      failure: undefined
+    })
+    await expect(store.readFlow('recovering-flow')).resolves.toMatchObject({
+      id: 'recovering-flow',
+      status: 'active',
+      failure: undefined
+    })
+  })
+
   it('treats artifact root and flows collection access failures as fatal', async () => {
     const root = await makeTempDir()
     const artifactRootFile = join(root, 'artifact-root-file')
