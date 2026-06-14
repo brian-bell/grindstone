@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { ipcChannels } from '@shared/ipc'
 import type { FlowListRow, RepositoryRow } from '@shared/workspace'
@@ -490,7 +490,11 @@ describe('workspace main handlers', () => {
             branch: 'flow/ship-workspace-creation',
             baseRef: 'main',
             commit: 'abc123',
-            worktreePath: join(`${canonicalRepoPath}-worktrees`, 'flow-ship-workspace-creation')
+            worktreePath: join(
+              dirname(canonicalRepoPath),
+              'grindstone-worktrees',
+              `${basename(canonicalRepoPath)}-flow-ship-workspace-creation`
+            )
           }
         ]
       }
@@ -499,7 +503,11 @@ describe('workspace main handlers', () => {
       ['git', ['rev-parse', '--verify', 'refs/heads/flow/ship-workspace-creation']],
       ['git', ['rev-parse', '--verify', 'main^{commit}']],
       ['git', ['branch', 'flow/ship-workspace-creation', 'abc123']],
-      ['git', ['worktree', 'add', join(`${canonicalRepoPath}-worktrees`, 'flow-ship-workspace-creation'), 'flow/ship-workspace-creation']]
+      ['git', ['worktree', 'add', join(
+        dirname(canonicalRepoPath),
+        'grindstone-worktrees',
+        `${basename(canonicalRepoPath)}-flow-ship-workspace-creation`
+      ), 'flow/ship-workspace-creation']]
     ])
   })
 

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { CreateFlowRequest, FlowCreateError, FlowFailureSummary, FlowListRow, RepositoryRow } from '@shared/workspace'
 import type { RuntimeBootstrapHook } from './config'
 import type { CommandResult } from './repositoryCreation'
@@ -242,7 +242,7 @@ async function allocateFlowResources({
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt + 1}`
     const branch = `flow/${slug}`
-    const worktreePath = join(`${repositoryPath}-worktrees`, `flow-${slug}`)
+    const worktreePath = getFlowWorktreePath(repositoryPath, slug)
     const [existingFlow, branchExists, worktreeExists] = await Promise.all([
       store.readFlow(slug),
       gitBranchExists(repositoryPath, branch, runCommand),
@@ -259,6 +259,14 @@ async function allocateFlowResources({
   }
 
   throw new Error(`Could not allocate a collision-free Flow for ${title}.`)
+}
+
+function getFlowWorktreePath(repositoryPath: string, slug: string): string {
+  return join(
+    dirname(repositoryPath),
+    'grindstone-worktrees',
+    `${basename(repositoryPath)}-flow-${slug}`
+  )
 }
 
 function validateCreateFlowRequest(request: CreateFlowRequest): FlowCreateError | null {

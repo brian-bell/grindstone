@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, realpath, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { RepositoryRow } from '@shared/workspace'
 import { createFlow, FlowCommandRunError, runFlowProcess, type FlowCommandRunner } from './flowCreation'
@@ -171,7 +171,11 @@ describe('Flow creation engine', () => {
       flow: {
         id: 'duplicate-title-2',
         branch: 'flow/duplicate-title-2',
-        worktreePath: join(`${repository.path}-worktrees`, 'flow-duplicate-title-2')
+        worktreePath: join(
+          dirname(repository.path),
+          'grindstone-worktrees',
+          `${basename(repository.path)}-flow-duplicate-title-2`
+        )
       }
     })
   })
@@ -297,7 +301,11 @@ describe('Flow creation engine', () => {
         failure: {
           stage: 'worktree',
           message: 'worktree failed',
-          command: `git worktree add '${repository.path}-worktrees/flow-worktree-failure' flow/worktree-failure`,
+          command: `git worktree add '${join(
+            dirname(repository.path),
+            'grindstone-worktrees',
+            `${basename(repository.path)}-flow-worktree-failure`
+          )}' flow/worktree-failure`,
           output: 'worktree stdout\nworktree stderr'
         }
       }
