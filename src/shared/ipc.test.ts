@@ -7,7 +7,21 @@ import {
   type IpcRequestMap,
   type IpcResponseMap
 } from './ipc'
+import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from './config'
 import { defaultInitialWorkspaceState, type InitialWorkspaceState } from './workspace'
+
+const editableConfigState: EditableConfigState = {
+  configPath: '/configs/grindstone.toml',
+  scan_roots: ['/repos'],
+  repos: ['/repos/grindstone'],
+  default_agent: 'codex',
+  artifact_root: './artifacts',
+  bootstrap_hooks: [
+    {
+      command: 'npm install'
+    }
+  ]
+}
 
 describe('IPC contract', () => {
   it('pins the initial workspace channel name', () => {
@@ -15,6 +29,8 @@ describe('IPC contract', () => {
     expect(ipcChannels.workspace.selectRepository).toBe('workspace:selectRepository')
     expect(ipcChannels.workspace.createRepository).toBe('workspace:createRepository')
     expect(ipcChannels.workspace.retryRepositoryRemote).toBe('workspace:retryRepositoryRemote')
+    expect(ipcChannels.config.getEditableConfig).toBe('config:getEditableConfig')
+    expect(ipcChannels.config.updateCommonConfig).toBe('config:updateCommonConfig')
   })
 
   it('maps workspace:getInitialState to an empty request and InitialWorkspaceState response', () => {
@@ -69,6 +85,36 @@ describe('IPC contract', () => {
     expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
   })
 
+  it('maps config channels to editable config request and response types', () => {
+    type GetEditableConfigChannel = typeof ipcChannels.config.getEditableConfig
+    const getRequest = undefined satisfies IpcRequestMap[GetEditableConfigChannel]
+    const getResponse: IpcResponseMap[GetEditableConfigChannel] = editableConfigState
+
+    type UpdateCommonConfigChannel = typeof ipcChannels.config.updateCommonConfig
+    const updateRequest: IpcRequestMap[UpdateCommonConfigChannel] = {
+      scan_roots: ['/repos'],
+      repos: ['/repos/grindstone'],
+      default_agent: 'claude',
+      artifact_root: null,
+      bootstrap_hooks: []
+    }
+    const updateResponse: IpcResponseMap[UpdateCommonConfigChannel] = {
+      ok: true,
+      workspace: defaultInitialWorkspaceState,
+      config: editableConfigState
+    }
+
+    expect(getRequest).toBeUndefined()
+    expect(getResponse).toEqual(editableConfigState)
+    expect(updateRequest.default_agent).toBe('claude')
+    expect(updateResponse.ok).toBe(true)
+    expectTypeOf(getResponse).toEqualTypeOf<EditableConfigState>()
+    expectTypeOf<IpcRequestMap[UpdateCommonConfigChannel]>()
+      .toEqualTypeOf<CommonConfigUpdateInput>()
+    expectTypeOf<IpcResponseMap[UpdateCommonConfigChannel]>()
+      .toEqualTypeOf<ConfigUpdateResponse>()
+  })
+
   it('invokes IPC through the typed request and response map', async () => {
     const invoke = vi.fn().mockResolvedValue(defaultInitialWorkspaceState)
 
@@ -105,6 +151,12 @@ describe('IPC contract', () => {
         visibility: 'public'
       }
     })
+
+    invoke.mockResolvedValue(editableConfigState)
+    await expect(
+      invokeTypedIpc(invoke, ipcChannels.config.getEditableConfig, undefined)
+    ).resolves.toEqual(editableConfigState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.config.getEditableConfig)
   })
 
   it('registers IPC handlers through the typed request and response map', async () => {

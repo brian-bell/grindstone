@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { invokeTypedIpc, ipcChannels, normalizeIpcError } from '@shared/ipc'
+import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
 import type {
   CreateRepositoryRequest,
   InitialWorkspaceState,
@@ -49,6 +50,30 @@ const grindstoneApi = {
           ipcRenderer.invoke.bind(ipcRenderer),
           ipcChannels.workspace.retryRepositoryRemote,
           request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    }
+  },
+  config: {
+    async getEditableConfig(): Promise<EditableConfigState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.config.getEditableConfig,
+          undefined
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async updateCommonConfig(input: CommonConfigUpdateInput): Promise<ConfigUpdateResponse> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.config.updateCommonConfig,
+          input
         )
       } catch (error) {
         throw normalizeIpcError(error)

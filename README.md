@@ -9,7 +9,8 @@ and keeps the middle pane scoped to the Flow workspace surface.
 - Electron + Vite + React + TypeScript application shell.
 - Three-pane first screen:
   - repository catalog loaded from configured scan roots and explicit repos,
-  - Flow Workspace middle pane with loading, empty, and error states,
+  - Flow Workspace middle pane with repo-scoped loading, empty, error, and
+    artifact-backed list states,
   - contextual hints and disabled Flow shortcut affordances.
 - Typed preload API at `window.grindstone.workspace`.
 - Shared IPC contracts for `workspace:getInitialState` and
@@ -25,8 +26,9 @@ Grindstone reads the first config file found at:
 1. `${process.cwd()}/grindstone.toml`
 2. `${XDG_CONFIG_HOME:-~/.config}/grindstone/config.toml`
 
-If neither file exists, the repository catalog starts empty. Supported TOML
-keys are top-level arrays of strings:
+If neither file exists, the repository catalog starts empty and Flow artifacts
+default to the wtui state root at `~/.local/state/wtui/sessions/v1`. Supported
+repository TOML keys are top-level arrays of strings:
 
 ```toml
 scan_roots = ["~/dev", "../workspace"]
@@ -38,6 +40,18 @@ Relative paths resolve from the directory containing the config file. Leading
 Git repositories, while explicit repos are evaluated directly. Generated
 `grindstone-worktrees` directories are pruned during scan-root discovery, but
 explicit repos under those directories can still be selected.
+
+Flow list records are read from `<artifact-root>/flows/<flow-id>/meta.json`.
+Configure the artifact root with:
+
+```toml
+[artifacts]
+root = "~/.local/state/wtui/sessions/v1"
+```
+
+The artifact root is the wtui state root, so `flows/` and `plans/` are siblings
+below it. Relative artifact roots use the same config-file-relative resolution
+rules as repository paths.
 
 ## Requirements
 
@@ -93,6 +107,6 @@ Main, preload, and renderer builds are configured in
 
 ## Current Scope
 
-This scaffold does not yet implement real Flow persistence, terminal/session
-management, settings, PR workflows, or merge behavior. Repository selection
-currently scopes the in-memory Flow workspace context only.
+This scaffold can list existing wtui Flow metadata for the selected repository,
+but it does not yet create or edit Flows, inspect plans or transcripts,
+launch terminals/sessions, manage settings, or run PR workflows.

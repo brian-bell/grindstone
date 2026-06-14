@@ -1,4 +1,9 @@
 import type {
+  CommonConfigUpdateInput,
+  ConfigUpdateResponse,
+  EditableConfigState
+} from './config'
+import type {
   CreateRepositoryRequest,
   InitialWorkspaceState,
   RetryRepositoryRemoteRequest
@@ -10,10 +15,16 @@ export const ipcChannels = {
     selectRepository: 'workspace:selectRepository',
     createRepository: 'workspace:createRepository',
     retryRepositoryRemote: 'workspace:retryRepositoryRemote'
+  },
+  config: {
+    getEditableConfig: 'config:getEditableConfig',
+    updateCommonConfig: 'config:updateCommonConfig'
   }
 } as const
 
-export type IpcChannel = (typeof ipcChannels.workspace)[keyof typeof ipcChannels.workspace]
+export type IpcChannel =
+  | (typeof ipcChannels.workspace)[keyof typeof ipcChannels.workspace]
+  | (typeof ipcChannels.config)[keyof typeof ipcChannels.config]
 
 export type IpcRequestMap = {
   'workspace:getInitialState': undefined
@@ -22,6 +33,8 @@ export type IpcRequestMap = {
   }
   'workspace:createRepository': CreateRepositoryRequest
   'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
+  'config:getEditableConfig': undefined
+  'config:updateCommonConfig': CommonConfigUpdateInput
 }
 
 export type IpcResponseMap = {
@@ -29,6 +42,8 @@ export type IpcResponseMap = {
   'workspace:selectRepository': InitialWorkspaceState
   'workspace:createRepository': InitialWorkspaceState
   'workspace:retryRepositoryRemote': InitialWorkspaceState
+  'config:getEditableConfig': EditableConfigState
+  'config:updateCommonConfig': ConfigUpdateResponse
 }
 
 export type NormalizedIpcError = {

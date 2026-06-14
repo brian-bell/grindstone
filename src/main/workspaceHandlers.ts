@@ -1,15 +1,26 @@
 import type { IpcMain } from 'electron'
 import { createHash } from 'node:crypto'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
+import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/config'
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
   type CreateRepositoryRequest,
+  type FlowPaneState,
   type InitialWorkspaceState,
   type RepositoryCreateError,
-  type RepositoryPaneState
+  type RepositoryPaneState,
+  type RepositoryRow
 } from '@shared/workspace'
-import { loadGrindstoneConfig, type ConfiguredPath, type LoadGrindstoneConfigOptions } from './config'
+import {
+  getEditableConfig,
+  loadGrindstoneConfig,
+  updateCommonConfigFile,
+  type ConfiguredPath,
+  type GrindstoneConfigResult,
+  type LoadGrindstoneConfigOptions
+} from './config'
+import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 import {
   createRepository,
@@ -17,33 +28,54 @@ import {
   type CommandRunner
 } from './repositoryCreation'
 
+type FlowStoreFactory = (options: CreateFlowStoreOptions) => Promise<FlowStore>
+type ConfigLoader = (options: LoadGrindstoneConfigOptions) => Promise<GrindstoneConfigResult>
+
 type WorkspaceContext = {
-  configOptions: LoadGrindstoneConfigOptions
   catalogInput: {
     scanRoots: ConfiguredPath[]
     repos: ConfiguredPath[]
   }
   scanRoots: RepositoryPaneState['create']['scanRoots']
   catalog: RepositoryCatalogResult
-  selectedRepositoryId: string | null
   remoteRetries: RepositoryPaneState['create']['remoteRetries']
-  state: InitialWorkspaceState
+}
+
+export type LoadWorkspaceStateOptions = LoadGrindstoneConfigOptions & {
+  configLoader?: ConfigLoader
+  flowStoreFactory?: FlowStoreFactory
 }
 
 let currentWorkspaceContext: WorkspaceContext | undefined
+let currentWorkspaceState: InitialWorkspaceState | undefined
+let currentArtifactRoot: string | undefined
+let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
+let currentSelectionRequestId = 0
 
 export async function loadInitialWorkspaceState(
-  options: LoadGrindstoneConfigOptions = {}
+  options: LoadWorkspaceStateOptions = {}
 ): Promise<InitialWorkspaceState> {
-  const config = await loadGrindstoneConfig(options)
+  currentSelectionRequestId += 1
+  const {
+    configLoader = loadGrindstoneConfig,
+    flowStoreFactory = createFlowStore,
+    ...configOptions
+  } = options
+  currentFlowStoreFactory = flowStoreFactory
+  currentWorkspaceState = await buildWorkspaceState(configOptions, null, configLoader)
+  return currentWorkspaceState
+}
+
+async function buildWorkspaceState(
+  options: LoadGrindstoneConfigOptions = {},
+  selectedRepositoryId: string | null = null,
+  configLoader: ConfigLoader = loadGrindstoneConfig
+): Promise<InitialWorkspaceState> {
+  const config = await configLoader(options)
+  currentArtifactRoot = config.artifactRoot.resolvedPath
 
   if (!config.ok) {
-    const state = {
-      ...defaultInitialWorkspaceState,
-      repository: createRepositoryErrorState(config.diagnostics)
-    }
     currentWorkspaceContext = {
-      configOptions: options,
       catalogInput: {
         scanRoots: [],
         repos: []
@@ -53,11 +85,13 @@ export async function loadInitialWorkspaceState(
         repositories: [],
         diagnostics: config.diagnostics
       },
-      selectedRepositoryId: null,
-      remoteRetries: [],
-      state
+      remoteRetries: []
     }
-    return state
+
+    return {
+      ...defaultInitialWorkspaceState,
+      repository: createRepositoryErrorState(config.diagnostics)
+    }
   }
 
   const catalog = await scanRepositoryCatalog({
@@ -65,37 +99,45 @@ export async function loadInitialWorkspaceState(
     repos: config.repos
   })
   const scanRoots = createRepositoryScanRoots(config.scanRoots)
-
-  const state: InitialWorkspaceState = {
-    ...defaultInitialWorkspaceState,
-    repository: createRepositoryReadyState({
-      catalog,
-      scanRoots,
-      selectedRepositoryId: null,
-      remoteRetries: [],
-      error: null
-    })
-  }
+  const remoteRetries: RepositoryPaneState['create']['remoteRetries'] = []
   currentWorkspaceContext = {
-    configOptions: options,
     catalogInput: {
       scanRoots: config.scanRoots,
       repos: config.repos
     },
     scanRoots,
     catalog,
-    selectedRepositoryId: null,
-    remoteRetries: [],
-    state
+    remoteRetries
   }
-  return state
+
+  const workspaceState: InitialWorkspaceState = {
+    ...defaultInitialWorkspaceState,
+    repository: createRepositoryReadyState({
+      catalog,
+      scanRoots,
+      selectedRepositoryId: null,
+      remoteRetries,
+      error: null
+    })
+  }
+
+  if (selectedRepositoryId === null) {
+    return workspaceState
+  }
+
+  const selectedRepository = workspaceState.repository.repositories.find(
+    (row) => row.id === selectedRepositoryId
+  )
+
+  return selectedRepository === undefined
+    ? workspaceState
+    : createSelectedRepositoryState(workspaceState, selectedRepository.id)
 }
 
 export async function selectRepository(request: {
   repositoryId: string
 }): Promise<InitialWorkspaceState> {
-  const context = await getWorkspaceContext()
-  const workspaceState = context.state
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
   const repository = workspaceState.repository.repositories.find(
     (row) => row.id === request.repositoryId
   )
@@ -104,23 +146,72 @@ export async function selectRepository(request: {
     throw new Error(`Repository not found: ${request.repositoryId}`)
   }
 
-  const state: InitialWorkspaceState = {
-    ...workspaceState,
-    repository: {
-      ...workspaceState.repository,
-      title: repository.name,
-      description: repository.path,
-      selectedRepositoryId: repository.id
-    },
-    flow: {
-      status: 'empty',
-      title: `${repository.name} Flow workspace`,
-      description: `Flow context is scoped to ${repository.path}.`
+  const requestId = currentSelectionRequestId + 1
+  currentSelectionRequestId = requestId
+
+  const nextWorkspaceState = await createSelectedRepositoryState(workspaceState, repository.id)
+
+  if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
+    return currentWorkspaceState ?? nextWorkspaceState
+  }
+
+  currentWorkspaceState = nextWorkspaceState
+  return nextWorkspaceState
+}
+
+export async function updateCommonConfig(
+  input: CommonConfigUpdateInput,
+  options: LoadGrindstoneConfigOptions = {}
+): Promise<ConfigUpdateResponse> {
+  const previousSelectedRepositoryId = currentWorkspaceState?.repository.selectedRepositoryId ?? null
+  const update = await updateCommonConfigFile(input, options)
+
+  if (!update.ok) {
+    return update
+  }
+
+  try {
+    currentSelectionRequestId += 1
+    const workspace = await buildWorkspaceState(
+      {
+        ...options,
+        configPath: update.configPath
+      },
+      previousSelectedRepositoryId
+    )
+
+    if (workspace.repository.status === 'error') {
+      return {
+        ok: false,
+        kind: 'reload_failed',
+        configPath: update.configPath,
+        message: workspace.repository.description,
+        config: update.config
+      }
+    }
+
+    currentWorkspaceState = workspace
+
+    return {
+      ok: true,
+      workspace,
+      config: update.config
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      kind: 'reload_failed',
+      configPath: update.configPath,
+      message: getErrorMessage(error),
+      config: update.config
     }
   }
-  context.selectedRepositoryId = repository.id
-  context.state = state
-  return state
+}
+
+export function getCurrentEditableConfig(
+  options: LoadGrindstoneConfigOptions = {}
+): Promise<Awaited<ReturnType<typeof getEditableConfig>>> {
+  return getEditableConfig(options)
 }
 
 export async function createRepositoryInWorkspace(
@@ -135,8 +226,11 @@ export async function createRepositoryInWorkspace(
   })
 
   if (!result.ok) {
-    context.state = updateRepositoryCreateState(context, result.error)
-    return context.state
+    currentWorkspaceState = updateRepositoryCreateState(
+      currentWorkspaceState ?? defaultInitialWorkspaceState,
+      result.error
+    )
+    return currentWorkspaceState
   }
 
   if (result.retry !== null) {
@@ -145,8 +239,12 @@ export async function createRepositoryInWorkspace(
 
   const catalog = await scanRepositoryCatalog(context.catalogInput)
   context.catalog = mergeCreatedRepository(catalog, result.repository)
-  context.state = createWorkspaceState(context, null)
-  return context.state
+  currentWorkspaceState = await createWorkspaceStateFromContext(
+    context,
+    currentWorkspaceState?.repository.selectedRepositoryId ?? null,
+    null
+  )
+  return currentWorkspaceState
 }
 
 export async function retryRepositoryRemoteInWorkspace(
@@ -164,8 +262,11 @@ export async function retryRepositoryRemoteInWorkspace(
       code: 'remote_creation_failed',
       message: 'Remote retry request is invalid.'
     }
-    context.state = updateRepositoryCreateState(context, error)
-    return context.state
+    currentWorkspaceState = updateRepositoryCreateState(
+      currentWorkspaceState ?? defaultInitialWorkspaceState,
+      error
+    )
+    return currentWorkspaceState
   }
 
   const retry = context.remoteRetries.find((candidate) => candidate.id === request.retryId)
@@ -174,8 +275,11 @@ export async function retryRepositoryRemoteInWorkspace(
       code: 'remote_creation_failed',
       message: `Remote retry not found: ${request.retryId}`
     }
-    context.state = updateRepositoryCreateState(context, error)
-    return context.state
+    currentWorkspaceState = updateRepositoryCreateState(
+      currentWorkspaceState ?? defaultInitialWorkspaceState,
+      error
+    )
+    return currentWorkspaceState
   }
 
   const result = await retryRepositoryRemote({
@@ -186,8 +290,9 @@ export async function retryRepositoryRemoteInWorkspace(
   context.remoteRetries = result.ok
     ? context.remoteRetries.filter((candidate) => candidate.id !== result.retry.id)
     : upsertRetry(context.remoteRetries, result.retry)
-  context.state = createWorkspaceState(
+  currentWorkspaceState = await createWorkspaceStateFromContext(
     context,
+    currentWorkspaceState?.repository.selectedRepositoryId ?? null,
     result.ok
       ? null
       : {
@@ -198,7 +303,28 @@ export async function retryRepositoryRemoteInWorkspace(
           message: result.retry.lastError
         }
   )
-  return context.state
+  return currentWorkspaceState
+}
+
+async function createSelectedRepositoryState(
+  workspaceState: InitialWorkspaceState,
+  repositoryId: string
+): Promise<InitialWorkspaceState> {
+  const repository = workspaceState.repository.repositories.find((row) => row.id === repositoryId)
+  if (repository === undefined) {
+    return workspaceState
+  }
+
+  return {
+    ...workspaceState,
+    repository: {
+      ...workspaceState.repository,
+      title: repository.name,
+      description: repository.path,
+      selectedRepositoryId: repository.id
+    },
+    flow: await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory)
+  }
 }
 
 export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): void {
@@ -213,6 +339,12 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.retryRepositoryRemote, (request) =>
     retryRepositoryRemoteInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.config.getEditableConfig, () =>
+    getCurrentEditableConfig()
+  )
+  handleTypedIpc(ipcMain, ipcChannels.config.updateCommonConfig, (request) =>
+    updateCommonConfig(request)
   )
 }
 
@@ -275,12 +407,13 @@ async function getWorkspaceContext(): Promise<WorkspaceContext> {
   return currentWorkspaceContext as WorkspaceContext
 }
 
-function createWorkspaceState(
+async function createWorkspaceStateFromContext(
   context: WorkspaceContext,
+  selectedRepositoryId: string | null,
   error: RepositoryCreateError | null
-): InitialWorkspaceState {
+): Promise<InitialWorkspaceState> {
   const selectedRepository = context.catalog.repositories.find(
-    (repository) => repository.id === context.selectedRepositoryId
+    (repository) => repository.id === selectedRepositoryId
   )
   const repositoryState = createRepositoryReadyState({
     catalog: context.catalog,
@@ -289,40 +422,26 @@ function createWorkspaceState(
     remoteRetries: context.remoteRetries,
     error
   })
-
-  if (selectedRepository === undefined) {
-    context.selectedRepositoryId = null
-    return {
-      ...defaultInitialWorkspaceState,
-      repository: repositoryState
-    }
-  }
-
-  return {
+  const workspaceState: InitialWorkspaceState = {
     ...defaultInitialWorkspaceState,
-    repository: {
-      ...repositoryState,
-      title: selectedRepository.name,
-      description: selectedRepository.path
-    },
-    flow: {
-      status: 'empty',
-      title: `${selectedRepository.name} Flow workspace`,
-      description: `Flow context is scoped to ${selectedRepository.path}.`
-    }
+    repository: repositoryState
   }
+
+  return selectedRepository === undefined
+    ? workspaceState
+    : createSelectedRepositoryState(workspaceState, selectedRepository.id)
 }
 
 function updateRepositoryCreateState(
-  context: WorkspaceContext,
+  workspaceState: InitialWorkspaceState,
   error: RepositoryCreateError
 ): InitialWorkspaceState {
   return {
-    ...context.state,
+    ...workspaceState,
     repository: {
-      ...context.state.repository,
+      ...workspaceState.repository,
       create: {
-        ...context.state.repository.create,
+        ...workspaceState.repository.create,
         error
       }
     }
@@ -380,10 +499,59 @@ function upsertRetry(
   return [...retries.filter((candidate) => candidate.id !== retry.id), retry]
 }
 
+async function createFlowPaneState(
+  repository: RepositoryRow,
+  artifactRoot: string | undefined,
+  flowStoreFactory: FlowStoreFactory
+): Promise<Exclude<FlowPaneState, { status: 'loading' }>> {
+  try {
+    if (artifactRoot === undefined) {
+      throw new Error('Flow artifact root is not configured.')
+    }
+
+    const store = await flowStoreFactory({
+      artifactRoot
+    })
+    const flows = await store.listFlowsForRepository(repository)
+
+    if (flows.length === 0) {
+      return {
+        status: 'empty',
+        title: `No Flows for ${repository.name}`,
+        description: `No Flow records were found for ${repository.path}.`,
+        repositoryId: repository.id,
+        repositoryName: repository.name
+      }
+    }
+
+    return {
+      status: 'ready',
+      repositoryId: repository.id,
+      repositoryName: repository.name,
+      flows
+    }
+  } catch (error) {
+    return {
+      status: 'error',
+      message: getErrorMessage(error),
+      repositoryId: repository.id,
+      repositoryName: repository.name
+    }
+  }
+}
+
 function firstDiagnosticMessage(diagnostics: CatalogDiagnostic[]): string {
   return diagnostics[0]?.message ?? 'Unable to load repository catalog.'
 }
 
 function pluralize(label: string, count: number): string {
   return count === 1 ? label : `${label}s`
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return 'Unable to load workspace state.'
 }

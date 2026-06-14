@@ -1,3 +1,4 @@
+import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
 import type {
   CreateRepositoryRequest,
   InitialWorkspaceState,
@@ -14,6 +15,10 @@ declare global {
         retryRepositoryRemote: (
           request: RetryRepositoryRemoteRequest
         ) => Promise<InitialWorkspaceState>
+      }
+      config: {
+        getEditableConfig: () => Promise<EditableConfigState>
+        updateCommonConfig: (input: CommonConfigUpdateInput) => Promise<ConfigUpdateResponse>
       }
     }
   }
