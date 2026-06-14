@@ -483,6 +483,31 @@ describe('App shell', () => {
     expect(within(flowPane).getByRole('button', { name: /new flow/i })).toHaveFocus()
   })
 
+  it('opens Flow creation from the enabled right-pane shortcut', async () => {
+    const user = userEvent.setup()
+    const stateWithEnabledShortcut: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      shortcuts: selectedCatalogState.shortcuts.map((shortcut) =>
+        shortcut.id === 'new-flow'
+          ? { ...shortcut, disabled: false }
+          : shortcut
+      )
+    }
+    setWorkspaceApi(vi.fn().mockResolvedValue(stateWithEnabledShortcut))
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    expect(within(flowPane).queryByLabelText(/^title$/i)).not.toBeInTheDocument()
+    const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
+    const newFlowShortcut = within(contextPane).getByRole('button', { name: /new flow/i })
+    expect(newFlowShortcut).toBeEnabled()
+
+    await user.click(newFlowShortcut)
+
+    expect(await screen.findByRole('dialog', { name: /create flow/i })).toBeInTheDocument()
+  })
+
   it('keeps failed Flow creation input in the modal and renders persisted start failures', async () => {
     const user = userEvent.setup()
     const failedState: InitialWorkspaceState = {

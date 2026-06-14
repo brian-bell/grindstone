@@ -81,6 +81,7 @@ export function App(): ReactElement {
   const [flowState, setFlowState] = useState<FlowPaneState>(
     routeFlowState ?? { status: 'loading' }
   )
+  const [flowCreateOpenRequest, setFlowCreateOpenRequest] = useState(0)
   const selectionRequestIdRef = useRef(0)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>('hints')
   const [editableConfig, setEditableConfig] = useState<EditableConfigState | null>(null)
@@ -177,6 +178,10 @@ export function App(): ReactElement {
     setFlowState(routeFlowState ?? nextWorkspace.flow)
   }
 
+  function requestFlowCreate(): void {
+    setFlowCreateOpenRequest((request) => request + 1)
+  }
+
   async function handleConfigReload(): Promise<void> {
     const [nextWorkspace, nextConfig] = await Promise.all([
       window.grindstone.workspace.getInitialState(),
@@ -241,6 +246,7 @@ export function App(): ReactElement {
           <h1 id="flow-workspace-title">Flow Workspace</h1>
         </div>
         <FlowWorkspaceStateView
+          createOpenRequest={flowCreateOpenRequest}
           state={flowState}
           onWorkspaceUpdate={applyWorkspace}
         />
@@ -259,7 +265,10 @@ export function App(): ReactElement {
             onSave={handleConfigSave}
           />
         ) : (
-          <ContextHintsPanel workspace={shellState} />
+          <ContextHintsPanel
+            workspace={shellState}
+            onNewFlow={requestFlowCreate}
+          />
         )}
       </section>
     </div>
@@ -580,7 +589,13 @@ function CatalogDiagnosticRow({
   )
 }
 
-function ContextHintsPanel({ workspace }: { workspace: InitialWorkspaceState }): ReactElement {
+function ContextHintsPanel({
+  workspace,
+  onNewFlow
+}: {
+  workspace: InitialWorkspaceState
+  onNewFlow: () => void
+}): ReactElement {
   return (
     <>
       <div className="pane-header">
@@ -603,6 +618,7 @@ function ContextHintsPanel({ workspace }: { workspace: InitialWorkspaceState }):
             className="shortcut-button"
             disabled={shortcut.disabled}
             key={shortcut.id}
+            onClick={shortcut.id === 'new-flow' ? onNewFlow : undefined}
             title={shortcut.description}
             type="button"
           >
@@ -1060,9 +1076,11 @@ function getErrorMessage(error: unknown): string {
 }
 
 function FlowWorkspaceStateView({
+  createOpenRequest,
   state,
   onWorkspaceUpdate
 }: {
+  createOpenRequest: number
   state: FlowPaneState
   onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
 }): ReactElement {
@@ -1106,6 +1124,7 @@ function FlowWorkspaceStateView({
       <div className="flow-list-view">
         <FlowCreatePanel
           create={state.create}
+          openRequest={createOpenRequest}
           onWorkspaceUpdate={onWorkspaceUpdate}
         />
 
@@ -1128,6 +1147,7 @@ function FlowWorkspaceStateView({
       {state.create === undefined ? null : (
         <FlowCreatePanel
           create={state.create}
+          openRequest={createOpenRequest}
           onWorkspaceUpdate={onWorkspaceUpdate}
         />
       )}
@@ -1287,9 +1307,11 @@ function truncateText(value: string, maxLength: number): string {
 
 function FlowCreatePanel({
   create,
+  openRequest,
   onWorkspaceUpdate
 }: {
   create: NonNullable<Extract<FlowPaneState, { status: 'ready' | 'empty' }>['create']>
+  openRequest: number
   onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
 }): ReactElement {
   const [isOpen, setIsOpen] = useState(false)
@@ -1302,6 +1324,7 @@ function FlowCreatePanel({
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const titleInputRef = useRef<HTMLInputElement | null>(null)
   const shouldRestoreFocusRef = useRef(false)
+  const lastOpenRequestRef = useRef(openRequest)
 
   useEffect(() => {
     if (isOpen) {
@@ -1314,6 +1337,17 @@ function FlowCreatePanel({
       newFlowButtonRef.current?.focus()
     }
   }, [isOpen])
+
+  useEffect(() => {
+    if (openRequest === lastOpenRequestRef.current) {
+      return
+    }
+    lastOpenRequestRef.current = openRequest
+    if (create.available) {
+      shouldRestoreFocusRef.current = false
+      setIsOpen(true)
+    }
+  }, [create.available, openRequest])
 
   function openFlowDialog(): void {
     shouldRestoreFocusRef.current = false
