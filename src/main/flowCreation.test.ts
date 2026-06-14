@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, realpath, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { RepositoryRow } from '@shared/workspace'
-import { createFlow, FlowCommandRunError, type FlowCommandRunner } from './flowCreation'
+import { createFlow, FlowCommandRunError, runFlowProcess, type FlowCommandRunner } from './flowCreation'
 import { createFlowStore } from './flowStore'
 
 async function makeTempDir(): Promise<string> {
@@ -38,7 +38,53 @@ function gitRunner(): FlowCommandRunner {
   }
 }
 
+async function waitForProcessExit(pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (!isProcessRunning(pid)) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(`Process ${pid} is still running.`)
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+      return false
+    }
+    throw error
+  }
+}
+
 describe('Flow creation engine', () => {
+  it('kills shell hook process groups before returning timeout failures', async () => {
+    const root = await makeTempDir()
+    const childPidFile = join(root, 'child.pid')
+    const script = [
+      'const { spawn } = require("node:child_process")',
+      'const fs = require("node:fs")',
+      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })',
+      `fs.writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid))`,
+      'setInterval(() => {}, 1000)'
+    ].join(';')
+    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`
+
+    await expect(runFlowProcess(command, [], {
+      cwd: root,
+      shell: true,
+      timeoutMs: 300
+    })).rejects.toMatchObject({
+      message: 'Command timed out.'
+    })
+
+    const childPid = Number(await readFile(childPidFile, 'utf8'))
+    await expect(waitForProcessExit(childPid)).resolves.toBeUndefined()
+  })
+
   it('rejects unsafe base refs before creating records or running commands', async () => {
     const root = await makeTempDir()
     const repository = await makeRepository(root, 'repo-validation')

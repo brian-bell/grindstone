@@ -425,8 +425,10 @@ export function runFlowProcess(
   }
 ): Promise<CommandResult> {
   return new Promise((resolvePromise, reject) => {
+    const useProcessGroup = process.platform !== 'win32'
     const child = spawn(command, args, {
       cwd: options.cwd,
+      detached: useProcessGroup,
       env: options.env,
       shell: options.shell ?? false,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -434,12 +436,16 @@ export function runFlowProcess(
     let stdout = ''
     let stderr = ''
     let settled = false
+    let timedOut = false
+    let killTimeout: NodeJS.Timeout | undefined
     const timeout = options.timeoutMs === undefined
       ? undefined
       : setTimeout(() => {
-          settled = true
-          child.kill()
-          reject(new FlowCommandRunError(command, args, 'Command timed out.', stdout, stderr))
+          timedOut = true
+          terminateFlowProcess(child, 'SIGTERM')
+          killTimeout = setTimeout(() => {
+            terminateFlowProcess(child, 'SIGKILL')
+          }, 1_000)
         }, options.timeoutMs)
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -453,9 +459,7 @@ export function runFlowProcess(
         return
       }
       settled = true
-      if (timeout !== undefined) {
-        clearTimeout(timeout)
-      }
+      clearCommandTimers(timeout, killTimeout)
       reject(new FlowCommandRunError(command, args, error.message, stdout, stderr))
     })
     child.on('close', (code) => {
@@ -463,8 +467,10 @@ export function runFlowProcess(
         return
       }
       settled = true
-      if (timeout !== undefined) {
-        clearTimeout(timeout)
+      clearCommandTimers(timeout, killTimeout)
+      if (timedOut) {
+        reject(new FlowCommandRunError(command, args, 'Command timed out.', stdout, stderr))
+        return
       }
       if (code === 0) {
         resolvePromise({ stdout, stderr })
@@ -480,6 +486,44 @@ export function runFlowProcess(
       ))
     })
   })
+}
+
+function clearCommandTimers(
+  timeout: NodeJS.Timeout | undefined,
+  killTimeout: NodeJS.Timeout | undefined
+): void {
+  if (timeout !== undefined) {
+    clearTimeout(timeout)
+  }
+  if (killTimeout !== undefined) {
+    clearTimeout(killTimeout)
+  }
+}
+
+function terminateFlowProcess(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals
+): void {
+  if (child.pid !== undefined && process.platform !== 'win32') {
+    try {
+      process.kill(-child.pid, signal)
+      return
+    } catch (error) {
+      if (!isNoSuchProcessError(error)) {
+        child.kill(signal)
+      }
+      return
+    }
+  }
+
+  child.kill(signal)
+}
+
+function isNoSuchProcessError(error: unknown): boolean {
+  return typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'ESRCH'
 }
 
 export class FlowCommandRunError extends Error {
