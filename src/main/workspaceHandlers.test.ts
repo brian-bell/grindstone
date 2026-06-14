@@ -5,13 +5,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { ipcChannels } from '@shared/ipc'
 import type { FlowListRow, RepositoryRow } from '@shared/workspace'
 import {
+  createRepositoryInWorkspace,
   getCurrentEditableConfig,
   loadInitialWorkspaceState,
   registerWorkspaceHandlers,
+  retryRepositoryRemoteInWorkspace,
   selectRepository,
   updateCommonConfig
 } from './workspaceHandlers'
 import type { FlowStore } from './flowStore'
+import { CommandRunError, type CommandRunner } from './repositoryCreation'
 
 async function makeTempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'grindstone-workspace-'))
@@ -168,6 +171,234 @@ describe('workspace main handlers', () => {
         ]
       }
     })
+  })
+
+  it('exposes configured scan roots as opaque create targets', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+
+    expect(state.repository.create).toMatchObject({
+      available: true,
+      scanRoots: [
+        {
+          configuredPath: scanRoot,
+          resolvedPath: scanRoot,
+          displayPath: scanRoot
+        }
+      ],
+      error: null,
+      remoteRetries: []
+    })
+    expect(state.repository.create.scanRoots[0]?.id).toMatch(/^scan-root:0:/)
+  })
+
+  it('creates a repository through the authoritative scan-root context', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+    const initialState = await loadInitialWorkspaceState({ configPath })
+    const scanRootId = initialState.repository.create.scanRoots[0]?.id ?? ''
+    const runCommand: CommandRunner = async (_command, _args, options) => {
+      await makeGitRepository(options.cwd)
+      return { stdout: '' }
+    }
+
+    const state = await createRepositoryInWorkspace(
+      {
+        scanRootId,
+        name: 'created-repo',
+        github: {
+          enabled: false,
+          visibility: 'private'
+        }
+      },
+      { runCommand }
+    )
+
+    expect(state.repository.repositories).toEqual([
+      expect.objectContaining({
+        name: 'created-repo',
+        sources: ['scan_root']
+      })
+    ])
+    expect(state.repository.create.error).toBeNull()
+  })
+
+  it('rejects create requests when no scan roots are configured', async () => {
+    const root = await makeTempDir()
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, 'repos = []\n')
+    await loadInitialWorkspaceState({ configPath })
+
+    const state = await createRepositoryInWorkspace(
+      {
+        scanRootId: 'scan-root:forged',
+        name: 'created-repo',
+        github: {
+          enabled: false,
+          visibility: 'private'
+        }
+      },
+      { runCommand: vi.fn<CommandRunner>() }
+    )
+
+    expect(state.repository.repositories).toEqual([])
+    expect(state.repository.create.error).toMatchObject({
+      code: 'scan_root_unavailable'
+    })
+  })
+
+  it('stores remote retry records after local success with GitHub failure', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+    const initialState = await loadInitialWorkspaceState({ configPath })
+    const scanRootId = initialState.repository.create.scanRoots[0]?.id ?? ''
+    const runCommand: CommandRunner = async (command, _args, options) => {
+      if (command === 'gh') {
+        throw new CommandRunError('gh', ['repo', 'create'], 'gh auth failed')
+      }
+      await makeGitRepository(options.cwd)
+      return { stdout: '' }
+    }
+
+    const state = await createRepositoryInWorkspace(
+      {
+        scanRootId,
+        name: 'remote-fails',
+        github: {
+          enabled: true,
+          visibility: 'public'
+        }
+      },
+      { runCommand }
+    )
+
+    expect(state.repository.repositories).toEqual([
+      expect.objectContaining({
+        name: 'remote-fails'
+      })
+    ])
+    expect(state.repository.create.remoteRetries).toEqual([
+      expect.objectContaining({
+        githubRepositoryName: 'remote-fails',
+        status: 'remote_create_failed',
+        lastError: 'gh auth failed'
+      })
+    ])
+  })
+
+  it('preserves remote retry records when the workspace catalog reloads', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+    const initialState = await loadInitialWorkspaceState({ configPath })
+    const scanRootId = initialState.repository.create.scanRoots[0]?.id ?? ''
+    const runCommand: CommandRunner = async (command, _args, options) => {
+      if (command === 'gh') {
+        throw new CommandRunError('gh', ['repo', 'create'], 'gh auth failed')
+      }
+      await makeGitRepository(options.cwd)
+      return { stdout: '' }
+    }
+
+    const partialState = await createRepositoryInWorkspace(
+      {
+        scanRootId,
+        name: 'reload-retry',
+        github: {
+          enabled: true,
+          visibility: 'private'
+        }
+      },
+      { runCommand }
+    )
+    const retry = partialState.repository.create.remoteRetries[0]
+    expect(retry).toBeDefined()
+
+    await expect(loadInitialWorkspaceState({ configPath })).resolves.toMatchObject({
+      repository: {
+        create: {
+          remoteRetries: [
+            {
+              id: retry?.id,
+              repositoryPath: retry?.repositoryPath,
+              githubRepositoryName: 'reload-retry',
+              status: 'remote_create_failed'
+            }
+          ]
+        }
+      }
+    })
+  })
+
+  it('returns structured errors for malformed remote retry requests', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+    await loadInitialWorkspaceState({ configPath })
+
+    const state = await retryRepositoryRemoteInWorkspace(
+      null as unknown as { retryId: string },
+      { runCommand: vi.fn<CommandRunner>() }
+    )
+
+    expect(state.repository.create.error).toMatchObject({
+      code: 'remote_creation_failed',
+      message: 'Remote retry request is invalid.'
+    })
+  })
+
+  it('removes stored retry metadata after remote setup succeeds', async () => {
+    const root = await makeTempDir()
+    const scanRoot = join(root, 'repos')
+    await mkdir(scanRoot)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `scan_roots = ["${scanRoot}"]\n`)
+    const initialState = await loadInitialWorkspaceState({ configPath })
+    const scanRootId = initialState.repository.create.scanRoots[0]?.id ?? ''
+    const createRunCommand: CommandRunner = async (command, _args, options) => {
+      if (command === 'gh') {
+        throw new CommandRunError('gh', ['repo', 'create'], 'gh auth failed')
+      }
+      await makeGitRepository(options.cwd)
+      return { stdout: '' }
+    }
+    const partialState = await createRepositoryInWorkspace(
+      {
+        scanRootId,
+        name: 'retry-repo',
+        github: {
+          enabled: true,
+          visibility: 'private'
+        }
+      },
+      { runCommand: createRunCommand }
+    )
+    const retryId = partialState.repository.create.remoteRetries[0]?.id ?? ''
+    const retryRunCommand: CommandRunner = async (command, args) => {
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+        throw new CommandRunError('git', args, 'No such remote')
+      }
+      return { stdout: '' }
+    }
+
+    const state = await retryRepositoryRemoteInWorkspace({ retryId }, { runCommand: retryRunCommand })
+
+    expect(state.repository.create.remoteRetries).toEqual([])
   })
 
   it('returns a repo-scoped empty Flow state when the selected repo has no records', async () => {
@@ -626,6 +857,14 @@ describe('workspace main handlers', () => {
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(
       ipcChannels.workspace.selectRepository,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.createRepository,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.retryRepositoryRemote,
       expect.any(Function)
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(

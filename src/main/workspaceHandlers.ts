@@ -1,11 +1,14 @@
 import type { IpcMain } from 'electron'
+import { createHash } from 'node:crypto'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/config'
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
+  type CreateRepositoryRequest,
   type FlowPaneState,
   type InitialWorkspaceState,
+  type RepositoryCreateError,
   type RepositoryPaneState,
   type RepositoryRow
 } from '@shared/workspace'
@@ -13,20 +16,37 @@ import {
   getEditableConfig,
   loadGrindstoneConfig,
   updateCommonConfigFile,
+  type ConfiguredPath,
   type GrindstoneConfigResult,
   type LoadGrindstoneConfigOptions
 } from './config'
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
+import {
+  createRepository,
+  retryRepositoryRemote,
+  type CommandRunner
+} from './repositoryCreation'
 
 type FlowStoreFactory = (options: CreateFlowStoreOptions) => Promise<FlowStore>
 type ConfigLoader = (options: LoadGrindstoneConfigOptions) => Promise<GrindstoneConfigResult>
+
+type WorkspaceContext = {
+  catalogInput: {
+    scanRoots: ConfiguredPath[]
+    repos: ConfiguredPath[]
+  }
+  scanRoots: RepositoryPaneState['create']['scanRoots']
+  catalog: RepositoryCatalogResult
+  remoteRetries: RepositoryPaneState['create']['remoteRetries']
+}
 
 export type LoadWorkspaceStateOptions = LoadGrindstoneConfigOptions & {
   configLoader?: ConfigLoader
   flowStoreFactory?: FlowStoreFactory
 }
 
+let currentWorkspaceContext: WorkspaceContext | undefined
 let currentWorkspaceState: InitialWorkspaceState | undefined
 let currentArtifactRoot: string | undefined
 let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
@@ -55,6 +75,19 @@ async function buildWorkspaceState(
   currentArtifactRoot = config.artifactRoot.resolvedPath
 
   if (!config.ok) {
+    currentWorkspaceContext = {
+      catalogInput: {
+        scanRoots: [],
+        repos: []
+      },
+      scanRoots: [],
+      catalog: {
+        repositories: [],
+        diagnostics: config.diagnostics
+      },
+      remoteRetries: []
+    }
+
     return {
       ...defaultInitialWorkspaceState,
       repository: createRepositoryErrorState(config.diagnostics)
@@ -65,10 +98,30 @@ async function buildWorkspaceState(
     scanRoots: config.scanRoots,
     repos: config.repos
   })
+  const scanRoots = createRepositoryScanRoots(config.scanRoots)
+  const remoteRetries = preserveRemoteRetries(
+    currentWorkspaceContext?.remoteRetries ?? [],
+    catalog
+  )
+  currentWorkspaceContext = {
+    catalogInput: {
+      scanRoots: config.scanRoots,
+      repos: config.repos
+    },
+    scanRoots,
+    catalog,
+    remoteRetries
+  }
 
   const workspaceState: InitialWorkspaceState = {
     ...defaultInitialWorkspaceState,
-    repository: createRepositoryReadyState(catalog)
+    repository: createRepositoryReadyState({
+      catalog,
+      scanRoots,
+      selectedRepositoryId: null,
+      remoteRetries,
+      error: null
+    })
   }
 
   if (selectedRepositoryId === null) {
@@ -164,6 +217,98 @@ export function getCurrentEditableConfig(
   return getEditableConfig(options)
 }
 
+export async function createRepositoryInWorkspace(
+  request: CreateRepositoryRequest,
+  options: { runCommand?: CommandRunner } = {}
+): Promise<InitialWorkspaceState> {
+  const context = await getWorkspaceContext()
+  const result = await createRepository({
+    scanRoots: context.scanRoots,
+    request,
+    runCommand: options.runCommand
+  })
+
+  if (!result.ok) {
+    currentWorkspaceState = updateRepositoryCreateState(
+      currentWorkspaceState ?? defaultInitialWorkspaceState,
+      result.error
+    )
+    return currentWorkspaceState
+  }
+
+  if (result.retry !== null) {
+    context.remoteRetries = upsertRetry(context.remoteRetries, result.retry)
+  }
+
+  const catalog = await scanRepositoryCatalog(context.catalogInput)
+  context.catalog = mergeCreatedRepository(catalog, result.repository)
+  currentWorkspaceState = await createWorkspaceStateFromContext(
+    context,
+    currentWorkspaceState?.repository.selectedRepositoryId ?? null,
+    null
+  )
+  return currentWorkspaceState
+}
+
+export async function retryRepositoryRemoteInWorkspace(
+  request: { retryId: string },
+  options: { runCommand?: CommandRunner } = {}
+): Promise<InitialWorkspaceState> {
+  const context = await getWorkspaceContext()
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof request.retryId !== 'string' ||
+    request.retryId.trim() === ''
+  ) {
+    const error: RepositoryCreateError = {
+      code: 'remote_creation_failed',
+      message: 'Remote retry request is invalid.'
+    }
+    currentWorkspaceState = updateRepositoryCreateState(
+      currentWorkspaceState ?? defaultInitialWorkspaceState,
+      error
+    )
+    return currentWorkspaceState
+  }
+
+  const retry = context.remoteRetries.find((candidate) => candidate.id === request.retryId)
+  if (retry === undefined) {
+    const error: RepositoryCreateError = {
+      code: 'remote_creation_failed',
+      message: `Remote retry not found: ${request.retryId}`
+    }
+    currentWorkspaceState = updateRepositoryCreateState(
+      currentWorkspaceState ?? defaultInitialWorkspaceState,
+      error
+    )
+    return currentWorkspaceState
+  }
+
+  const result = await retryRepositoryRemote({
+    retry,
+    runCommand: options.runCommand
+  })
+
+  context.remoteRetries = result.ok
+    ? context.remoteRetries.filter((candidate) => candidate.id !== result.retry.id)
+    : upsertRetry(context.remoteRetries, result.retry)
+  currentWorkspaceState = await createWorkspaceStateFromContext(
+    context,
+    currentWorkspaceState?.repository.selectedRepositoryId ?? null,
+    result.ok
+      ? null
+      : {
+          code:
+            result.retry.status === 'origin_conflict'
+              ? 'remote_origin_conflict'
+              : 'remote_creation_failed',
+          message: result.retry.lastError
+        }
+  )
+  return currentWorkspaceState
+}
+
 async function createSelectedRepositoryState(
   workspaceState: InitialWorkspaceState,
   repositoryId: string
@@ -192,6 +337,12 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   handleTypedIpc(ipcMain, ipcChannels.workspace.selectRepository, (request) =>
     selectRepository(request)
   )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.createRepository, (request) =>
+    createRepositoryInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.retryRepositoryRemote, (request) =>
+    retryRepositoryRemoteInWorkspace(request)
+  )
   handleTypedIpc(ipcMain, ipcChannels.config.getEditableConfig, () =>
     getCurrentEditableConfig()
   )
@@ -200,7 +351,19 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
 }
 
-function createRepositoryReadyState(catalog: RepositoryCatalogResult): RepositoryPaneState {
+function createRepositoryReadyState({
+  catalog,
+  scanRoots,
+  selectedRepositoryId,
+  remoteRetries,
+  error
+}: {
+  catalog: RepositoryCatalogResult
+  scanRoots: RepositoryPaneState['create']['scanRoots']
+  selectedRepositoryId: string | null
+  remoteRetries: RepositoryPaneState['create']['remoteRetries']
+  error: RepositoryCreateError | null
+}): RepositoryPaneState {
   const repositoryCount = catalog.repositories.length
 
   return {
@@ -211,8 +374,14 @@ function createRepositoryReadyState(catalog: RepositoryCatalogResult): Repositor
         ? 'Add scan_roots or repos to Grindstone config to populate this pane.'
         : `${repositoryCount} ${pluralize('repository', repositoryCount)} configured.`,
     repositories: catalog.repositories,
-    selectedRepositoryId: null,
-    diagnostics: catalog.diagnostics
+    selectedRepositoryId,
+    diagnostics: catalog.diagnostics,
+    create: {
+      scanRoots,
+      available: scanRoots.length > 0,
+      error,
+      remoteRetries
+    }
   }
 }
 
@@ -223,8 +392,127 @@ function createRepositoryErrorState(diagnostics: CatalogDiagnostic[]): Repositor
     description: firstDiagnosticMessage(diagnostics),
     repositories: [],
     selectedRepositoryId: null,
-    diagnostics
+    diagnostics,
+    create: {
+      scanRoots: [],
+      available: false,
+      error: null,
+      remoteRetries: []
+    }
   }
+}
+
+async function getWorkspaceContext(): Promise<WorkspaceContext> {
+  if (currentWorkspaceContext === undefined) {
+    await loadInitialWorkspaceState()
+  }
+
+  return currentWorkspaceContext as WorkspaceContext
+}
+
+async function createWorkspaceStateFromContext(
+  context: WorkspaceContext,
+  selectedRepositoryId: string | null,
+  error: RepositoryCreateError | null
+): Promise<InitialWorkspaceState> {
+  const selectedRepository = context.catalog.repositories.find(
+    (repository) => repository.id === selectedRepositoryId
+  )
+  const repositoryState = createRepositoryReadyState({
+    catalog: context.catalog,
+    scanRoots: context.scanRoots,
+    selectedRepositoryId: selectedRepository?.id ?? null,
+    remoteRetries: context.remoteRetries,
+    error
+  })
+  const workspaceState: InitialWorkspaceState = {
+    ...defaultInitialWorkspaceState,
+    repository: repositoryState
+  }
+
+  return selectedRepository === undefined
+    ? workspaceState
+    : createSelectedRepositoryState(workspaceState, selectedRepository.id)
+}
+
+function updateRepositoryCreateState(
+  workspaceState: InitialWorkspaceState,
+  error: RepositoryCreateError
+): InitialWorkspaceState {
+  return {
+    ...workspaceState,
+    repository: {
+      ...workspaceState.repository,
+      create: {
+        ...workspaceState.repository.create,
+        error
+      }
+    }
+  }
+}
+
+function createRepositoryScanRoots(scanRoots: ConfiguredPath[]): RepositoryPaneState['create']['scanRoots'] {
+  const usedIds = new Map<string, number>()
+
+  return scanRoots.map((scanRoot, index) => {
+    const baseId = `scan-root:${index}:${hashScanRoot(scanRoot)}`
+    const collisionCount = usedIds.get(baseId) ?? 0
+    usedIds.set(baseId, collisionCount + 1)
+    const id = collisionCount === 0 ? baseId : `${baseId}:${collisionCount + 1}`
+
+    return {
+      id,
+      configuredPath: scanRoot.configuredPath,
+      resolvedPath: scanRoot.resolvedPath,
+      displayPath:
+        scanRoot.configuredPath === scanRoot.resolvedPath
+          ? scanRoot.resolvedPath
+          : `${scanRoot.configuredPath} -> ${scanRoot.resolvedPath}`
+    }
+  })
+}
+
+function hashScanRoot(scanRoot: ConfiguredPath): string {
+  return createHash('sha256')
+    .update(`${scanRoot.configuredPath}\0${scanRoot.resolvedPath}`)
+    .digest('hex')
+    .slice(0, 12)
+}
+
+function mergeCreatedRepository(
+  catalog: RepositoryCatalogResult,
+  repository: RepositoryCatalogResult['repositories'][number]
+): RepositoryCatalogResult {
+  if (catalog.repositories.some((row) => row.canonicalPath === repository.canonicalPath)) {
+    return catalog
+  }
+
+  return {
+    ...catalog,
+    repositories: [...catalog.repositories, repository].sort((left, right) =>
+      left.canonicalPath.localeCompare(right.canonicalPath)
+    )
+  }
+}
+
+function upsertRetry(
+  retries: RepositoryPaneState['create']['remoteRetries'],
+  retry: RepositoryPaneState['create']['remoteRetries'][number]
+): RepositoryPaneState['create']['remoteRetries'] {
+  return [...retries.filter((candidate) => candidate.id !== retry.id), retry]
+}
+
+function preserveRemoteRetries(
+  retries: RepositoryPaneState['create']['remoteRetries'],
+  catalog: RepositoryCatalogResult
+): RepositoryPaneState['create']['remoteRetries'] {
+  return retries.filter((retry) =>
+    catalog.repositories.some(
+      (repository) =>
+        repository.id === retry.repositoryId &&
+        repository.canonicalPath === retry.repositoryPath
+    )
+  )
 }
 
 async function createFlowPaneState(

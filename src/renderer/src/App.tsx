@@ -9,7 +9,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
 import type {
   CommonConfigUpdateInput,
@@ -20,7 +20,10 @@ import type {
 import type {
   CatalogDiagnostic,
   FlowPaneState,
+  GitHubVisibility,
   InitialWorkspaceState,
+  RepositoryCreateState,
+  RepositoryRemoteRetryRecord,
   RepositoryPaneState,
   RepositoryRow
 } from '@shared/workspace'
@@ -143,8 +146,7 @@ export function App(): ReactElement {
         return
       }
 
-      setWorkspace(nextWorkspace)
-      setFlowState(routeFlowState ?? nextWorkspace.flow)
+      applyWorkspace(nextWorkspace)
     } catch (error: unknown) {
       if (requestId !== selectionRequestIdRef.current) {
         return
@@ -157,6 +159,11 @@ export function App(): ReactElement {
         repositoryName: repository.name
       })
     }
+  }
+
+  function applyWorkspace(nextWorkspace: InitialWorkspaceState): void {
+    setWorkspace(nextWorkspace)
+    setFlowState(routeFlowState ?? nextWorkspace.flow)
   }
 
   async function handleConfigReload(): Promise<void> {
@@ -210,6 +217,7 @@ export function App(): ReactElement {
           repository={shellState.repository}
           onSelect={handleRepositorySelect}
           onConfigure={() => setRightPaneMode('config')}
+          onWorkspaceUpdate={applyWorkspace}
         />
       </section>
 
@@ -248,12 +256,14 @@ function RepositoryCatalogView({
   isLoading,
   repository,
   onSelect,
-  onConfigure
+  onConfigure,
+  onWorkspaceUpdate
 }: {
   isLoading: boolean
   repository: RepositoryPaneState
   onSelect: (repository: RepositoryRow) => Promise<void>
   onConfigure: () => void
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
 }): ReactElement {
   if (isLoading) {
     return (
@@ -281,6 +291,11 @@ function RepositoryCatalogView({
         </button>
       </div>
 
+      <RepositoryCreatePanel
+        create={repository.create}
+        onWorkspaceUpdate={onWorkspaceUpdate}
+      />
+
       {repository.repositories.length > 0 ? (
         <div className="repository-list" aria-label="Configured repositories">
           {repository.repositories.map((row) => (
@@ -304,6 +319,210 @@ function RepositoryCatalogView({
           ))}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function RepositoryCreatePanel({
+  create,
+  onWorkspaceUpdate
+}: {
+  create: RepositoryCreateState
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+}): ReactElement {
+  const [scanRootId, setScanRootId] = useState(create.scanRoots[0]?.id ?? '')
+  const [name, setName] = useState('')
+  const [githubEnabled, setGithubEnabled] = useState(false)
+  const [visibility, setVisibility] = useState<GitHubVisibility>('private')
+  const [localError, setLocalError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
+  const isAvailable = create.available && create.scanRoots.length > 0
+
+  useEffect(() => {
+    if (!create.scanRoots.some((scanRoot) => scanRoot.id === scanRootId)) {
+      setScanRootId(create.scanRoots[0]?.id ?? '')
+    }
+  }, [create.scanRoots, scanRootId])
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    const trimmedName = name.trim()
+    if (trimmedName === '') {
+      setLocalError('Repository name is required.')
+      return
+    }
+
+    setLocalError(null)
+    setIsSubmitting(true)
+    try {
+      const nextWorkspace = await window.grindstone.workspace.createRepository({
+        scanRootId,
+        name: trimmedName,
+        github: {
+          enabled: githubEnabled,
+          visibility
+        }
+      })
+      onWorkspaceUpdate(nextWorkspace)
+      if (nextWorkspace.repository.create.error === null) {
+        setName('')
+      }
+    } catch (error: unknown) {
+      setLocalError(getErrorMessage(error))
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  async function handleRetry(retry: RepositoryRemoteRetryRecord): Promise<void> {
+    setRetryingId(retry.id)
+    setLocalError(null)
+    try {
+      const nextWorkspace = await window.grindstone.workspace.retryRepositoryRemote({
+        retryId: retry.id
+      })
+      onWorkspaceUpdate(nextWorkspace)
+    } catch (error: unknown) {
+      setLocalError(getErrorMessage(error))
+    } finally {
+      setRetryingId(null)
+    }
+  }
+
+  const errorMessage = localError ?? create.error?.message ?? null
+
+  return (
+    <div className="repository-create">
+      <form
+        aria-label="Create repository"
+        className="repository-create-form"
+        onSubmit={(event) => void handleSubmit(event)}
+      >
+        <label className="field">
+          <span>Scan root</span>
+          <select
+            disabled={!isAvailable || isSubmitting}
+            onChange={(event) => setScanRootId(event.target.value)}
+            value={scanRootId}
+          >
+            {create.scanRoots.length === 0 ? (
+              <option value="">No scan roots configured</option>
+            ) : (
+              create.scanRoots.map((scanRoot) => (
+                <option
+                  key={scanRoot.id}
+                  value={scanRoot.id}
+                >
+                  {scanRoot.displayPath}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+
+        <label className="field">
+          <span>Repository name</span>
+          <input
+            disabled={!isAvailable || isSubmitting}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="new-repo"
+            type="text"
+            value={name}
+          />
+        </label>
+
+        <label className="checkbox-field">
+          <input
+            checked={githubEnabled}
+            disabled={!isAvailable || isSubmitting}
+            onChange={(event) => setGithubEnabled(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Create on GitHub</span>
+        </label>
+
+        <label className="field">
+          <span>GitHub visibility</span>
+          <select
+            disabled={!isAvailable || !githubEnabled || isSubmitting}
+            onChange={(event) => setVisibility(event.target.value as GitHubVisibility)}
+            value={visibility}
+          >
+            <option value="private">Private</option>
+            <option value="public">Public</option>
+          </select>
+        </label>
+
+        {errorMessage !== null ? (
+          <div
+            aria-label="Repository creation error"
+            className="create-error"
+            role="alert"
+          >
+            {errorMessage}
+          </div>
+        ) : null}
+
+        <button
+          className="primary-action"
+          disabled={!isAvailable || isSubmitting || name.trim() === ''}
+          type="submit"
+        >
+          <CirclePlus aria-hidden="true" size={16} />
+          <span>{isSubmitting ? 'Creating' : 'Create repository'}</span>
+        </button>
+      </form>
+
+      {create.remoteRetries.length > 0 ? (
+        <div
+          aria-label="Repository remote retries"
+          className="remote-retry-list"
+        >
+          {create.remoteRetries.map((retry) => (
+            <RemoteRetryRow
+              key={retry.id}
+              retry={retry}
+              isRetrying={retryingId === retry.id}
+              onRetry={handleRetry}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function RemoteRetryRow({
+  retry,
+  isRetrying,
+  onRetry
+}: {
+  retry: RepositoryRemoteRetryRecord
+  isRetrying: boolean
+  onRetry: (retry: RepositoryRemoteRetryRecord) => Promise<void>
+}): ReactElement {
+  const isSucceeded = retry.status === 'succeeded'
+
+  return (
+    <div className="remote-retry-row">
+      <GitBranch aria-hidden="true" size={16} />
+      <span className="remote-retry-copy">
+        <span className="remote-retry-name">{retry.githubRepositoryName}</span>
+        <span className="remote-retry-status">
+          {isSucceeded ? 'Remote setup succeeded' : retry.lastError}
+        </span>
+      </span>
+      <button
+        aria-label={`Retry remote for ${retry.githubRepositoryName}`}
+        className="icon-action"
+        disabled={isSucceeded || isRetrying}
+        onClick={() => void onRetry(retry)}
+        title={`Retry remote for ${retry.githubRepositoryName}`}
+        type="button"
+      >
+        <RotateCcw aria-hidden="true" size={15} />
+      </button>
     </div>
   )
 }

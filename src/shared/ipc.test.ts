@@ -27,6 +27,8 @@ describe('IPC contract', () => {
   it('pins the initial workspace channel name', () => {
     expect(ipcChannels.workspace.getInitialState).toBe('workspace:getInitialState')
     expect(ipcChannels.workspace.selectRepository).toBe('workspace:selectRepository')
+    expect(ipcChannels.workspace.createRepository).toBe('workspace:createRepository')
+    expect(ipcChannels.workspace.retryRepositoryRemote).toBe('workspace:retryRepositoryRemote')
     expect(ipcChannels.config.getEditableConfig).toBe('config:getEditableConfig')
     expect(ipcChannels.config.updateCommonConfig).toBe('config:updateCommonConfig')
   })
@@ -49,6 +51,36 @@ describe('IPC contract', () => {
     const response = defaultInitialWorkspaceState satisfies IpcResponseMap[SelectRepositoryChannel]
 
     expect(request.repositoryId).toBe('/repos/example')
+    expect(response).toEqual(defaultInitialWorkspaceState)
+    expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
+  })
+
+  it('maps workspace:createRepository to scan-root scoped create input and workspace response', () => {
+    type CreateRepositoryChannel = typeof ipcChannels.workspace.createRepository
+    const request = {
+      scanRootId: 'scan-root:0:abc123',
+      name: 'new-repo',
+      github: {
+        enabled: true,
+        visibility: 'private'
+      }
+    } satisfies IpcRequestMap[CreateRepositoryChannel]
+    const response = defaultInitialWorkspaceState satisfies IpcResponseMap[CreateRepositoryChannel]
+
+    expect(request.scanRootId).toBe('scan-root:0:abc123')
+    expect(request.github.visibility).toBe('private')
+    expect(response).toEqual(defaultInitialWorkspaceState)
+    expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
+  })
+
+  it('maps workspace:retryRepositoryRemote to a stable retry id request and workspace response', () => {
+    type RetryRepositoryRemoteChannel = typeof ipcChannels.workspace.retryRepositoryRemote
+    const request = {
+      retryId: 'remote-retry:/repos/new-repo'
+    } satisfies IpcRequestMap[RetryRepositoryRemoteChannel]
+    const response = defaultInitialWorkspaceState satisfies IpcResponseMap[RetryRepositoryRemoteChannel]
+
+    expect(request.retryId).toBe('remote-retry:/repos/new-repo')
     expect(response).toEqual(defaultInitialWorkspaceState)
     expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
   })
@@ -99,6 +131,25 @@ describe('IPC contract', () => {
     ).resolves.toEqual(defaultInitialWorkspaceState)
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.selectRepository, {
       repositoryId: '/repos/example'
+    })
+
+    await expect(
+      invokeTypedIpc(invoke, ipcChannels.workspace.createRepository, {
+        scanRootId: 'scan-root:0:abc123',
+        name: 'new-repo',
+        github: {
+          enabled: false,
+          visibility: 'public'
+        }
+      })
+    ).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.createRepository, {
+      scanRootId: 'scan-root:0:abc123',
+      name: 'new-repo',
+      github: {
+        enabled: false,
+        visibility: 'public'
+      }
     })
 
     invoke.mockResolvedValue(editableConfigState)

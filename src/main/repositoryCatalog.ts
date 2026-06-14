@@ -156,7 +156,7 @@ async function addRepository(
   })
 }
 
-async function isGitRepository(path: string): Promise<boolean> {
+export async function isGitRepository(path: string): Promise<boolean> {
   const pathStat = await safeStat(path)
   if (pathStat === undefined || !pathStat.isDirectory()) {
     return false
@@ -175,6 +175,10 @@ async function safeStat(path: string): Promise<Awaited<ReturnType<typeof stat>> 
 }
 
 function shouldPruneDirectory(name: string): boolean {
+  return isCatalogPrunedDirectoryName(name)
+}
+
+export function isCatalogPrunedDirectoryName(name: string): boolean {
   return PRUNED_DIRECTORY_NAMES.has(name)
 }
 

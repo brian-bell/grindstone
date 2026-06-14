@@ -289,6 +289,143 @@ textarea {
   gap: 8px;
 }
 
+.repository-create {
+  display: grid;
+  gap: 12px;
+}
+
+.repository-create-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d1d7d4;
+  border-radius: 7px;
+  background: #fbfaf6;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: #3f4946;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #c8d0cd;
+  border-radius: 6px;
+  background: #fffdf8;
+  color: #1f2524;
+  font-weight: 500;
+}
+
+.field input:disabled,
+.field select:disabled {
+  color: #777f7c;
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: #3f4946;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.primary-action,
+.icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #244c5a;
+  border-radius: 7px;
+  background: #244c5a;
+  color: #fffdf8;
+}
+
+.primary-action {
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+.primary-action:disabled,
+.icon-action:disabled {
+  border-color: #bdc8c5;
+  background: #e5ebe8;
+  color: #7b8582;
+  cursor: not-allowed;
+}
+
+.icon-action {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.create-error {
+  padding: 8px 10px;
+  border-left: 3px solid #a23535;
+  border-radius: 6px;
+  background: #fff0ee;
+  color: #7e2525;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.remote-retry-list {
+  display: grid;
+  gap: 8px;
+}
+
+.remote-retry-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid #d1d7d4;
+  border-radius: 7px;
+  background: #fffdf8;
+  color: #25302d;
+}
+
+.remote-retry-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.remote-retry-name {
+  overflow: hidden;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-retry-status {
+  overflow-wrap: anywhere;
+  color: #65706c;
+  font-size: 0.78rem;
+}
+
 .repository-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -7,7 +7,7 @@ import type {
   ConfigUpdateResponse,
   EditableConfigState
 } from '@shared/config'
-import type { InitialWorkspaceState } from '@shared/workspace'
+import type { CreateRepositoryRequest, InitialWorkspaceState } from '@shared/workspace'
 
 const defaultInitialState: InitialWorkspaceState = {
   repository: {
@@ -16,7 +16,13 @@ const defaultInitialState: InitialWorkspaceState = {
     description: 'Add scan_roots or repos to Grindstone config to populate this pane.',
     repositories: [],
     selectedRepositoryId: null,
-    diagnostics: []
+    diagnostics: [],
+    create: {
+      scanRoots: [],
+      available: false,
+      error: null,
+      remoteRetries: []
+    }
   },
   flow: {
     status: 'empty',
@@ -75,7 +81,20 @@ const catalogState: InitialWorkspaceState = {
         configuredPath: '/missing/repo',
         resolvedPath: '/missing/repo'
       }
-    ]
+    ],
+    create: {
+      scanRoots: [
+        {
+          id: 'scan-root:0:test',
+          configuredPath: '/repos',
+          resolvedPath: '/repos',
+          displayPath: '/repos'
+        }
+      ],
+      available: true,
+      error: null,
+      remoteRetries: []
+    }
   }
 }
 
@@ -240,14 +259,18 @@ const setWorkspaceApi = (
     ok: true,
     workspace: catalogState,
     config: editableConfigState
-  } satisfies ConfigUpdateResponse)
+  } satisfies ConfigUpdateResponse),
+  createRepository = vi.fn().mockResolvedValue(catalogState),
+  retryRepositoryRemote = vi.fn().mockResolvedValue(catalogState)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
     value: {
       workspace: {
         getInitialState,
-        selectRepository
+        selectRepository,
+        createRepository,
+        retryRepositoryRemote
       },
       config: {
         getEditableConfig,
@@ -440,6 +463,162 @@ describe('App shell', () => {
     expect(newFlow).toBeDisabled()
     expect(continueFlow).toBeDisabled()
     expect(within(contextPane).getByText(/Plans and sessions stay attached/i)).toBeInTheDocument()
+  })
+
+  it('disables repository creation when no scan roots are configured', async () => {
+    setWorkspaceApi(vi.fn().mockResolvedValue(defaultInitialState))
+
+    render(<App />)
+
+    const repositoryPane = await screen.findByRole('region', { name: /repository area/i })
+    expect(
+      within(repositoryPane).getByRole('button', { name: /create repository/i })
+    ).toBeDisabled()
+    expect(within(repositoryPane).getByLabelText(/repository name/i)).toBeDisabled()
+  })
+
+  it('submits repository creation through preload and updates the catalog', async () => {
+    const user = userEvent.setup()
+    const createdState: InitialWorkspaceState = {
+      ...catalogState,
+      repository: {
+        ...catalogState.repository,
+        repositories: [
+          ...catalogState.repository.repositories,
+          {
+            id: '/repos/new-repo',
+            name: 'new-repo',
+            path: '/repos/new-repo',
+            canonicalPath: '/repos/new-repo',
+            sources: ['scan_root']
+          }
+        ],
+        description: '2 repositories configured.'
+      }
+    }
+    const createRepository = vi.fn().mockResolvedValue(createdState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: catalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      createRepository
+    )
+
+    render(<App />)
+
+    await user.type(await screen.findByLabelText(/repository name/i), 'new-repo')
+    await user.click(screen.getByLabelText(/create on github/i))
+    await user.selectOptions(screen.getByLabelText(/github visibility/i), 'private')
+    await user.click(screen.getByRole('button', { name: /create repository/i }))
+
+    expect(createRepository).toHaveBeenCalledWith({
+      scanRootId: 'scan-root:0:test',
+      name: 'new-repo',
+      github: {
+        enabled: true,
+        visibility: 'private'
+      }
+    } satisfies CreateRepositoryRequest)
+    expect(await screen.findByRole('button', { name: /new-repo/i })).toBeInTheDocument()
+  })
+
+  it('shows create errors returned by the workspace handler', async () => {
+    const user = userEvent.setup()
+    const errorState: InitialWorkspaceState = {
+      ...catalogState,
+      repository: {
+        ...catalogState.repository,
+        create: {
+          ...catalogState.repository.create,
+          error: {
+            code: 'target_exists',
+            message: 'Repository already exists: /repos/new-repo'
+          }
+        }
+      }
+    }
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: catalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(errorState)
+    )
+
+    render(<App />)
+
+    await user.type(await screen.findByLabelText(/repository name/i), 'new-repo')
+    await user.click(screen.getByRole('button', { name: /create repository/i }))
+
+    expect(await screen.findByRole('alert', { name: /repository creation error/i }))
+      .toHaveTextContent('Repository already exists: /repos/new-repo')
+  })
+
+  it('renders partial GitHub failure retry controls and retries remote setup', async () => {
+    const user = userEvent.setup()
+    const retryState: InitialWorkspaceState = {
+      ...catalogState,
+      repository: {
+        ...catalogState.repository,
+        create: {
+          ...catalogState.repository.create,
+          remoteRetries: [
+            {
+              id: 'remote-retry:/repos/new-repo',
+              repositoryId: '/repos/new-repo',
+              repositoryPath: '/repos/new-repo',
+              githubRepositoryName: 'new-repo',
+              visibility: 'private',
+              status: 'remote_create_failed',
+              lastError: 'gh auth failed',
+              expectedOriginUrl: null
+            }
+          ]
+        }
+      }
+    }
+    const retrySucceededState: InitialWorkspaceState = {
+      ...retryState,
+      repository: {
+        ...retryState.repository,
+        create: {
+          ...retryState.repository.create,
+          remoteRetries: []
+        }
+      }
+    }
+    const retryRepositoryRemote = vi.fn().mockResolvedValue(retrySucceededState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(retryState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: catalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      retryRepositoryRemote
+    )
+
+    render(<App />)
+
+    expect(await screen.findByText('gh auth failed')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /retry remote for new-repo/i }))
+
+    expect(retryRepositoryRemote).toHaveBeenCalledWith({
+      retryId: 'remote-retry:/repos/new-repo'
+    })
+    expect(screen.queryByText('gh auth failed')).not.toBeInTheDocument()
   })
 
   it('opens the common config panel with existing editable values', async () => {
