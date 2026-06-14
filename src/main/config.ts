@@ -14,10 +14,12 @@ export type GrindstoneConfigResult = {
   configPath: string | undefined
   scanRoots: ConfiguredPath[]
   repos: ConfiguredPath[]
+  artifactRoot: ConfiguredPath
   diagnostics: CatalogDiagnostic[]
 }
 
 export type LoadGrindstoneConfigOptions = {
+  artifactRoot?: string
   configPath?: string
   cwd?: string
   env?: Partial<Pick<NodeJS.ProcessEnv, 'XDG_CONFIG_HOME'>>
@@ -25,9 +27,12 @@ export type LoadGrindstoneConfigOptions = {
 }
 
 type RawConfig = {
+  artifacts?: unknown
   scan_roots?: unknown
   repos?: unknown
 }
+
+const DEFAULT_ARTIFACT_ROOT = '~/.local/state/wtui/sessions/v1'
 
 export async function loadGrindstoneConfig(
   options: LoadGrindstoneConfigOptions = {}
@@ -35,7 +40,7 @@ export async function loadGrindstoneConfig(
   const configPath = await resolveConfigPath(options)
 
   if (configPath === undefined) {
-    return emptyConfig(undefined)
+    return emptyConfig(undefined, options)
   }
 
   let rawConfig: RawConfig
@@ -43,7 +48,7 @@ export async function loadGrindstoneConfig(
     rawConfig = parse(await readFile(configPath, 'utf8')) as RawConfig
   } catch (error) {
     return {
-      ...emptyConfig(configPath),
+      ...emptyConfig(configPath, options),
       ok: false,
       diagnostics: [
         {
@@ -60,7 +65,7 @@ export async function loadGrindstoneConfig(
   const diagnostics = validateConfig(rawConfig, configPath)
   if (diagnostics.length > 0) {
     return {
-      ...emptyConfig(configPath),
+      ...emptyConfig(configPath, options),
       ok: false,
       diagnostics
     }
@@ -68,6 +73,11 @@ export async function loadGrindstoneConfig(
 
   const configDir = dirname(configPath)
   const homeDirectory = options.homeDir ?? homedir()
+  const artifactRoot = resolveConfiguredPath(
+    options.artifactRoot ?? getConfiguredArtifactRoot(rawConfig) ?? DEFAULT_ARTIFACT_ROOT,
+    configDir,
+    homeDirectory
+  )
 
   return {
     ok: true,
@@ -78,6 +88,7 @@ export async function loadGrindstoneConfig(
     repos: getConfiguredPathValues(rawConfig.repos).map((path) =>
       resolveConfiguredPath(path, configDir, homeDirectory)
     ),
+    artifactRoot,
     diagnostics: []
   }
 }
@@ -135,7 +146,39 @@ function validateConfig(rawConfig: RawConfig, configPath: string): CatalogDiagno
     }
   }
 
+  if (rawConfig.artifacts !== undefined) {
+    if (!isPlainObject(rawConfig.artifacts)) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'config_type_error',
+        message: 'artifacts must be a table.',
+        configuredPath: 'artifacts',
+        resolvedPath: configPath
+      })
+    } else if (typeof rawConfig.artifacts.root !== 'string') {
+      diagnostics.push({
+        severity: 'error',
+        code: 'config_type_error',
+        message: 'artifacts.root must be a string.',
+        configuredPath: 'artifacts.root',
+        resolvedPath: configPath
+      })
+    }
+  }
+
   return diagnostics
+}
+
+function getConfiguredArtifactRoot(rawConfig: RawConfig): string | undefined {
+  if (!isPlainObject(rawConfig.artifacts)) {
+    return undefined
+  }
+
+  return typeof rawConfig.artifacts.root === 'string' ? rawConfig.artifacts.root : undefined
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function resolveConfiguredPath(
@@ -162,12 +205,23 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-function emptyConfig(configPath: string | undefined): GrindstoneConfigResult {
+function emptyConfig(
+  configPath: string | undefined,
+  options: LoadGrindstoneConfigOptions = {}
+): GrindstoneConfigResult {
+  const homeDirectory = options.homeDir ?? homedir()
+  const configDir = configPath === undefined ? options.cwd ?? process.cwd() : dirname(configPath)
+
   return {
     ok: true,
     configPath,
     scanRoots: [],
     repos: [],
+    artifactRoot: resolveConfiguredPath(
+      options.artifactRoot ?? DEFAULT_ARTIFACT_ROOT,
+      configDir,
+      homeDirectory
+    ),
     diagnostics: []
   }
 }

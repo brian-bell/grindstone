@@ -3,18 +3,23 @@ import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
+  type FlowPaneState,
   type InitialWorkspaceState,
-  type RepositoryPaneState
+  type RepositoryPaneState,
+  type RepositoryRow
 } from '@shared/workspace'
 import { loadGrindstoneConfig, type LoadGrindstoneConfigOptions } from './config'
+import { createFlowStore } from './flowStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 
 let currentWorkspaceState: InitialWorkspaceState | undefined
+let currentArtifactRoot: string | undefined
 
 export async function loadInitialWorkspaceState(
   options: LoadGrindstoneConfigOptions = {}
 ): Promise<InitialWorkspaceState> {
   const config = await loadGrindstoneConfig(options)
+  currentArtifactRoot = config.artifactRoot.resolvedPath
 
   if (!config.ok) {
     currentWorkspaceState = {
@@ -56,11 +61,7 @@ export async function selectRepository(request: {
       description: repository.path,
       selectedRepositoryId: repository.id
     },
-    flow: {
-      status: 'empty',
-      title: `${repository.name} Flow workspace`,
-      description: `Flow context is scoped to ${repository.path}.`
-    }
+    flow: await createFlowPaneState(repository, currentArtifactRoot)
   }
   return currentWorkspaceState
 }
@@ -101,10 +102,58 @@ function createRepositoryErrorState(diagnostics: CatalogDiagnostic[]): Repositor
   }
 }
 
+async function createFlowPaneState(
+  repository: RepositoryRow,
+  artifactRoot: string | undefined
+): Promise<Exclude<FlowPaneState, { status: 'loading' }>> {
+  try {
+    if (artifactRoot === undefined) {
+      throw new Error('Flow artifact root is not configured.')
+    }
+
+    const store = await createFlowStore({
+      artifactRoot
+    })
+    const flows = await store.listFlowsForRepository(repository)
+
+    if (flows.length === 0) {
+      return {
+        status: 'empty',
+        title: `No Flows for ${repository.name}`,
+        description: `No Flow records were found for ${repository.path}.`,
+        repositoryId: repository.id,
+        repositoryName: repository.name
+      }
+    }
+
+    return {
+      status: 'ready',
+      repositoryId: repository.id,
+      repositoryName: repository.name,
+      flows
+    }
+  } catch (error) {
+    return {
+      status: 'error',
+      message: getErrorMessage(error),
+      repositoryId: repository.id,
+      repositoryName: repository.name
+    }
+  }
+}
+
 function firstDiagnosticMessage(diagnostics: CatalogDiagnostic[]): string {
   return diagnostics[0]?.message ?? 'Unable to load repository catalog.'
 }
 
 function pluralize(label: string, count: number): string {
   return count === 1 ? label : `${label}s`
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return 'Unable to load Flow artifacts.'
 }

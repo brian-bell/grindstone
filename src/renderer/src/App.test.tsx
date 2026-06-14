@@ -83,9 +83,52 @@ const selectedCatalogState: InitialWorkspaceState = {
     selectedRepositoryId: '/repos/grindstone'
   },
   flow: {
+    status: 'ready',
+    repositoryId: '/repos/grindstone',
+    repositoryName: 'grindstone',
+    flows: [
+      {
+        id: 'artifact-backed-flow',
+        title: 'Artifact backed Flow',
+        status: 'active',
+        repositoryId: '/repos/grindstone',
+        repositoryPath: '/repos/grindstone',
+        branch: 'flow/list',
+        planId: 'plan-flow-list',
+        createdAt: '2026-06-10T10:00:00.000Z',
+        updatedAt: '2026-06-11T12:30:00.000Z',
+        phases: [
+          {
+            id: 'phase-render',
+            title: 'Render list',
+            status: 'done',
+            order: 1,
+            summary: 'Rows are visible'
+          }
+        ]
+      }
+    ]
+  }
+}
+
+const emptySelectedCatalogState: InitialWorkspaceState = {
+  ...selectedCatalogState,
+  flow: {
     status: 'empty',
-    title: 'grindstone Flow workspace',
-    description: 'Flow context is scoped to /repos/grindstone.'
+    title: 'No Flows for grindstone',
+    description: 'No Flow records were found for /repos/grindstone.',
+    repositoryId: '/repos/grindstone',
+    repositoryName: 'grindstone'
+  }
+}
+
+const errorSelectedCatalogState: InitialWorkspaceState = {
+  ...selectedCatalogState,
+  flow: {
+    status: 'error',
+    message: 'Flow artifact store unavailable: permission denied',
+    repositoryId: '/repos/grindstone',
+    repositoryName: 'grindstone'
   }
 }
 
@@ -144,7 +187,7 @@ describe('App shell', () => {
     )
   })
 
-  it('selects a repository through preload and scopes the Flow workspace', async () => {
+  it('selects a repository through preload and renders its Flow rows', async () => {
     const user = userEvent.setup()
     const selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
     setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
@@ -158,12 +201,56 @@ describe('App shell', () => {
       'aria-pressed',
       'true'
     )
-    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
-      'grindstone Flow workspace'
+    const flowPane = screen.getByRole('main', { name: /flow workspace/i })
+    expect(flowPane).toHaveTextContent('Artifact backed Flow')
+    expect(flowPane).toHaveTextContent('active')
+    expect(flowPane).toHaveTextContent('Updated 2026-06-11T12:30:00.000Z')
+    expect(flowPane).toHaveTextContent('flow/list')
+    expect(flowPane).toHaveTextContent('plan-flow-list')
+    expect(flowPane).toHaveTextContent('Render list')
+  })
+
+  it('shows repo-scoped loading while repository selection is pending', async () => {
+    const user = userEvent.setup()
+    let resolveSelection: (state: InitialWorkspaceState) => void = () => undefined
+    const selectRepository = vi.fn(
+      () => new Promise<InitialWorkspaceState>((resolve) => {
+        resolveSelection = resolve
+      })
     )
-    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
-      'Flow context is scoped to /repos/grindstone.'
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /grindstone/i }))
+
+    expect(screen.getByRole('status', { name: /flow workspace loading/i })).toHaveTextContent(
+      'Loading grindstone Flows'
     )
+
+    resolveSelection(selectedCatalogState)
+    expect(await screen.findByText('Artifact backed Flow')).toBeInTheDocument()
+  })
+
+  it('renders selected repository empty and artifact error Flow states', async () => {
+    const user = userEvent.setup()
+    const selectRepository = vi
+      .fn()
+      .mockResolvedValueOnce(emptySelectedCatalogState)
+      .mockResolvedValueOnce(errorSelectedCatalogState)
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /grindstone/i }))
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent(
+      'No Flows for grindstone'
+    )
+
+    await user.click(screen.getByRole('button', { name: /grindstone/i }))
+    expect(
+      await screen.findByRole('alert', { name: /flow workspace error/i })
+    ).toHaveTextContent('Flow artifact store unavailable')
   })
 
   it('shows a Flow-only loading state while the initial workspace state is pending', () => {

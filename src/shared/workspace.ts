@@ -32,10 +32,38 @@ export type RepositoryPaneState = {
   diagnostics: CatalogDiagnostic[]
 }
 
+export type FlowPhaseSummary = {
+  id: string
+  title: string
+  status: string
+  order: number
+  kind?: string
+  outcome?: string
+  summary?: string
+  updatedAt?: string
+}
+
+export type FlowListRow = {
+  id: string
+  title: string
+  status: string
+  repositoryId: string
+  repositoryPath: string
+  branch?: string
+  worktreePath?: string
+  commit?: string
+  planId?: string
+  planPath?: string
+  createdAt: string
+  updatedAt: string
+  phases?: FlowPhaseSummary[]
+}
+
 export type FlowPaneState =
-  | { status: 'loading' }
-  | { status: 'empty'; title: string; description: string }
-  | { status: 'error'; message: string }
+  | { status: 'loading'; repositoryId?: string; repositoryName?: string }
+  | { status: 'empty'; title: string; description: string; repositoryId?: string; repositoryName?: string }
+  | { status: 'error'; message: string; repositoryId?: string; repositoryName?: string }
+  | { status: 'ready'; repositoryId: string; repositoryName: string; flows: FlowListRow[] }
 
 export type ContextHint = {
   id: string
@@ -52,7 +80,7 @@ export type ShortcutAffordance = {
 
 export type InitialWorkspaceState = {
   repository: RepositoryPaneState
-  flow: Exclude<FlowPaneState, { status: 'loading' | 'error' }>
+  flow: Exclude<FlowPaneState, { status: 'loading' }>
   hints: ContextHint[]
   shortcuts: ShortcutAffordance[]
 }
