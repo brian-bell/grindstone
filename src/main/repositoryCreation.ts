@@ -8,7 +8,7 @@ import type {
   RepositoryRow,
   RepositoryScanRoot
 } from '@shared/workspace'
-import { isCatalogPrunedDirectoryName } from './repositoryCatalog'
+import { isCatalogPrunedDirectoryName, isGitRepository } from './repositoryCatalog'
 
 export type CommandResult = {
   stdout: string
@@ -87,6 +87,13 @@ export async function createRepository({
     canonicalRoot = await realpath(scanRoot.resolvedPath)
   } catch {
     return createFailure('scan_root_unavailable', `Scan root is unavailable: ${scanRoot.resolvedPath}`)
+  }
+
+  if (await isGitRepository(canonicalRoot)) {
+    return createFailure(
+      'validation_error',
+      'Cannot create repositories inside a scan root that is already a Git repository.'
+    )
   }
 
   const targetPath = resolve(canonicalRoot, request.name)

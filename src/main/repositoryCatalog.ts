@@ -156,7 +156,7 @@ async function addRepository(
   })
 }
 
-async function isGitRepository(path: string): Promise<boolean> {
+export async function isGitRepository(path: string): Promise<boolean> {
   const pathStat = await safeStat(path)
   if (pathStat === undefined || !pathStat.isDirectory()) {
     return false

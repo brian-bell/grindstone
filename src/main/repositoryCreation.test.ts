@@ -116,6 +116,29 @@ describe('repository creation service', () => {
     expect(runCommand).not.toHaveBeenCalled()
   })
 
+  it('rejects scan roots that are already Git repositories before filesystem mutation', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, '.git'))
+    const runCommand = vi.fn<CommandRunner>()
+
+    await expect(
+      createRepository({
+        scanRoots: [scanRoot(root)],
+        request: request(),
+        runCommand
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'Cannot create repositories inside a scan root that is already a Git repository.'
+      }
+    })
+
+    expect(runCommand).not.toHaveBeenCalled()
+    expect(await readdir(root)).toEqual(['.git'])
+  })
+
   it('rejects malformed create requests before filesystem mutation', async () => {
     const root = await makeTempDir()
     const runCommand = vi.fn<CommandRunner>()
