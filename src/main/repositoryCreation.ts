@@ -8,6 +8,7 @@ import type {
   RepositoryRow,
   RepositoryScanRoot
 } from '@shared/workspace'
+import { isCatalogPrunedDirectoryName } from './repositoryCatalog'
 
 export type CommandResult = {
   stdout: string
@@ -328,6 +329,10 @@ function validateRepositoryName(name: string): string | null {
 
   if (name === '.' || name === '..') {
     return 'Repository name cannot be . or ...'
+  }
+
+  if (isCatalogPrunedDirectoryName(name)) {
+    return 'Repository name is reserved by the catalog scanner.'
   }
 
   if (isAbsolute(name) || name.includes('/') || name.includes('\\') || name.includes(sep)) {

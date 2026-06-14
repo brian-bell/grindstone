@@ -71,6 +71,31 @@ describe('repository creation service', () => {
     }
   )
 
+  it.each(['.git', 'node_modules', 'dist', 'build', 'coverage', 'grindstone-worktrees'])(
+    'rejects catalog-reserved repository name %j before filesystem mutation',
+    async (name) => {
+      const root = await makeTempDir()
+      const runCommand = vi.fn<CommandRunner>()
+
+      await expect(
+        createRepository({
+          scanRoots: [scanRoot(root)],
+          request: request({ name }),
+          runCommand
+        })
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'validation_error',
+          message: 'Repository name is reserved by the catalog scanner.'
+        }
+      })
+
+      expect(runCommand).not.toHaveBeenCalled()
+      expect(await readdir(root)).toEqual([])
+    }
+  )
+
   it('rejects forged scan-root ids instead of accepting renderer paths', async () => {
     const root = await makeTempDir()
     const runCommand = vi.fn<CommandRunner>()

@@ -175,6 +175,10 @@ async function safeStat(path: string): Promise<Awaited<ReturnType<typeof stat>> 
 }
 
 function shouldPruneDirectory(name: string): boolean {
+  return isCatalogPrunedDirectoryName(name)
+}
+
+export function isCatalogPrunedDirectoryName(name: string): boolean {
   return PRUNED_DIRECTORY_NAMES.has(name)
 }
 
