@@ -144,11 +144,13 @@ export async function createRepository({
         retry: null
       }
     } catch (error) {
-      const expectedOriginUrl = await getGitHubRepositoryUrl({
-        name: request.name,
-        repositoryPath: canonicalTarget,
-        runCommand
-      })
+      const expectedOriginUrl = isGitHubOriginSetupFailure(error)
+        ? await getGitHubRepositoryUrl({
+            name: request.name,
+            repositoryPath: canonicalTarget,
+            runCommand
+          })
+        : null
 
       return {
         ok: true,
@@ -224,11 +226,13 @@ export async function retryRepositoryRemote({
       }
     }
   } catch (error) {
-    const expectedOriginUrl = await getGitHubRepositoryUrl({
-      name: retry.githubRepositoryName,
-      repositoryPath: retry.repositoryPath,
-      runCommand
-    })
+    const expectedOriginUrl = isGitHubOriginSetupFailure(error)
+      ? await getGitHubRepositoryUrl({
+          name: retry.githubRepositoryName,
+          repositoryPath: retry.repositoryPath,
+          runCommand
+        })
+      : null
     if (expectedOriginUrl !== null) {
       return addVerifiedOrigin(
         {
@@ -379,6 +383,10 @@ async function runGitHubCreate({
     ['repo', 'create', name, '--source', repositoryPath, '--remote', 'origin', `--${visibility}`],
     { cwd: repositoryPath }
   )
+}
+
+function isGitHubOriginSetupFailure(error: unknown): boolean {
+  return /\borigin\b/i.test(getErrorMessage(error))
 }
 
 async function getGitHubRepositoryUrl({

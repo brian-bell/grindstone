@@ -255,6 +255,53 @@ describe('repository creation service', () => {
     })
   })
 
+  it('does not reuse an existing GitHub repository after create reports a name conflict', async () => {
+    const root = await makeTempDir()
+    const commands: string[] = []
+    const runCommand: CommandRunner = vi.fn(async (command, args, options) => {
+      commands.push(`${command} ${args.join(' ')} cwd=${options.cwd}`)
+      if (command === 'gh' && args.slice(0, 3).join(' ') === 'repo create new-repo') {
+        throw new CommandRunError(
+          'gh',
+          ['repo', 'create'],
+          'GraphQL: Name already exists on this account'
+        )
+      }
+
+      if (command === 'gh' && args.slice(0, 3).join(' ') === 'repo view new-repo') {
+        return { stdout: 'https://github.com/example/new-repo\n' }
+      }
+
+      return { stdout: '' }
+    })
+
+    const result = await createRepository({
+      scanRoots: [scanRoot(root)],
+      request: request({
+        github: {
+          enabled: true,
+          visibility: 'private'
+        }
+      }),
+      runCommand
+    })
+
+    const targetPath = join(root, 'new-repo')
+    const canonicalTargetPath = await realpath(targetPath)
+    expect(result).toMatchObject({
+      ok: true,
+      retry: {
+        status: 'remote_create_failed',
+        lastError: 'GraphQL: Name already exists on this account',
+        expectedOriginUrl: null
+      }
+    })
+    expect(commands).toEqual([
+      `git init cwd=${canonicalTargetPath}`,
+      `gh repo create new-repo --source ${canonicalTargetPath} --remote origin --private cwd=${canonicalTargetPath}`
+    ])
+  })
+
   it('removes the target directory when git init fails after mkdir', async () => {
     const root = await makeTempDir()
     const runCommand: CommandRunner = vi.fn(async () => {
@@ -382,6 +429,61 @@ describe('repository creation service', () => {
     expect(commands).toEqual([
       `git remote get-url origin cwd=${repositoryPath}`,
       `git remote add origin https://github.com/example/new-repo cwd=${repositoryPath}`
+    ])
+  })
+
+  it('does not add an existing GitHub repository as origin after retry create reports a name conflict', async () => {
+    const root = await makeTempDir()
+    const repositoryPath = join(root, 'new-repo')
+    await mkdir(repositoryPath)
+    const commands: string[] = []
+    const runCommand: CommandRunner = vi.fn(async (command, args, options) => {
+      commands.push(`${command} ${args.join(' ')} cwd=${options.cwd}`)
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+        throw new CommandRunError('git', args, 'No such remote')
+      }
+
+      if (command === 'gh' && args.slice(0, 3).join(' ') === 'repo create new-repo') {
+        throw new CommandRunError(
+          'gh',
+          ['repo', 'create'],
+          'GraphQL: Name already exists on this account'
+        )
+      }
+
+      if (command === 'gh' && args.slice(0, 3).join(' ') === 'repo view new-repo') {
+        return { stdout: 'https://github.com/example/new-repo\n' }
+      }
+
+      return { stdout: '' }
+    })
+
+    await expect(
+      retryRepositoryRemote({
+        retry: {
+          id: `remote-retry:${repositoryPath}`,
+          repositoryId: repositoryPath,
+          repositoryPath,
+          githubRepositoryName: 'new-repo',
+          visibility: 'private',
+          status: 'remote_create_failed',
+          lastError: 'authentication required',
+          expectedOriginUrl: null
+        },
+        runCommand
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      retry: {
+        status: 'remote_create_failed',
+        lastError: 'GraphQL: Name already exists on this account',
+        expectedOriginUrl: null
+      }
+    })
+
+    expect(commands).toEqual([
+      `git remote get-url origin cwd=${repositoryPath}`,
+      `gh repo create new-repo --source ${repositoryPath} --remote origin --private cwd=${repositoryPath}`
     ])
   })
 
