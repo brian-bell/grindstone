@@ -1,24 +1,39 @@
+import type {
+  CommonConfigUpdateInput,
+  ConfigUpdateResponse,
+  EditableConfigState
+} from './config'
 import type { InitialWorkspaceState } from './workspace'
 
 export const ipcChannels = {
   workspace: {
     getInitialState: 'workspace:getInitialState',
     selectRepository: 'workspace:selectRepository'
+  },
+  config: {
+    getEditableConfig: 'config:getEditableConfig',
+    updateCommonConfig: 'config:updateCommonConfig'
   }
 } as const
 
-export type IpcChannel = (typeof ipcChannels.workspace)[keyof typeof ipcChannels.workspace]
+export type IpcChannel =
+  | (typeof ipcChannels.workspace)[keyof typeof ipcChannels.workspace]
+  | (typeof ipcChannels.config)[keyof typeof ipcChannels.config]
 
 export type IpcRequestMap = {
   'workspace:getInitialState': undefined
   'workspace:selectRepository': {
     repositoryId: string
   }
+  'config:getEditableConfig': undefined
+  'config:updateCommonConfig': CommonConfigUpdateInput
 }
 
 export type IpcResponseMap = {
   'workspace:getInitialState': InitialWorkspaceState
   'workspace:selectRepository': InitialWorkspaceState
+  'config:getEditableConfig': EditableConfigState
+  'config:updateCommonConfig': ConfigUpdateResponse
 }
 
 export type NormalizedIpcError = {
