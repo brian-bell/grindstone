@@ -14,7 +14,7 @@ import {
   selectRepository,
   updateCommonConfig
 } from './workspaceHandlers'
-import type { FlowStore } from './flowStore'
+import { createFlowStore, type FlowStore } from './flowStore'
 import type { FlowCommandRunner } from './flowCreation'
 import { CommandRunError, type CommandRunner } from './repositoryCreation'
 
@@ -478,7 +478,7 @@ describe('workspace main handlers', () => {
         instructions: 'Build the end-to-end path.',
         baseRef: 'main'
       },
-      { runCommand }
+      { runCommand, prepareLaunch: async () => undefined }
     )).resolves.toMatchObject({
       flow: {
         status: 'ready',
@@ -512,6 +512,105 @@ describe('workspace main handlers', () => {
         `${basename(canonicalRepoPath)}-flow-ship-workspace-creation`
       ), 'flow/ship-workspace-creation']]
     ])
+  })
+
+  it('starts a Plan terminal after Flow creation succeeds', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-flow-terminal')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\ndefault_agent = "claude"\n[artifacts]\nroot = "${artifactRoot}"\n`)
+    const runCommand: FlowCommandRunner = async (_command, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
+        throw new Error('branch not found')
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return { stdout: 'abc123\n' }
+      }
+      return { stdout: '' }
+    }
+    const launched: FlowListRow[] = []
+    const terminalManager = {
+      async launchTerminal(request: { flow: FlowListRow }) {
+        const flow = request.flow
+        launched.push(flow)
+        const store = await createFlowStore({ artifactRoot })
+        const terminal = {
+          terminalId: 'terminal-plan',
+          launchId: 'launch-plan',
+          provider: 'claude' as const,
+          mode: 'interactive' as const,
+          flowId: flow.id,
+          phaseId: 'plan',
+          status: 'running' as const,
+          command: 'claude',
+          argv: ['Build launch integration.'],
+          cwd: flow.worktreePath ?? '',
+          startedAt: '2026-06-14T12:10:00.000Z',
+          recentOutput: 'Plan terminal ready.'
+        }
+        await store.updateFlowRecord(flow.id, {
+          terminals: [terminal],
+          updatedAt: '2026-06-14T12:10:00.000Z'
+        })
+        return terminal
+      },
+      async listTerminals() {
+        return []
+      },
+      async writeInput() {
+        throw new Error('not expected')
+      },
+      async resize() {
+        throw new Error('not expected')
+      },
+      async terminate() {
+        throw new Error('not expected')
+      },
+      async dismiss() {
+        throw new Error('not expected')
+      }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const result = await createFlowInWorkspace(
+      {
+        title: 'Launch integration',
+        instructions: 'Build launch integration.'
+      },
+      { runCommand, terminalManager }
+    )
+
+    expect(launched).toEqual([
+      expect.objectContaining({
+        id: 'launch-integration',
+        start: expect.objectContaining({
+          commit: 'abc123'
+        })
+      })
+    ])
+    expect(result.flow).toMatchObject({
+      status: 'ready',
+      flows: [
+        {
+          id: 'launch-integration',
+          status: 'active',
+          terminals: [
+            {
+              terminalId: 'terminal-plan',
+              provider: 'claude',
+              phaseId: 'plan',
+              status: 'running',
+              recentOutput: 'Plan terminal ready.'
+            }
+          ]
+        }
+      ]
+    })
   })
 
   it('persists bootstrap failures as selected repository Flow rows', async () => {
@@ -736,6 +835,7 @@ describe('workspace main handlers', () => {
             configuredPath: artifactRoot,
             resolvedPath: artifactRoot
           },
+          defaultAgent: null,
           bootstrapHooks: [],
           diagnostics: []
         }
@@ -815,6 +915,7 @@ describe('workspace main handlers', () => {
             configuredPath: betaArtifactRoot,
             resolvedPath: betaArtifactRoot
           },
+          defaultAgent: null,
           bootstrapHooks: [],
           diagnostics: []
         }

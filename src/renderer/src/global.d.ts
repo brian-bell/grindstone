@@ -2,8 +2,14 @@ import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState
 import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
+  FlowTerminalSummary,
   InitialWorkspaceState,
-  RetryRepositoryRemoteRequest
+  RetryRepositoryRemoteRequest,
+  TerminalActionRequest,
+  TerminalEvent,
+  TerminalInputRequest,
+  TerminalListRequest,
+  TerminalResizeRequest
 } from '@shared/workspace'
 
 declare global {
@@ -17,6 +23,12 @@ declare global {
         retryRepositoryRemote: (
           request: RetryRepositoryRemoteRequest
         ) => Promise<InitialWorkspaceState>
+        listTerminals: (request: TerminalListRequest) => Promise<FlowTerminalSummary[]>
+        writeTerminalInput: (request: TerminalInputRequest) => Promise<FlowTerminalSummary>
+        resizeTerminal: (request: TerminalResizeRequest) => Promise<FlowTerminalSummary>
+        terminateTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
+        dismissTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
+        onTerminalEvent: (handler: (event: TerminalEvent) => void) => () => void
       }
       config: {
         getEditableConfig: () => Promise<EditableConfigState>

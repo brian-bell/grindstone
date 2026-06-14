@@ -395,6 +395,132 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.flow-terminal-row td {
+  padding: 0 10px 12px;
+  background: #f7faf9;
+  white-space: normal;
+}
+
+.terminal-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d7dfdc;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.terminal-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  border: 1px solid #ccd6d1;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #fffdf8;
+  color: #25302d;
+  font: inherit;
+  cursor: pointer;
+}
+
+.terminal-tab[aria-selected='true'] {
+  border-color: #2f6fed;
+  box-shadow: inset 0 -2px 0 #2f6fed;
+}
+
+.terminal-status {
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
+.terminal-status-running {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.terminal-status-failed,
+.terminal-status-terminated {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.terminal-status-exited {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.terminal-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-command,
+.terminal-log-marker,
+.terminal-empty {
+  min-width: 0;
+  color: #5f6763;
+  font-size: 0.76rem;
+}
+
+.terminal-command {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-output-wrap {
+  position: relative;
+  min-height: 220px;
+  max-height: 320px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #111318;
+}
+
+.terminal-xterm {
+  position: absolute;
+  inset: 0;
+}
+
+.terminal-output {
+  position: relative;
+  z-index: 1;
+  min-height: 220px;
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  color: #e6edf3;
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.terminal-input-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.terminal-input-form input {
+  min-width: 0;
+}
+
 .repository-list {
   display: grid;
   gap: 8px;

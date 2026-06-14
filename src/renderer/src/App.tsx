@@ -1,5 +1,6 @@
 import {
   CirclePlus,
+  Maximize2,
   GitBranch,
   Info,
   Plus,
@@ -7,6 +8,7 @@ import {
   Save,
   Settings,
   Sparkles,
+  Square,
   Trash2,
   X
 } from 'lucide-react'
@@ -30,6 +32,7 @@ import type {
   CatalogDiagnostic,
   CreateFlowRequest,
   FlowListRow,
+  FlowTerminalSummary,
   FlowPaneState,
   GitHubVisibility,
   InitialWorkspaceState,
@@ -133,6 +136,58 @@ export function App(): ReactElement {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  useEffect(() => {
+    return window.grindstone.workspace.onTerminalEvent((event) => {
+      const updateFlow = (flow: FlowPaneState): FlowPaneState => {
+        if (flow.status !== 'ready' || flow.repositoryId !== event.repositoryId) {
+          return flow
+        }
+
+        return {
+          ...flow,
+          flows: flow.flows.map((row) => {
+            if (row.id !== event.flowId) {
+              return row
+            }
+
+            const terminals = row.terminals ?? []
+            if (event.type === 'output') {
+              return {
+                ...row,
+                terminals: terminals.map((terminal) =>
+                  terminal.terminalId === event.terminalId
+                    ? {
+                        ...terminal,
+                        recentOutput: `${terminal.recentOutput ?? ''}${event.data}`
+                      }
+                    : terminal
+                )
+              }
+            }
+
+            return {
+              ...row,
+              terminals: [
+                ...terminals.filter((terminal) =>
+                  terminal.terminalId !== event.terminal.terminalId
+                ),
+                event.terminal
+              ]
+            }
+          })
+        }
+      }
+
+      setFlowState((current) => updateFlow(current))
+      setWorkspace((current) => current === null
+        ? current
+        : {
+            ...current,
+            flow: updateFlow(current.flow) as InitialWorkspaceState['flow']
+          })
+    })
   }, [])
 
   const shellState = workspace ?? defaultInitialWorkspaceState
@@ -1243,11 +1298,236 @@ function FlowRecordTable({
                     </td>
                   </tr>
                 ) : null}
+                {flow.terminals !== undefined && flow.terminals.length > 0 ? (
+                  <tr className="flow-terminal-row">
+                    <td colSpan={7}>
+                      <FlowTerminalTabs
+                        flow={flow}
+                      />
+                    </td>
+                  </tr>
+                ) : null}
               </Fragment>
             )
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function FlowTerminalTabs({ flow }: { flow: FlowListRow }): ReactElement {
+  const visibleTerminals = (flow.terminals ?? []).filter((terminal) => terminal.status !== 'dismissed')
+  const [activeTerminalId, setActiveTerminalId] = useState(visibleTerminals[0]?.terminalId ?? '')
+  const [input, setInput] = useState('')
+  const activeTerminal = visibleTerminals.find((terminal) =>
+    terminal.terminalId === activeTerminalId
+  ) ?? visibleTerminals[0]
+
+  useEffect(() => {
+    if (!visibleTerminals.some((terminal) => terminal.terminalId === activeTerminalId)) {
+      setActiveTerminalId(visibleTerminals[0]?.terminalId ?? '')
+    }
+  }, [activeTerminalId, visibleTerminals])
+
+  if (activeTerminal === undefined) {
+    return (
+      <div className="terminal-panel" aria-label={`${flow.title} terminal sessions`}>
+        <span className="terminal-empty">No visible terminal sessions</span>
+      </div>
+    )
+  }
+
+  const terminalRequest = {
+    repositoryId: flow.repositoryId,
+    flowId: flow.id,
+    terminalId: activeTerminal.terminalId
+  }
+  const canWrite = activeTerminal.status === 'running'
+  const canDismiss = ['exited', 'terminated', 'failed'].includes(activeTerminal.status)
+
+  async function sendInput(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (!canWrite || input === '') {
+      return
+    }
+
+    await window.grindstone.workspace.writeTerminalInput({
+      ...terminalRequest,
+      data: input
+    })
+    setInput('')
+  }
+
+  async function requestResize(): Promise<void> {
+    if (!canWrite) {
+      return
+    }
+
+    await window.grindstone.workspace.resizeTerminal({
+      ...terminalRequest,
+      columns: 100,
+      rows: 30
+    })
+  }
+
+  async function requestTerminate(): Promise<void> {
+    if (!canWrite || !window.confirm(`Terminate ${activeTerminal.provider} terminal?`)) {
+      return
+    }
+
+    await window.grindstone.workspace.terminateTerminal(terminalRequest)
+  }
+
+  async function requestDismiss(): Promise<void> {
+    if (!canDismiss) {
+      return
+    }
+
+    await window.grindstone.workspace.dismissTerminal(terminalRequest)
+  }
+
+  return (
+    <section className="terminal-panel" aria-label={`${flow.title} terminal sessions`}>
+      <div className="terminal-tabs" role="tablist" aria-label={`${flow.title} terminals`}>
+        {visibleTerminals.map((terminal) => (
+          <button
+            aria-label={`${terminal.phaseId} ${terminal.status}`}
+            aria-selected={terminal.terminalId === activeTerminal.terminalId}
+            className="terminal-tab"
+            key={terminal.terminalId}
+            onClick={() => setActiveTerminalId(terminal.terminalId)}
+            role="tab"
+            type="button"
+          >
+            <span>{terminal.phaseId}</span>
+            <span className={`terminal-status terminal-status-${terminal.status}`}>
+              {terminal.status}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="terminal-toolbar">
+        <span className="terminal-command">
+          {activeTerminal.provider} {activeTerminal.argv.join(' ')}
+        </span>
+        {activeTerminal.logPath === undefined ? null : (
+          <span className="terminal-log-marker">Fallback log ready</span>
+        )}
+        <button
+          aria-label={`Resize ${activeTerminal.phaseId} terminal`}
+          className="icon-action"
+          disabled={!canWrite}
+          onClick={() => void requestResize()}
+          title={`Resize ${activeTerminal.phaseId} terminal`}
+          type="button"
+        >
+          <Maximize2 aria-hidden="true" size={14} />
+        </button>
+        <button
+          aria-label={`Terminate ${activeTerminal.phaseId} terminal`}
+          className="icon-action"
+          disabled={!canWrite}
+          onClick={() => void requestTerminate()}
+          title={`Terminate ${activeTerminal.phaseId} terminal`}
+          type="button"
+        >
+          <Square aria-hidden="true" size={14} />
+        </button>
+        <button
+          aria-label={`Dismiss ${activeTerminal.phaseId} terminal`}
+          className="icon-action"
+          disabled={!canDismiss}
+          onClick={() => void requestDismiss()}
+          title={`Dismiss ${activeTerminal.phaseId} terminal`}
+          type="button"
+        >
+          <X aria-hidden="true" size={14} />
+        </button>
+      </div>
+
+      <TerminalOutput terminal={activeTerminal} />
+
+      <form
+        aria-label={`${activeTerminal.phaseId} terminal input`}
+        className="terminal-input-form"
+        onSubmit={(event) => void sendInput(event)}
+      >
+        <input
+          aria-label={`${activeTerminal.phaseId} terminal input text`}
+          disabled={!canWrite}
+          onChange={(event) => setInput(event.currentTarget.value)}
+          value={input}
+        />
+        <button className="secondary-button" disabled={!canWrite || input === ''} type="submit">
+          <span>Send</span>
+        </button>
+      </form>
+    </section>
+  )
+}
+
+function TerminalOutput({ terminal }: { terminal: FlowTerminalSummary }): ReactElement {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const output = terminal.recentOutput ?? ''
+
+  useEffect(() => {
+    let disposed = false
+    let disposeTerminal: (() => void) | undefined
+
+    async function mountXterm(): Promise<void> {
+      if (
+        containerRef.current === null ||
+        (typeof navigator !== 'undefined' && navigator.userAgent.includes('jsdom'))
+      ) {
+        return
+      }
+
+      try {
+        const [{ Terminal }, { FitAddon }] = await Promise.all([
+          import('@xterm/xterm'),
+          import('@xterm/addon-fit')
+        ])
+        if (disposed || containerRef.current === null) {
+          return
+        }
+
+        const xterm = new Terminal({
+          convertEol: true,
+          disableStdin: true,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          fontSize: 12,
+          theme: {
+            background: '#111318',
+            foreground: '#e6edf3'
+          }
+        })
+        const fit = new FitAddon()
+        xterm.loadAddon(fit)
+        xterm.open(containerRef.current)
+        xterm.write(output)
+        fit.fit()
+        disposeTerminal = () => xterm.dispose()
+      } catch {
+        // The text fallback below remains authoritative for tests and accessibility.
+      }
+    }
+
+    void mountXterm()
+
+    return () => {
+      disposed = true
+      disposeTerminal?.()
+    }
+  }, [output])
+
+  return (
+    <div className="terminal-output-wrap">
+      <div ref={containerRef} className="terminal-xterm" aria-hidden="true" />
+      <pre className="terminal-output" aria-label={`${terminal.phaseId} terminal output`}>
+        {output === '' ? 'Terminal is waiting for output.' : output}
+      </pre>
     </div>
   )
 }

@@ -8,7 +8,11 @@ import {
   type IpcResponseMap
 } from './ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from './config'
-import { defaultInitialWorkspaceState, type InitialWorkspaceState } from './workspace'
+import {
+  defaultInitialWorkspaceState,
+  type FlowTerminalSummary,
+  type InitialWorkspaceState
+} from './workspace'
 
 const editableConfigState: EditableConfigState = {
   configPath: '/configs/grindstone.toml',
@@ -30,6 +34,12 @@ describe('IPC contract', () => {
     expect(ipcChannels.workspace.createFlow).toBe('workspace:createFlow')
     expect(ipcChannels.workspace.createRepository).toBe('workspace:createRepository')
     expect(ipcChannels.workspace.retryRepositoryRemote).toBe('workspace:retryRepositoryRemote')
+    expect(ipcChannels.workspace.listTerminals).toBe('workspace:listTerminals')
+    expect(ipcChannels.workspace.writeTerminalInput).toBe('workspace:writeTerminalInput')
+    expect(ipcChannels.workspace.resizeTerminal).toBe('workspace:resizeTerminal')
+    expect(ipcChannels.workspace.terminateTerminal).toBe('workspace:terminateTerminal')
+    expect(ipcChannels.workspace.dismissTerminal).toBe('workspace:dismissTerminal')
+    expect(ipcChannels.events.terminal).toBe('workspace:terminalEvent')
     expect(ipcChannels.config.getEditableConfig).toBe('config:getEditableConfig')
     expect(ipcChannels.config.updateCommonConfig).toBe('config:updateCommonConfig')
   })
@@ -99,6 +109,60 @@ describe('IPC contract', () => {
     expect(request.retryId).toBe('remote-retry:/repos/new-repo')
     expect(response).toEqual(defaultInitialWorkspaceState)
     expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
+  })
+
+  it('maps terminal workspace channels to scoped requests and terminal responses', () => {
+    const terminal: FlowTerminalSummary = {
+      terminalId: 'terminal-1',
+      launchId: 'launch-1',
+      provider: 'codex',
+      mode: 'interactive',
+      flowId: 'flow-1',
+      phaseId: 'plan',
+      status: 'running',
+      command: 'codex',
+      argv: ['Plan'],
+      cwd: '/worktree',
+      startedAt: '2026-06-14T12:00:00.000Z'
+    }
+
+    type ListChannel = typeof ipcChannels.workspace.listTerminals
+    const listRequest = {
+      repositoryId: '/repos/grindstone',
+      flowId: 'flow-1'
+    } satisfies IpcRequestMap[ListChannel]
+    const listResponse = [terminal] satisfies IpcResponseMap[ListChannel]
+
+    type InputChannel = typeof ipcChannels.workspace.writeTerminalInput
+    const inputRequest = {
+      ...listRequest,
+      terminalId: 'terminal-1',
+      data: 'q'
+    } satisfies IpcRequestMap[InputChannel]
+    const terminalResponse = terminal satisfies IpcResponseMap[InputChannel]
+
+    type ResizeChannel = typeof ipcChannels.workspace.resizeTerminal
+    const resizeRequest = {
+      ...listRequest,
+      terminalId: 'terminal-1',
+      columns: 120,
+      rows: 40
+    } satisfies IpcRequestMap[ResizeChannel]
+
+    type TerminateChannel = typeof ipcChannels.workspace.terminateTerminal
+    const terminateRequest = {
+      ...listRequest,
+      terminalId: 'terminal-1'
+    } satisfies IpcRequestMap[TerminateChannel]
+
+    expect(listRequest.flowId).toBe('flow-1')
+    expect(listResponse).toEqual([terminal])
+    expect(inputRequest.data).toBe('q')
+    expect(resizeRequest.columns).toBe(120)
+    expect(terminateRequest.terminalId).toBe('terminal-1')
+    expect(terminalResponse).toEqual(terminal)
+    expectTypeOf(listResponse).toEqualTypeOf<FlowTerminalSummary[]>()
+    expectTypeOf(terminalResponse).toEqualTypeOf<FlowTerminalSummary>()
   })
 
   it('maps config channels to editable config request and response types', () => {

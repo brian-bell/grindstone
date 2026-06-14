@@ -1,4 +1,4 @@
-import type { IpcMain } from 'electron'
+import { BrowserWindow, type IpcMain } from 'electron'
 import { createHash } from 'node:crypto'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/config'
@@ -7,6 +7,7 @@ import {
   type CatalogDiagnostic,
   type CreateFlowRequest,
   type CreateRepositoryRequest,
+  type FlowTerminalSummary,
   type FlowCreateError,
   type FlowPaneState,
   type InitialWorkspaceState,
@@ -25,6 +26,7 @@ import {
 import { createFlow, type FlowCommandRunner, type LaunchPreparer } from './flowCreation'
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
+import { TerminalSessionManager, type LaunchTerminalRequest } from './terminalSessionManager'
 import {
   createRepository,
   retryRepositoryRemote,
@@ -42,8 +44,14 @@ type WorkspaceContext = {
   scanRoots: RepositoryPaneState['create']['scanRoots']
   catalog: RepositoryCatalogResult
   remoteRetries: RepositoryPaneState['create']['remoteRetries']
+  defaultAgent: GrindstoneConfigResult['defaultAgent']
   bootstrapHooks: GrindstoneConfigResult['bootstrapHooks']
 }
+
+type TerminalManagerPort = Pick<
+  TerminalSessionManager,
+  'launchTerminal' | 'listTerminals' | 'writeInput' | 'resize' | 'terminate' | 'dismiss'
+>
 
 export type LoadWorkspaceStateOptions = LoadGrindstoneConfigOptions & {
   configLoader?: ConfigLoader
@@ -55,6 +63,8 @@ let currentWorkspaceState: InitialWorkspaceState | undefined
 let currentArtifactRoot: string | undefined
 let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
 let currentSelectionRequestId = 0
+let currentTerminalManager: TerminalManagerPort | undefined
+let currentTerminalManagerArtifactRoot: string | undefined
 
 export async function loadInitialWorkspaceState(
   options: LoadWorkspaceStateOptions = {}
@@ -90,6 +100,7 @@ async function buildWorkspaceState(
         diagnostics: config.diagnostics
       },
       remoteRetries: [],
+      defaultAgent: null,
       bootstrapHooks: []
     }
 
@@ -116,6 +127,7 @@ async function buildWorkspaceState(
     scanRoots,
     catalog,
     remoteRetries,
+    defaultAgent: config.defaultAgent,
     bootstrapHooks: config.bootstrapHooks
   }
 
@@ -261,6 +273,7 @@ export async function createFlowInWorkspace(
   options: {
     runCommand?: FlowCommandRunner
     prepareLaunch?: LaunchPreparer
+    terminalManager?: TerminalManagerPort
   } = {}
 ): Promise<InitialWorkspaceState> {
   const context = await getWorkspaceContext()
@@ -283,6 +296,14 @@ export async function createFlowInWorkspace(
   const store = await currentFlowStoreFactory({
     artifactRoot: currentArtifactRoot ?? ''
   })
+  const prepareLaunch = options.prepareLaunch ??
+    createTerminalLaunchPreparer({
+      artifactRoot: currentArtifactRoot,
+      store,
+      terminalManager: options.terminalManager,
+      provider: context.defaultAgent ?? 'codex',
+      prompt: request.instructions.trim()
+    })
   const result = await createFlow({
     repository: selectedRepository,
     artifactRoot: currentArtifactRoot,
@@ -290,7 +311,7 @@ export async function createFlowInWorkspace(
     request,
     store,
     runCommand: options.runCommand,
-    prepareLaunch: options.prepareLaunch
+    prepareLaunch
   })
 
   if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
@@ -306,6 +327,51 @@ export async function createFlowInWorkspace(
     ? refreshedWorkspace
     : updateFlowCreateState(refreshedWorkspace, result.error)
   return currentWorkspaceState
+}
+
+export async function listFlowTerminals(
+  request: Parameters<TerminalManagerPort['listTerminals']>[0]
+): Promise<FlowTerminalSummary[]> {
+  const store = await currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot ?? ''
+  })
+  return getTerminalManager(store).listTerminals(request)
+}
+
+export async function writeTerminalInput(
+  request: Parameters<TerminalManagerPort['writeInput']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot ?? ''
+  })
+  return getTerminalManager(store).writeInput(request)
+}
+
+export async function resizeTerminal(
+  request: Parameters<TerminalManagerPort['resize']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot ?? ''
+  })
+  return getTerminalManager(store).resize(request)
+}
+
+export async function terminateTerminal(
+  request: Parameters<TerminalManagerPort['terminate']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot ?? ''
+  })
+  return getTerminalManager(store).terminate(request)
+}
+
+export async function dismissTerminal(
+  request: Parameters<TerminalManagerPort['dismiss']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot ?? ''
+  })
+  return getTerminalManager(store).dismiss(request)
 }
 
 export async function retryRepositoryRemoteInWorkspace(
@@ -413,12 +479,79 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   handleTypedIpc(ipcMain, ipcChannels.workspace.retryRepositoryRemote, (request) =>
     retryRepositoryRemoteInWorkspace(request)
   )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.listTerminals, (request) =>
+    listFlowTerminals(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.writeTerminalInput, (request) =>
+    writeTerminalInput(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.resizeTerminal, (request) =>
+    resizeTerminal(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.terminateTerminal, (request) =>
+    terminateTerminal(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.dismissTerminal, (request) =>
+    dismissTerminal(request)
+  )
   handleTypedIpc(ipcMain, ipcChannels.config.getEditableConfig, () =>
     getCurrentEditableConfig()
   )
   handleTypedIpc(ipcMain, ipcChannels.config.updateCommonConfig, (request) =>
     updateCommonConfig(request)
   )
+}
+
+function createTerminalLaunchPreparer({
+  artifactRoot,
+  store,
+  terminalManager,
+  provider,
+  prompt
+}: {
+  artifactRoot: string | undefined
+  store: FlowStore
+  terminalManager: TerminalManagerPort | undefined
+  provider: LaunchTerminalRequest['provider']
+  prompt: string
+}): LaunchPreparer {
+  return async (flow) => {
+    if (artifactRoot === undefined || artifactRoot.trim() === '') {
+      throw new Error('Flow artifact root is not configured.')
+    }
+
+    await (terminalManager ?? getTerminalManager(store)).launchTerminal({
+      flow,
+      provider,
+      mode: 'interactive',
+      phaseId: 'plan',
+      prompt
+    })
+  }
+}
+
+function getTerminalManager(store: FlowStore): TerminalManagerPort {
+  if (
+    currentTerminalManager === undefined ||
+    currentTerminalManagerArtifactRoot !== currentArtifactRoot
+  ) {
+    if (currentArtifactRoot === undefined || currentArtifactRoot.trim() === '') {
+      throw new Error('Flow artifact root is not configured.')
+    }
+
+    currentTerminalManager = new TerminalSessionManager({
+      artifactRoot: currentArtifactRoot,
+      store,
+      onEvent: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          window.webContents.send(ipcChannels.events.terminal, event)
+        }
+      }
+    })
+    currentTerminalManagerArtifactRoot = currentArtifactRoot
+  }
+
+  return currentTerminalManager
 }
 
 function createRepositoryReadyState({

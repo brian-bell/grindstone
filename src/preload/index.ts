@@ -5,8 +5,16 @@ import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
-  RetryRepositoryRemoteRequest
+  RetryRepositoryRemoteRequest,
+  TerminalActionRequest,
+  TerminalEvent,
+  TerminalInputRequest,
+  TerminalListRequest,
+  TerminalResizeRequest,
+  FlowTerminalSummary
 } from '@shared/workspace'
+
+type TerminalEventHandler = (event: TerminalEvent) => void
 
 const grindstoneApi = {
   workspace: {
@@ -65,6 +73,68 @@ const grindstoneApi = {
         )
       } catch (error) {
         throw normalizeIpcError(error)
+      }
+    },
+    async listTerminals(request: TerminalListRequest): Promise<FlowTerminalSummary[]> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.listTerminals,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async writeTerminalInput(request: TerminalInputRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.writeTerminalInput,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async resizeTerminal(request: TerminalResizeRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.resizeTerminal,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async terminateTerminal(request: TerminalActionRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.terminateTerminal,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async dismissTerminal(request: TerminalActionRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.dismissTerminal,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    onTerminalEvent(handler: TerminalEventHandler): () => void {
+      const listener = (_event: unknown, payload: TerminalEvent) => handler(payload)
+      ipcRenderer.on(ipcChannels.events.terminal, listener)
+      return () => {
+        ipcRenderer.removeListener(ipcChannels.events.terminal, listener)
       }
     }
   },

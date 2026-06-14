@@ -6,8 +6,13 @@ import type {
 import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
+  FlowTerminalSummary,
   InitialWorkspaceState,
-  RetryRepositoryRemoteRequest
+  RetryRepositoryRemoteRequest,
+  TerminalActionRequest,
+  TerminalInputRequest,
+  TerminalListRequest,
+  TerminalResizeRequest
 } from './workspace'
 
 export const ipcChannels = {
@@ -16,11 +21,19 @@ export const ipcChannels = {
     selectRepository: 'workspace:selectRepository',
     createFlow: 'workspace:createFlow',
     createRepository: 'workspace:createRepository',
-    retryRepositoryRemote: 'workspace:retryRepositoryRemote'
+    retryRepositoryRemote: 'workspace:retryRepositoryRemote',
+    listTerminals: 'workspace:listTerminals',
+    writeTerminalInput: 'workspace:writeTerminalInput',
+    resizeTerminal: 'workspace:resizeTerminal',
+    terminateTerminal: 'workspace:terminateTerminal',
+    dismissTerminal: 'workspace:dismissTerminal'
   },
   config: {
     getEditableConfig: 'config:getEditableConfig',
     updateCommonConfig: 'config:updateCommonConfig'
+  },
+  events: {
+    terminal: 'workspace:terminalEvent'
   }
 } as const
 
@@ -36,6 +49,11 @@ export type IpcRequestMap = {
   'workspace:createFlow': CreateFlowRequest
   'workspace:createRepository': CreateRepositoryRequest
   'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
+  'workspace:listTerminals': TerminalListRequest
+  'workspace:writeTerminalInput': TerminalInputRequest
+  'workspace:resizeTerminal': TerminalResizeRequest
+  'workspace:terminateTerminal': TerminalActionRequest
+  'workspace:dismissTerminal': TerminalActionRequest
   'config:getEditableConfig': undefined
   'config:updateCommonConfig': CommonConfigUpdateInput
 }
@@ -46,6 +64,11 @@ export type IpcResponseMap = {
   'workspace:createFlow': InitialWorkspaceState
   'workspace:createRepository': InitialWorkspaceState
   'workspace:retryRepositoryRemote': InitialWorkspaceState
+  'workspace:listTerminals': FlowTerminalSummary[]
+  'workspace:writeTerminalInput': FlowTerminalSummary
+  'workspace:resizeTerminal': FlowTerminalSummary
+  'workspace:terminateTerminal': FlowTerminalSummary
+  'workspace:dismissTerminal': FlowTerminalSummary
   'config:getEditableConfig': EditableConfigState
   'config:updateCommonConfig': ConfigUpdateResponse
 }

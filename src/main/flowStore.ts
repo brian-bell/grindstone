@@ -5,6 +5,7 @@ import type {
   FlowFailureSummary,
   FlowListRow,
   FlowPhaseSummary,
+  FlowTerminalSummary,
   FlowStartMetadata,
   RepositoryRow
 } from '@shared/workspace'
@@ -35,6 +36,7 @@ export type FlowRecordInput = {
   commit?: string
   start?: FlowStartMetadata
   failure?: FlowFailureSummary
+  terminals?: FlowTerminalSummary[]
   createdAt: string
   updatedAt: string
 }
@@ -46,6 +48,7 @@ export type FlowRecordUpdate = Partial<
   >
 > & {
   failure?: FlowFailureSummary | null
+  terminals?: FlowTerminalSummary[]
 }
 
 const SAFE_FLOW_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -227,7 +230,8 @@ async function mapFlowMetadata(
     planPath: optionalString(metadata.plan_path),
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
-    phases: mapPhases(metadata.phases)
+    phases: mapPhases(metadata.phases),
+    terminals: mapTerminals(metadata.terminals)
   }
 }
 
@@ -315,6 +319,81 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined
+}
+
+function mapTerminals(value: unknown): FlowTerminalSummary[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+
+  const terminals = value.flatMap((terminal): FlowTerminalSummary[] => {
+    if (
+      !isRecord(terminal) ||
+      typeof terminal.terminal_id !== 'string' ||
+      typeof terminal.launch_id !== 'string' ||
+      !isAgentProvider(terminal.provider) ||
+      !isAgentLaunchMode(terminal.mode) ||
+      typeof terminal.flow_id !== 'string' ||
+      typeof terminal.phase_id !== 'string' ||
+      !isTerminalStatus(terminal.status) ||
+      typeof terminal.command !== 'string' ||
+      !Array.isArray(terminal.argv) ||
+      !terminal.argv.every((entry) => typeof entry === 'string') ||
+      typeof terminal.cwd !== 'string' ||
+      typeof terminal.started_at !== 'string'
+    ) {
+      return []
+    }
+
+    return [
+      {
+        terminalId: terminal.terminal_id,
+        launchId: terminal.launch_id,
+        provider: terminal.provider,
+        mode: terminal.mode,
+        flowId: terminal.flow_id,
+        phaseId: terminal.phase_id,
+        planId: optionalString(terminal.plan_id),
+        sessionId: optionalString(terminal.session_id),
+        status: terminal.status,
+        command: terminal.command,
+        argv: terminal.argv,
+        cwd: terminal.cwd,
+        logPath: optionalString(terminal.log_path),
+        startedAt: terminal.started_at,
+        endedAt: optionalString(terminal.ended_at),
+        exitCode: optionalNumber(terminal.exit_code),
+        signal: optionalString(terminal.signal),
+        recentOutput: optionalString(terminal.recent_output)
+      }
+    ]
+  })
+
+  return terminals.length === 0 ? undefined : terminals
+}
+
+function isAgentProvider(value: unknown): value is FlowTerminalSummary['provider'] {
+  return value === 'codex' || value === 'claude'
+}
+
+function isAgentLaunchMode(value: unknown): value is FlowTerminalSummary['mode'] {
+  return value === 'headless' ||
+    value === 'interactive' ||
+    value === 'resume' ||
+    value === 'continue'
+}
+
+function isTerminalStatus(value: unknown): value is FlowTerminalSummary['status'] {
+  return value === 'starting' ||
+    value === 'running' ||
+    value === 'exited' ||
+    value === 'terminated' ||
+    value === 'failed' ||
+    value === 'dismissed'
+}
+
 async function flowMatchesRepository(
   flow: FlowListRow,
   repository: RepositoryRow
@@ -373,6 +452,7 @@ function toRawMetadata(record: FlowRecordInput): RawFlowMetadata {
     commit: record.commit,
     start: record.start === undefined ? undefined : toRawStart(record.start),
     failure: record.failure === undefined ? undefined : withoutUndefined(record.failure),
+    terminals: record.terminals === undefined ? undefined : record.terminals.map(toRawTerminal),
     created_at: record.createdAt,
     updated_at: record.updatedAt
   })
@@ -395,6 +475,9 @@ function applyMetadataUpdate(
       : update.failure === null
         ? undefined
         : withoutUndefined(update.failure),
+    terminals: update.terminals === undefined
+      ? metadata.terminals
+      : update.terminals.map(toRawTerminal),
     updated_at: update.updatedAt ?? metadata.updated_at
   })
 }
@@ -407,6 +490,29 @@ function toRawStart(start: FlowStartMetadata): RawFlowMetadata {
     base_ref: start.baseRef,
     commit: start.commit
   }
+}
+
+function toRawTerminal(terminal: FlowTerminalSummary): RawFlowMetadata {
+  return withoutUndefined({
+    terminal_id: terminal.terminalId,
+    launch_id: terminal.launchId,
+    provider: terminal.provider,
+    mode: terminal.mode,
+    flow_id: terminal.flowId,
+    phase_id: terminal.phaseId,
+    plan_id: terminal.planId,
+    session_id: terminal.sessionId,
+    status: terminal.status,
+    command: terminal.command,
+    argv: terminal.argv,
+    cwd: terminal.cwd,
+    log_path: terminal.logPath,
+    started_at: terminal.startedAt,
+    ended_at: terminal.endedAt,
+    exit_code: terminal.exitCode,
+    signal: terminal.signal,
+    recent_output: terminal.recentOutput
+  })
 }
 
 function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
