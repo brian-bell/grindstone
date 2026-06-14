@@ -1105,46 +1105,75 @@ function FlowWorkspaceStateView({
           <p>{state.flows.length} {state.flows.length === 1 ? 'Flow' : 'Flows'} found.</p>
         </div>
 
-        <div className="flow-list" aria-label={`${state.repositoryName} Flow records`}>
-          {state.flows.map((flow) => (
-            <article className="flow-row" key={flow.id}>
-              <div className="flow-row-header">
-                <h3>{flow.title}</h3>
-                <span className="flow-status">{flow.status}</span>
-              </div>
-              <p className="flow-updated">Updated {flow.updatedAt}</p>
-              <div className="flow-labels" aria-label={`${flow.title} metadata`}>
-                <span>{flow.repositoryPath}</span>
-                {flow.branch === undefined ? null : <span>{flow.branch}</span>}
-                {flow.worktreePath === undefined ? null : <span>{flow.worktreePath}</span>}
-                {flow.baseRef === undefined ? null : <span>base {flow.baseRef}</span>}
-                {flow.commit === undefined ? null : <span>{flow.commit}</span>}
-                {flow.planId === undefined ? null : <span>{flow.planId}</span>}
-                {flow.planPath === undefined ? null : <span>{flow.planPath}</span>}
-              </div>
-              {flow.failure === undefined ? null : (
-                <div
-                  className="flow-failure"
-                  role="alert"
-                >
-                  <strong>{flow.failure.stage}</strong>
-                  <span>{flow.failure.message}</span>
-                  {flow.failure.command === undefined ? null : <span>{flow.failure.command}</span>}
-                  {flow.failure.output === undefined ? null : <span>{flow.failure.output}</span>}
-                </div>
-              )}
-              {flow.phases === undefined ? null : (
-                <div className="phase-summary" aria-label={`${flow.title} phases`}>
-                  {flow.phases.map((phase) => (
-                    <span key={phase.id}>
-                      {phase.title} - {phase.status}
-                      {phase.summary === undefined ? '' : ` - ${phase.summary}`}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </article>
-          ))}
+        <div className="flow-table-wrap">
+          <table className="flow-table" aria-label={`${state.repositoryName} Flow records`}>
+            <thead>
+              <tr>
+                <th scope="col">Flow</th>
+                <th scope="col">Status</th>
+                <th scope="col">Updated</th>
+                <th scope="col">Branch</th>
+                <th scope="col">Plan</th>
+                <th scope="col">Phases</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.flows.map((flow) => (
+                <tr key={flow.id}>
+                  <td>
+                    <span className="flow-title">{flow.title}</span>
+                    <span className="flow-muted">{flow.repositoryPath}</span>
+                    {flow.worktreePath === undefined ? null : (
+                      <span className="flow-muted">{flow.worktreePath}</span>
+                    )}
+                  </td>
+                  <td>
+                    <span className="flow-status">{flow.status}</span>
+                    {flow.failure === undefined ? null : (
+                      <div
+                        className="flow-failure"
+                        role="alert"
+                      >
+                        <strong>{flow.failure.stage}</strong>
+                        <span>{flow.failure.message}</span>
+                        {flow.failure.command === undefined ? null : <span>{flow.failure.command}</span>}
+                        {flow.failure.output === undefined ? null : <span>{flow.failure.output}</span>}
+                      </div>
+                    )}
+                  </td>
+                  <td>{flow.updatedAt}</td>
+                  <td>
+                    {flow.branch === undefined ? '-' : flow.branch}
+                    {flow.baseRef === undefined ? null : (
+                      <span className="flow-muted">base {flow.baseRef}</span>
+                    )}
+                    {flow.commit === undefined ? null : (
+                      <span className="flow-muted">{flow.commit}</span>
+                    )}
+                  </td>
+                  <td>
+                    {flow.planId === undefined && flow.planPath === undefined ? '-' : null}
+                    {flow.planId === undefined ? null : <span>{flow.planId}</span>}
+                    {flow.planPath === undefined ? null : (
+                      <span className="flow-muted">{flow.planPath}</span>
+                    )}
+                  </td>
+                  <td>
+                    {flow.phases === undefined ? '-' : (
+                      <div className="phase-summary" aria-label={`${flow.title} phases`}>
+                        {flow.phases.map((phase) => (
+                          <span key={phase.id}>
+                            {phase.title} - {phase.status}
+                            {phase.summary === undefined ? '' : ` - ${phase.summary}`}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     )

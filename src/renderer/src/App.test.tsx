@@ -338,7 +338,7 @@ describe('App shell', () => {
     )
   })
 
-  it('selects a repository through preload and renders its Flow rows', async () => {
+  it('selects a repository through preload and renders its Flow records in a table', async () => {
     const user = userEvent.setup()
     const selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
     setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
@@ -353,12 +353,22 @@ describe('App shell', () => {
       'true'
     )
     const flowPane = screen.getByRole('main', { name: /flow workspace/i })
-    expect(flowPane).toHaveTextContent('Artifact backed Flow')
-    expect(flowPane).toHaveTextContent('active')
-    expect(flowPane).toHaveTextContent('Updated 2026-06-11T12:30:00.000Z')
-    expect(flowPane).toHaveTextContent('flow/list')
-    expect(flowPane).toHaveTextContent('plan-flow-list')
-    expect(flowPane).toHaveTextContent('Render list')
+    const flowTable = within(flowPane).getByRole('table', { name: /grindstone flow records/i })
+    expect(within(flowTable).getByRole('columnheader', { name: /flow/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /status/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /updated/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /branch/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /plan/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /phases/i })).toBeInTheDocument()
+
+    const rows = within(flowTable).getAllByRole('row')
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toHaveTextContent('Artifact backed Flow')
+    expect(rows[1]).toHaveTextContent('active')
+    expect(rows[1]).toHaveTextContent('2026-06-11T12:30:00.000Z')
+    expect(rows[1]).toHaveTextContent('flow/list')
+    expect(rows[1]).toHaveTextContent('plan-flow-list')
+    expect(rows[1]).toHaveTextContent('Render list')
   })
 
   it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {
