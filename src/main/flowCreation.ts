@@ -124,8 +124,14 @@ export async function createFlow({
       throw new Error(`Base ref did not resolve to a commit: ${baseRef}`)
     }
 
-    worktreeCommand = formatCommand('git', ['branch', allocation.branch, commit])
-    await runCommand('git', ['branch', allocation.branch, commit], { cwd: repositoryPath })
+    const branchArgs = [
+      ...DISABLE_GIT_HOOKS_ARGS,
+      'branch',
+      allocation.branch,
+      commit
+    ]
+    worktreeCommand = formatCommand('git', branchArgs)
+    await runCommand('git', branchArgs, { cwd: repositoryPath })
     const worktreeArgs = [
       ...DISABLE_GIT_HOOKS_ARGS,
       'worktree',

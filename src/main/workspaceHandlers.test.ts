@@ -505,7 +505,7 @@ describe('workspace main handlers', () => {
     expect(commands.map((command) => [command.command, command.args])).toEqual([
       ['git', ['rev-parse', '--verify', 'refs/heads/flow/ship-workspace-creation']],
       ['git', ['rev-parse', '--verify', 'main^{commit}']],
-      ['git', ['branch', 'flow/ship-workspace-creation', 'abc123']],
+      ['git', ['-c', 'core.hooksPath=/dev/null', 'branch', 'flow/ship-workspace-creation', 'abc123']],
       ['git', ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', join(
         dirname(canonicalRepoPath),
         'grindstone-worktrees',

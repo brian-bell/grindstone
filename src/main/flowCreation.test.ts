@@ -249,7 +249,7 @@ describe('Flow creation engine', () => {
     await expect(store.listFlowsForRepository(repository)).resolves.toEqual([])
   })
 
-  it('disables repository hooks while checking out the Flow worktree', async () => {
+  it('disables repository hooks while creating the Flow branch and worktree', async () => {
     const root = await makeTempDir()
     const repository = await makeRepository(root, 'repo-disable-hooks')
     const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
@@ -275,7 +275,7 @@ describe('Flow creation engine', () => {
       bootstrapHooks: [],
       request: {
         title: 'Disable hooks',
-        instructions: 'Do not run checkout hooks.'
+        instructions: 'Do not run repository hooks.'
       },
       store,
       runCommand
@@ -283,6 +283,16 @@ describe('Flow creation engine', () => {
       ok: true
     })
 
+    expect(commands.map((command) => [command.command, command.args])).toContainEqual([
+      'git',
+      [
+        '-c',
+        'core.hooksPath=/dev/null',
+        'branch',
+        'flow/disable-hooks',
+        'abc123'
+      ]
+    ])
     expect(commands.map((command) => [command.command, command.args])).toContainEqual([
       'git',
       [
