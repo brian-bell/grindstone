@@ -110,6 +110,19 @@ export type TerminalActionRequest = {
   terminalId: string
 }
 
+export type TerminalEventSubscriptionRequest = {
+  repositoryId: string
+  flowId: string
+}
+
+export type TerminalEventSubscriptionResponse = {
+  subscriptionId: string
+}
+
+export type TerminalEventUnsubscribeRequest = {
+  subscriptionId: string
+}
+
 export type TerminalEvent =
   | {
       type: 'output'

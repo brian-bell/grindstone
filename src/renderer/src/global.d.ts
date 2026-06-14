@@ -7,6 +7,7 @@ import type {
   RetryRepositoryRemoteRequest,
   TerminalActionRequest,
   TerminalEvent,
+  TerminalEventSubscriptionRequest,
   TerminalInputRequest,
   TerminalListRequest,
   TerminalResizeRequest
@@ -28,7 +29,10 @@ declare global {
         resizeTerminal: (request: TerminalResizeRequest) => Promise<FlowTerminalSummary>
         terminateTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
         dismissTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
-        onTerminalEvent: (handler: (event: TerminalEvent) => void) => () => void
+        onTerminalEvent: (
+          request: TerminalEventSubscriptionRequest,
+          handler: (event: TerminalEvent) => void
+        ) => () => void
       }
       config: {
         getEditableConfig: () => Promise<EditableConfigState>

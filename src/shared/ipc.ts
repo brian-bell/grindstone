@@ -12,7 +12,10 @@ import type {
   TerminalActionRequest,
   TerminalInputRequest,
   TerminalListRequest,
-  TerminalResizeRequest
+  TerminalResizeRequest,
+  TerminalEventSubscriptionRequest,
+  TerminalEventSubscriptionResponse,
+  TerminalEventUnsubscribeRequest
 } from './workspace'
 
 export const ipcChannels = {
@@ -26,7 +29,9 @@ export const ipcChannels = {
     writeTerminalInput: 'workspace:writeTerminalInput',
     resizeTerminal: 'workspace:resizeTerminal',
     terminateTerminal: 'workspace:terminateTerminal',
-    dismissTerminal: 'workspace:dismissTerminal'
+    dismissTerminal: 'workspace:dismissTerminal',
+    subscribeTerminalEvents: 'workspace:subscribeTerminalEvents',
+    unsubscribeTerminalEvents: 'workspace:unsubscribeTerminalEvents'
   },
   config: {
     getEditableConfig: 'config:getEditableConfig',
@@ -54,6 +59,8 @@ export type IpcRequestMap = {
   'workspace:resizeTerminal': TerminalResizeRequest
   'workspace:terminateTerminal': TerminalActionRequest
   'workspace:dismissTerminal': TerminalActionRequest
+  'workspace:subscribeTerminalEvents': TerminalEventSubscriptionRequest
+  'workspace:unsubscribeTerminalEvents': TerminalEventUnsubscribeRequest
   'config:getEditableConfig': undefined
   'config:updateCommonConfig': CommonConfigUpdateInput
 }
@@ -69,6 +76,8 @@ export type IpcResponseMap = {
   'workspace:resizeTerminal': FlowTerminalSummary
   'workspace:terminateTerminal': FlowTerminalSummary
   'workspace:dismissTerminal': FlowTerminalSummary
+  'workspace:subscribeTerminalEvents': TerminalEventSubscriptionResponse
+  'workspace:unsubscribeTerminalEvents': undefined
   'config:getEditableConfig': EditableConfigState
   'config:updateCommonConfig': ConfigUpdateResponse
 }

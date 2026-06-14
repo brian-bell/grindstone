@@ -195,6 +195,57 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('reconciles stale persisted running terminals while selecting a repository', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-stale-terminal')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'stale-terminal-flow',
+      flowMeta('stale-terminal-flow', repoPath, {
+        terminals: [
+          {
+            terminal_id: 'terminal-stale',
+            launch_id: 'launch-stale',
+            provider: 'codex',
+            mode: 'interactive',
+            flow_id: 'stale-terminal-flow',
+            phase_id: 'plan',
+            status: 'running',
+            command: 'codex',
+            argv: ['Plan'],
+            cwd: repoPath,
+            started_at: '2026-06-14T12:00:00.000Z'
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+
+    await expect(selectRepository({ repositoryId })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          {
+            id: 'stale-terminal-flow',
+            terminals: [
+              {
+                terminalId: 'terminal-stale',
+                status: 'failed',
+                endedAt: expect.any(String)
+              }
+            ]
+          }
+        ]
+      }
+    })
+  })
+
   it('exposes configured scan roots as opaque create targets', async () => {
     const root = await makeTempDir()
     const scanRoot = join(root, 'repos')
@@ -556,8 +607,9 @@ describe('workspace main handlers', () => {
         })
         return terminal
       },
-      async listTerminals() {
-        return []
+      async listTerminals(request: { flowId: string }) {
+        const store = await createFlowStore({ artifactRoot })
+        return (await store.readFlow(request.flowId))?.terminals ?? []
       },
       async writeInput() {
         throw new Error('not expected')
@@ -1136,6 +1188,34 @@ describe('workspace main handlers', () => {
       expect.any(Function)
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.listTerminals,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.writeTerminalInput,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.resizeTerminal,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.terminateTerminal,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.dismissTerminal,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.subscribeTerminalEvents,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.unsubscribeTerminalEvents,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
       ipcChannels.config.getEditableConfig,
       expect.any(Function)
     )
@@ -1143,5 +1223,50 @@ describe('workspace main handlers', () => {
       ipcChannels.config.updateCommonConfig,
       expect.any(Function)
     )
+  })
+
+  it('validates terminal event subscriptions against persisted Flow ownership', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-terminal-subscription')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'subscription-flow',
+      flowMeta('subscription-flow', repoPath)
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    const handlers = new Map<string, (event: unknown, request: unknown) => unknown>()
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (event: unknown, request: unknown) => unknown) => {
+        handlers.set(channel, handler)
+      })
+    }
+    registerWorkspaceHandlers(ipcMain)
+    const subscribe = handlers.get(ipcChannels.workspace.subscribeTerminalEvents)
+    const sender = {
+      sender: {
+        id: 1,
+        send: vi.fn()
+      }
+    }
+
+    await expect(subscribe?.(sender, {
+      repositoryId,
+      flowId: 'subscription-flow'
+    })).resolves.toEqual({
+      subscriptionId: expect.any(String)
+    })
+    await expect(subscribe?.(sender, {
+      repositoryId: '/repos/other',
+      flowId: 'subscription-flow'
+    })).rejects.toThrow('Flow not found for terminal event subscription: subscription-flow')
+    await expect(subscribe?.(sender, {
+      repositoryId,
+      flowId: 'missing-flow'
+    })).rejects.toThrow('Flow not found for terminal event subscription: missing-flow')
   })
 })

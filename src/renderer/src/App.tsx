@@ -33,6 +33,8 @@ import type {
   CreateFlowRequest,
   FlowListRow,
   FlowTerminalSummary,
+  TerminalActionRequest,
+  TerminalEvent,
   FlowPaneState,
   GitHubVisibility,
   InitialWorkspaceState,
@@ -89,6 +91,9 @@ export function App(): ReactElement {
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>('hints')
   const [editableConfig, setEditableConfig] = useState<EditableConfigState | null>(null)
   const [configLoadError, setConfigLoadError] = useState<string | null>(null)
+  const terminalSubscriptionKey = flowState.status === 'ready'
+    ? `${flowState.repositoryId}:${flowState.flows.map((flow) => flow.id).join('\0')}`
+    : ''
 
   useEffect(() => {
     let cancelled = false
@@ -139,7 +144,14 @@ export function App(): ReactElement {
   }, [])
 
   useEffect(() => {
-    return window.grindstone.workspace.onTerminalEvent((event) => {
+    if (
+      flowState.status !== 'ready' ||
+      window.grindstone?.workspace?.onTerminalEvent === undefined
+    ) {
+      return undefined
+    }
+
+    const handleTerminalEvent = (event: TerminalEvent) => {
       const updateFlow = (flow: FlowPaneState): FlowPaneState => {
         if (flow.status !== 'ready' || flow.repositoryId !== event.repositoryId) {
           return flow
@@ -187,8 +199,22 @@ export function App(): ReactElement {
             ...current,
             flow: updateFlow(current.flow) as InitialWorkspaceState['flow']
           })
-    })
-  }, [])
+    }
+
+    const unsubscribes = flowState.flows.map((flow) =>
+      window.grindstone.workspace.onTerminalEvent(
+        {
+          repositoryId: flowState.repositoryId,
+          flowId: flow.id
+        },
+        handleTerminalEvent
+      )
+    )
+
+    return () => {
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
+    }
+  }, [terminalSubscriptionKey])
 
   const shellState = workspace ?? defaultInitialWorkspaceState
   const isWorkspaceLoading = workspace === null
@@ -1320,6 +1346,7 @@ function FlowTerminalTabs({ flow }: { flow: FlowListRow }): ReactElement {
   const visibleTerminals = (flow.terminals ?? []).filter((terminal) => terminal.status !== 'dismissed')
   const [activeTerminalId, setActiveTerminalId] = useState(visibleTerminals[0]?.terminalId ?? '')
   const [input, setInput] = useState('')
+  const [terminalSize, setTerminalSize] = useState<{ columns: number; rows: number } | null>(null)
   const activeTerminal = visibleTerminals.find((terminal) =>
     terminal.terminalId === activeTerminalId
   ) ?? visibleTerminals[0]
@@ -1329,6 +1356,10 @@ function FlowTerminalTabs({ flow }: { flow: FlowListRow }): ReactElement {
       setActiveTerminalId(visibleTerminals[0]?.terminalId ?? '')
     }
   }, [activeTerminalId, visibleTerminals])
+
+  useEffect(() => {
+    setTerminalSize(null)
+  }, [activeTerminal?.terminalId])
 
   if (activeTerminal === undefined) {
     return (
@@ -1360,14 +1391,14 @@ function FlowTerminalTabs({ flow }: { flow: FlowListRow }): ReactElement {
   }
 
   async function requestResize(): Promise<void> {
-    if (!canWrite) {
+    if (!canWrite || terminalSize === null) {
       return
     }
 
     await window.grindstone.workspace.resizeTerminal({
       ...terminalRequest,
-      columns: 100,
-      rows: 30
+      columns: terminalSize.columns,
+      rows: terminalSize.rows
     })
   }
 
@@ -1418,7 +1449,7 @@ function FlowTerminalTabs({ flow }: { flow: FlowListRow }): ReactElement {
         <button
           aria-label={`Resize ${activeTerminal.phaseId} terminal`}
           className="icon-action"
-          disabled={!canWrite}
+          disabled={!canWrite || terminalSize === null}
           onClick={() => void requestResize()}
           title={`Resize ${activeTerminal.phaseId} terminal`}
           type="button"
@@ -1447,7 +1478,12 @@ function FlowTerminalTabs({ flow }: { flow: FlowListRow }): ReactElement {
         </button>
       </div>
 
-      <TerminalOutput terminal={activeTerminal} />
+      <TerminalOutput
+        canWrite={canWrite}
+        onMeasuredSize={setTerminalSize}
+        terminal={activeTerminal}
+        terminalRequest={terminalRequest}
+      />
 
       <form
         aria-label={`${activeTerminal.phaseId} terminal input`}
@@ -1468,13 +1504,40 @@ function FlowTerminalTabs({ flow }: { flow: FlowListRow }): ReactElement {
   )
 }
 
-function TerminalOutput({ terminal }: { terminal: FlowTerminalSummary }): ReactElement {
+function TerminalOutput({
+  canWrite,
+  onMeasuredSize,
+  terminal,
+  terminalRequest
+}: {
+  canWrite: boolean
+  onMeasuredSize: (size: { columns: number; rows: number }) => void
+  terminal: FlowTerminalSummary
+  terminalRequest: TerminalActionRequest
+}): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const xtermRef = useRef<{
+    terminalId: string
+    write: (data: string) => void
+  } | null>(null)
+  const writtenOutputLengthRef = useRef(0)
   const output = terminal.recentOutput ?? ''
 
   useEffect(() => {
     let disposed = false
     let disposeTerminal: (() => void) | undefined
+    let resizeObserver: ResizeObserver | undefined
+
+    async function sendTerminalInput(data: string): Promise<void> {
+      if (!canWrite) {
+        return
+      }
+
+      await window.grindstone.workspace.writeTerminalInput({
+        ...terminalRequest,
+        data
+      })
+    }
 
     async function mountXterm(): Promise<void> {
       if (
@@ -1495,7 +1558,7 @@ function TerminalOutput({ terminal }: { terminal: FlowTerminalSummary }): ReactE
 
         const xterm = new Terminal({
           convertEol: true,
-          disableStdin: true,
+          disableStdin: !canWrite,
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
           fontSize: 12,
           theme: {
@@ -1506,9 +1569,41 @@ function TerminalOutput({ terminal }: { terminal: FlowTerminalSummary }): ReactE
         const fit = new FitAddon()
         xterm.loadAddon(fit)
         xterm.open(containerRef.current)
+        xtermRef.current = {
+          terminalId: terminal.terminalId,
+          write: (data) => xterm.write(data)
+        }
         xterm.write(output)
-        fit.fit()
-        disposeTerminal = () => xterm.dispose()
+        writtenOutputLengthRef.current = output.length
+        const publishSize = () => {
+          fit.fit()
+          const dimensions = fit.proposeDimensions()
+          if (dimensions !== undefined) {
+            onMeasuredSize({
+              columns: dimensions.cols,
+              rows: dimensions.rows
+            })
+          }
+        }
+        const inputDisposable = canWrite
+          ? xterm.onData((data) => {
+              void sendTerminalInput(data)
+            })
+          : undefined
+        publishSize()
+        if (typeof ResizeObserver !== 'undefined') {
+          resizeObserver = new ResizeObserver(publishSize)
+          resizeObserver.observe(containerRef.current)
+        }
+        disposeTerminal = () => {
+          inputDisposable?.dispose()
+          resizeObserver?.disconnect()
+          if (xtermRef.current?.terminalId === terminal.terminalId) {
+            xtermRef.current = null
+          }
+          writtenOutputLengthRef.current = 0
+          xterm.dispose()
+        }
       } catch {
         // The text fallback below remains authoritative for tests and accessibility.
       }
@@ -1520,7 +1615,33 @@ function TerminalOutput({ terminal }: { terminal: FlowTerminalSummary }): ReactE
       disposed = true
       disposeTerminal?.()
     }
-  }, [output])
+  }, [
+    canWrite,
+    onMeasuredSize,
+    terminalRequest.flowId,
+    terminalRequest.repositoryId,
+    terminalRequest.terminalId,
+    terminal.terminalId
+  ])
+
+  useEffect(() => {
+    const xterm = xtermRef.current
+    if (xterm === null || xterm.terminalId !== terminal.terminalId) {
+      return
+    }
+
+    if (output.length < writtenOutputLengthRef.current) {
+      xterm.write(output)
+      writtenOutputLengthRef.current = output.length
+      return
+    }
+
+    const nextChunk = output.slice(writtenOutputLengthRef.current)
+    if (nextChunk !== '') {
+      xterm.write(nextChunk)
+      writtenOutputLengthRef.current = output.length
+    }
+  }, [output, terminal.terminalId])
 
   return (
     <div className="terminal-output-wrap">

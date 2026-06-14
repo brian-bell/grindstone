@@ -1,5 +1,5 @@
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import * as nodePty from 'node-pty'
 import type {
@@ -55,6 +55,7 @@ type ManagedTerminal = {
   process: PtyProcess | null
   terminal: FlowTerminalSummary
   terminateTimer: NodeJS.Timeout | null
+  outputQueue: Promise<void>
 }
 
 const RECENT_OUTPUT_LIMIT = 20_000
@@ -169,18 +170,27 @@ export class TerminalSessionManager {
           ...terminal,
           status: 'running'
         },
-        terminateTimer: null
+        terminateTimer: null,
+        outputQueue: Promise.resolve()
       }
       this.sessions.set(terminalId, managed)
       ptyProcess.onData((data) => {
-        void this.handleData(managed, data, metaPath)
+        managed.outputQueue = managed.outputQueue
+          .then(() => this.handleData(managed, data, metaPath))
+          .catch(() => undefined)
       })
       ptyProcess.onExit((event) => {
-        void this.handleExit(managed, event, metaPath)
+        managed.outputQueue = managed.outputQueue
+          .then(() => this.handleExit(managed, event, metaPath))
+          .catch(() => undefined)
       })
-      await this.writeTerminalMetadata(metaPath, managed.terminal)
-      await this.persistTerminal(request.flow.id, managed.terminal)
-      this.emitState(managed)
+      const initialPersist = managed.outputQueue.then(async () => {
+        await this.writeTerminalMetadata(metaPath, managed.terminal)
+        await this.persistTerminal(request.flow.id, managed.terminal)
+        this.emitState(managed)
+      })
+      managed.outputQueue = initialPersist.catch(() => undefined)
+      await initialPersist
       return managed.terminal
     } catch (error) {
       const failed = {
@@ -196,11 +206,11 @@ export class TerminalSessionManager {
 
   async listTerminals(request: TerminalListRequest): Promise<FlowTerminalSummary[]> {
     const flow = await this.getOwnedFlow(request.repositoryId, request.flowId)
-    return flow.terminals ?? []
+    return this.reconcilePersistedTerminals(flow)
   }
 
   async writeInput(request: TerminalInputRequest): Promise<FlowTerminalSummary> {
-    const managed = await this.getOwnedManagedTerminal(request)
+    const managed = await this.getAttachedTerminal(request)
     if (managed.terminal.status !== 'running') {
       throw new Error(`Terminal is not running: ${request.terminalId}`)
     }
@@ -210,7 +220,7 @@ export class TerminalSessionManager {
   }
 
   async resize(request: TerminalResizeRequest): Promise<FlowTerminalSummary> {
-    const managed = await this.getOwnedManagedTerminal(request)
+    const managed = await this.getAttachedTerminal(request)
     if (managed.terminal.status !== 'running') {
       throw new Error(`Terminal is not running: ${request.terminalId}`)
     }
@@ -223,7 +233,7 @@ export class TerminalSessionManager {
   }
 
   async terminate(request: TerminalActionRequest): Promise<FlowTerminalSummary> {
-    const managed = await this.getOwnedManagedTerminal(request)
+    const managed = await this.getAttachedTerminal(request)
     if (managed.terminal.status !== 'running') {
       throw new Error(`Terminal is not running: ${request.terminalId}`)
     }
@@ -236,20 +246,33 @@ export class TerminalSessionManager {
   }
 
   async dismiss(request: TerminalActionRequest): Promise<FlowTerminalSummary> {
-    const managed = await this.getOwnedManagedTerminal(request)
-    if (!['exited', 'terminated', 'failed'].includes(managed.terminal.status)) {
+    const { flow, terminal } = await this.getOwnedPersistedTerminal(request)
+    if (!['exited', 'terminated', 'failed'].includes(terminal.status)) {
       throw new Error(`Only completed terminals can be dismissed: ${request.terminalId}`)
     }
 
-    managed.terminal = {
-      ...managed.terminal,
-      status: 'dismissed'
+    const dismissed = {
+      ...terminal,
+      status: 'dismissed' as const
     }
-    const metaPath = this.getMetaPath(managed.terminal)
-    await this.writeTerminalMetadata(metaPath, managed.terminal)
-    await this.persistTerminal(managed.terminal.flowId, managed.terminal)
-    this.emitState(managed)
-    return managed.terminal
+    const metaPath = this.getMetaPath(dismissed)
+    await this.writeTerminalMetadata(metaPath, dismissed)
+    await this.persistTerminal(dismissed.flowId, dismissed)
+
+    const managed = this.sessions.get(request.terminalId)
+    if (managed !== undefined && managed.terminal.flowId === flow.id) {
+      managed.terminal = dismissed
+      this.emitState(managed)
+    } else {
+      this.options.onEvent?.({
+        type: 'state',
+        repositoryId: flow.repositoryId,
+        flowId: dismissed.flowId,
+        terminal: dismissed
+      })
+    }
+
+    return dismissed
   }
 
   private async handleData(
@@ -257,11 +280,11 @@ export class TerminalSessionManager {
     data: string,
     metaPath: string
   ): Promise<void> {
-    await appendFile(managed.terminal.logPath ?? '', data, 'utf8')
     managed.terminal = {
       ...managed.terminal,
       recentOutput: trimRecentOutput(`${managed.terminal.recentOutput ?? ''}${data}`)
     }
+    await appendFile(managed.terminal.logPath ?? '', data, 'utf8')
     await this.writeTerminalMetadata(metaPath, managed.terminal)
     await this.persistTerminal(managed.terminal.flowId, managed.terminal)
     this.options.onEvent?.({
@@ -301,14 +324,28 @@ export class TerminalSessionManager {
     this.emitState(managed)
   }
 
-  private async getOwnedManagedTerminal(request: TerminalActionRequest): Promise<ManagedTerminal> {
+  private async getAttachedTerminal(request: TerminalActionRequest): Promise<ManagedTerminal> {
     const flow = await this.getOwnedFlow(request.repositoryId, request.flowId)
     const managed = this.sessions.get(request.terminalId)
     if (managed === undefined || managed.terminal.flowId !== flow.id) {
-      throw new Error(`Terminal not found: ${request.terminalId}`)
+      throw new Error(`Terminal is not attached to a running process: ${request.terminalId}`)
     }
 
     return managed
+  }
+
+  private async getOwnedPersistedTerminal(
+    request: TerminalActionRequest
+  ): Promise<{ flow: FlowListRow; terminal: FlowTerminalSummary }> {
+    const flow = await this.getOwnedFlow(request.repositoryId, request.flowId)
+    const terminal = flow.terminals?.find((candidate) =>
+      candidate.terminalId === request.terminalId
+    )
+    if (terminal === undefined) {
+      throw new Error(`Terminal not found: ${request.terminalId}`)
+    }
+
+    return { flow, terminal }
   }
 
   private async getOwnedFlow(repositoryId: string, flowId: string): Promise<FlowListRow> {
@@ -333,14 +370,42 @@ export class TerminalSessionManager {
 
     await this.options.store.updateFlowRecord(flowId, {
       terminals,
-      updatedAt: flow.updatedAt
+      updatedAt: this.now()
     })
+  }
+
+  private async reconcilePersistedTerminals(flow: FlowListRow): Promise<FlowTerminalSummary[]> {
+    const terminals = flow.terminals ?? []
+    const reconciled = terminals.map((terminal) => {
+      if (
+        (terminal.status === 'starting' || terminal.status === 'running') &&
+        !this.sessions.has(terminal.terminalId)
+      ) {
+        return {
+          ...terminal,
+          status: 'failed' as const,
+          endedAt: terminal.endedAt ?? this.now()
+        }
+      }
+
+      return terminal
+    })
+
+    if (reconciled.some((terminal, index) => terminal !== terminals[index])) {
+      await this.options.store.updateFlowRecord(flow.id, {
+        terminals: reconciled,
+        updatedAt: this.now()
+      })
+    }
+
+    return reconciled
   }
 
   private async writeTerminalMetadata(
     metaPath: string,
     terminal: FlowTerminalSummary
   ): Promise<void> {
+    await mkdir(dirname(metaPath), { recursive: true })
     await writeFile(`${metaPath}`, `${JSON.stringify(toRawTerminal(terminal), null, 2)}\n`, 'utf8')
   }
 

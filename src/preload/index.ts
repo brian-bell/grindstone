@@ -8,6 +8,7 @@ import type {
   RetryRepositoryRemoteRequest,
   TerminalActionRequest,
   TerminalEvent,
+  TerminalEventSubscriptionRequest,
   TerminalInputRequest,
   TerminalListRequest,
   TerminalResizeRequest,
@@ -130,11 +131,48 @@ const grindstoneApi = {
         throw normalizeIpcError(error)
       }
     },
-    onTerminalEvent(handler: TerminalEventHandler): () => void {
-      const listener = (_event: unknown, payload: TerminalEvent) => handler(payload)
+    onTerminalEvent(
+      request: TerminalEventSubscriptionRequest,
+      handler: TerminalEventHandler
+    ): () => void {
+      let active = true
+      let subscriptionId: string | undefined
+      const listener = (_event: unknown, payload: TerminalEvent) => {
+        if (
+          active &&
+          payload.repositoryId === request.repositoryId &&
+          payload.flowId === request.flowId
+        ) {
+          handler(payload)
+        }
+      }
+      void invokeTypedIpc(
+        ipcRenderer.invoke.bind(ipcRenderer),
+        ipcChannels.workspace.subscribeTerminalEvents,
+        request
+      ).then((subscription) => {
+        if (!active) {
+          void invokeTypedIpc(
+            ipcRenderer.invoke.bind(ipcRenderer),
+            ipcChannels.workspace.unsubscribeTerminalEvents,
+            { subscriptionId: subscription.subscriptionId }
+          )
+          return
+        }
+
+        subscriptionId = subscription.subscriptionId
+      }).catch(() => undefined)
       ipcRenderer.on(ipcChannels.events.terminal, listener)
       return () => {
+        active = false
         ipcRenderer.removeListener(ipcChannels.events.terminal, listener)
+        if (subscriptionId !== undefined) {
+          void invokeTypedIpc(
+            ipcRenderer.invoke.bind(ipcRenderer),
+            ipcChannels.workspace.unsubscribeTerminalEvents,
+            { subscriptionId }
+          )
+        }
       }
     }
   },

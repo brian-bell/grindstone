@@ -488,7 +488,8 @@ describe('App shell', () => {
 
     await user.type(within(terminalPanel).getByLabelText(/plan terminal input text/i), 'q')
     await user.click(within(terminalPanel).getByRole('button', { name: /^send$/i }))
-    await user.click(within(terminalPanel).getByRole('button', { name: /resize plan terminal/i }))
+    expect(within(terminalPanel).getByRole('button', { name: /resize plan terminal/i }))
+      .toBeDisabled()
     await user.click(within(terminalPanel).getByRole('button', { name: /terminate plan terminal/i }))
 
     const scopedRequest = {
@@ -500,11 +501,7 @@ describe('App shell', () => {
       ...scopedRequest,
       data: 'q'
     })
-    expect(terminalApi.resizeTerminal).toHaveBeenCalledWith({
-      ...scopedRequest,
-      columns: 100,
-      rows: 30
-    })
+    expect(terminalApi.resizeTerminal).not.toHaveBeenCalled()
     expect(window.confirm).toHaveBeenCalledWith('Terminate codex terminal?')
     expect(terminalApi.terminateTerminal).toHaveBeenCalledWith(scopedRequest)
     expect(within(terminalPanel).getByRole('button', { name: /dismiss plan terminal/i }))
