@@ -198,19 +198,51 @@ textarea {
   margin-top: 28px;
 }
 
-.flow-create-form {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.8fr) minmax(220px, 1.4fr) minmax(110px, 0.55fr) auto;
-  align-items: end;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #d1d7d4;
-  border-radius: 7px;
-  background: #f7faf9;
+.flow-create {
+  display: flex;
+  justify-content: flex-end;
 }
 
-.flow-create-form .create-error {
-  grid-column: 1 / -1;
+.flow-create-form {
+  display: grid;
+  gap: 12px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(22, 24, 25, 0.42);
+}
+
+.modal-dialog {
+  display: grid;
+  gap: 16px;
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid #c8d0cd;
+  border-radius: 8px;
+  background: #fcfbf8;
+  box-shadow: 0 20px 54px rgba(22, 24, 25, 0.22);
+}
+
+.modal-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 12px;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: #151a1b;
+  font-size: 1.1rem;
+  letter-spacing: 0;
 }
 
 .flow-list-header {
@@ -688,9 +720,5 @@ textarea {
   .repository-summary,
   .state-block {
     min-height: 180px;
-  }
-
-  .flow-create-form {
-    grid-template-columns: 1fr;
   }
 }

@@ -1174,11 +1174,19 @@ function FlowCreatePanel({
   create: NonNullable<Extract<FlowPaneState, { status: 'ready' | 'empty' }>['create']>
   onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
 }): ReactElement {
+  const [isOpen, setIsOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [instructions, setInstructions] = useState('')
   const [baseRef, setBaseRef] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const titleInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (isOpen) {
+      titleInputRef.current?.focus()
+    }
+  }, [isOpen])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -1210,6 +1218,7 @@ function FlowCreatePanel({
         setTitle('')
         setInstructions('')
         setBaseRef('')
+        setIsOpen(false)
       }
     } catch (error: unknown) {
       setLocalError(getErrorMessage(error))
@@ -1221,57 +1230,110 @@ function FlowCreatePanel({
   const errorMessage = localError ?? create.error?.message ?? null
 
   return (
-    <form
-      aria-label="Create Flow"
-      className="flow-create-form"
-      onSubmit={(event) => void handleSubmit(event)}
-    >
-      <label className="field">
-        <span>Title</span>
-        <input
-          disabled={!create.available || isSubmitting}
-          onChange={(event) => setTitle(event.currentTarget.value)}
-          placeholder="Ship workspace creation"
-          value={title}
-        />
-      </label>
-      <label className="field">
-        <span>Instructions</span>
-        <textarea
-          disabled={!create.available || isSubmitting}
-          onChange={(event) => setInstructions(event.currentTarget.value)}
-          placeholder="Describe the implementation goal"
-          value={instructions}
-        />
-      </label>
-      <label className="field">
-        <span>Base ref</span>
-        <input
-          disabled={!create.available || isSubmitting}
-          onChange={(event) => setBaseRef(event.currentTarget.value)}
-          placeholder="HEAD"
-          value={baseRef}
-        />
-      </label>
-
-      {errorMessage === null ? null : (
-        <div
-          aria-label="Flow creation error"
-          className="create-error"
-          role="alert"
-        >
-          {errorMessage}
-        </div>
-      )}
-
+    <div className="flow-create">
       <button
         className="primary-action"
-        disabled={!create.available || isSubmitting || title.trim() === '' || instructions.trim() === ''}
-        type="submit"
+        disabled={!create.available}
+        onClick={() => setIsOpen(true)}
+        type="button"
       >
         <CirclePlus aria-hidden="true" size={16} />
-        <span>{isSubmitting ? 'Creating' : 'Create Flow'}</span>
+        <span>New Flow</span>
       </button>
-    </form>
+
+      {isOpen ? (
+        <div className="modal-backdrop">
+          <div
+            aria-labelledby="flow-create-dialog-title"
+            aria-modal="true"
+            className="modal-dialog"
+            role="dialog"
+          >
+            <div className="modal-header">
+              <h2 id="flow-create-dialog-title">Create Flow</h2>
+              <button
+                aria-label="Close Flow creation"
+                className="icon-button"
+                disabled={isSubmitting}
+                onClick={() => setIsOpen(false)}
+                type="button"
+              >
+                <X aria-hidden="true" size={16} />
+              </button>
+            </div>
+
+            <form
+              aria-label="Create Flow"
+              className="flow-create-form"
+              onSubmit={(event) => void handleSubmit(event)}
+            >
+              <label className="field">
+                <span>Title</span>
+                <input
+                  disabled={!create.available || isSubmitting}
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                  placeholder="Ship workspace creation"
+                  ref={titleInputRef}
+                  value={title}
+                />
+              </label>
+              <label className="field">
+                <span>Instructions</span>
+                <textarea
+                  disabled={!create.available || isSubmitting}
+                  onChange={(event) => setInstructions(event.currentTarget.value)}
+                  placeholder="Describe the implementation goal"
+                  value={instructions}
+                />
+              </label>
+              <label className="field">
+                <span>Base ref</span>
+                <input
+                  disabled={!create.available || isSubmitting}
+                  onChange={(event) => setBaseRef(event.currentTarget.value)}
+                  placeholder="HEAD"
+                  value={baseRef}
+                />
+              </label>
+
+              {errorMessage === null ? null : (
+                <div
+                  aria-label="Flow creation error"
+                  className="create-error"
+                  role="alert"
+                >
+                  {errorMessage}
+                </div>
+              )}
+
+              <div className="form-actions">
+                <button
+                  className="secondary-button"
+                  disabled={isSubmitting}
+                  onClick={() => setIsOpen(false)}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={16} />
+                  <span>Cancel</span>
+                </button>
+                <button
+                  className="primary-action"
+                  disabled={
+                    !create.available ||
+                    isSubmitting ||
+                    title.trim() === '' ||
+                    instructions.trim() === ''
+                  }
+                  type="submit"
+                >
+                  <CirclePlus aria-hidden="true" size={16} />
+                  <span>{isSubmitting ? 'Creating' : 'Create Flow'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }

@@ -361,7 +361,7 @@ describe('App shell', () => {
     expect(flowPane).toHaveTextContent('Render list')
   })
 
-  it('submits Flow creation through preload and clears the form after success', async () => {
+  it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {
     const user = userEvent.setup()
     const createdState: InitialWorkspaceState = {
       ...selectedCatalogState,
@@ -408,10 +408,15 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.type(within(flowPane).getByLabelText(/^title$/i), 'Ship workspace creation')
-    await user.type(within(flowPane).getByLabelText(/instructions/i), 'Build the path')
-    await user.type(within(flowPane).getByLabelText(/base ref/i), 'main')
-    await user.click(within(flowPane).getByRole('button', { name: /create flow/i }))
+    expect(within(flowPane).queryByLabelText(/^title$/i)).not.toBeInTheDocument()
+
+    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+
+    const dialog = await screen.findByRole('dialog', { name: /create flow/i })
+    await user.type(within(dialog).getByLabelText(/^title$/i), 'Ship workspace creation')
+    await user.type(within(dialog).getByLabelText(/instructions/i), 'Build the path')
+    await user.type(within(dialog).getByLabelText(/base ref/i), 'main')
+    await user.click(within(dialog).getByRole('button', { name: /create flow/i }))
 
     expect(createFlow).toHaveBeenCalledWith({
       title: 'Ship workspace creation',
@@ -420,10 +425,14 @@ describe('App shell', () => {
     } satisfies CreateFlowRequest)
     expect(await within(flowPane).findByText('Ship workspace creation')).toBeInTheDocument()
     expect(within(flowPane).getByText('flow/ship-workspace-creation')).toBeInTheDocument()
-    expect(within(flowPane).getByLabelText(/^title$/i)).toHaveValue('')
+    expect(screen.queryByRole('dialog', { name: /create flow/i })).not.toBeInTheDocument()
+
+    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+    expect(within(await screen.findByRole('dialog', { name: /create flow/i })).getByLabelText(/^title$/i))
+      .toHaveValue('')
   })
 
-  it('keeps Flow creation input and renders persisted start failures', async () => {
+  it('keeps failed Flow creation input in the modal and renders persisted start failures', async () => {
     const user = userEvent.setup()
     const failedState: InitialWorkspaceState = {
       ...selectedCatalogState,
@@ -479,15 +488,18 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.type(within(flowPane).getByLabelText(/^title$/i), 'Broken bootstrap')
-    await user.type(within(flowPane).getByLabelText(/instructions/i), 'Run hooks')
-    await user.click(within(flowPane).getByRole('button', { name: /create flow/i }))
+    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
 
-    expect(await within(flowPane).findByRole('alert', { name: /flow creation error/i }))
+    const dialog = await screen.findByRole('dialog', { name: /create flow/i })
+    await user.type(within(dialog).getByLabelText(/^title$/i), 'Broken bootstrap')
+    await user.type(within(dialog).getByLabelText(/instructions/i), 'Run hooks')
+    await user.click(within(dialog).getByRole('button', { name: /create flow/i }))
+
+    expect(await within(dialog).findByRole('alert', { name: /flow creation error/i }))
       .toHaveTextContent('npm install failed')
     expect(within(flowPane).getByText('npm install')).toBeInTheDocument()
     expect(within(flowPane).getByText('missing package')).toBeInTheDocument()
-    expect(within(flowPane).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
+    expect(within(dialog).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
   })
 
   it('shows repo-scoped loading while repository selection is pending', async () => {
