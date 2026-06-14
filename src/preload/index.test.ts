@@ -3,6 +3,7 @@ import { ipcChannels, type NormalizedIpcError } from '@shared/ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
 import {
   defaultInitialWorkspaceState,
+  type CreateFlowRequest,
   type CreateRepositoryRequest,
   type InitialWorkspaceState,
   type RetryRepositoryRemoteRequest
@@ -12,6 +13,7 @@ type PreloadApi = {
   workspace: {
     getInitialState: () => Promise<InitialWorkspaceState>
     selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
+    createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
     createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
     retryRepositoryRemote: (
       request: RetryRepositoryRemoteRequest
@@ -69,6 +71,7 @@ describe('preload bridge', () => {
     expect(Object.keys(api.workspace)).toEqual([
       'getInitialState',
       'selectRepository',
+      'createFlow',
       'createRepository',
       'retryRepositoryRemote'
     ])
@@ -121,6 +124,19 @@ describe('preload bridge', () => {
       defaultInitialWorkspaceState
     )
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.createRepository, request)
+  })
+
+  it('invokes Flow creation through the shared channel', async () => {
+    const { invoke, api } = await loadPreload()
+    invoke.mockResolvedValue(defaultInitialWorkspaceState)
+    const request: CreateFlowRequest = {
+      title: 'Create Flow worktree',
+      instructions: 'Build the end-to-end path.',
+      baseRef: 'main'
+    }
+
+    await expect(api.workspace.createFlow(request)).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.createFlow, request)
   })
 
   it('invokes remote retry through the shared channel', async () => {

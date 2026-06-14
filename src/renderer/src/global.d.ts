@@ -1,5 +1,6 @@
 import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
 import type {
+  CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
   RetryRepositoryRemoteRequest
@@ -11,6 +12,7 @@ declare global {
       workspace: {
         getInitialState: () => Promise<InitialWorkspaceState>
         selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
+        createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
         createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
         retryRepositoryRemote: (
           request: RetryRepositoryRemoteRequest

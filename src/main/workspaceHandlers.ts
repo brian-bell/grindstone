@@ -5,7 +5,9 @@ import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/conf
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
+  type CreateFlowRequest,
   type CreateRepositoryRequest,
+  type FlowCreateError,
   type FlowPaneState,
   type InitialWorkspaceState,
   type RepositoryCreateError,
@@ -20,6 +22,7 @@ import {
   type GrindstoneConfigResult,
   type LoadGrindstoneConfigOptions
 } from './config'
+import { createFlow, type FlowCommandRunner, type LaunchPreparer } from './flowCreation'
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 import {
@@ -39,6 +42,7 @@ type WorkspaceContext = {
   scanRoots: RepositoryPaneState['create']['scanRoots']
   catalog: RepositoryCatalogResult
   remoteRetries: RepositoryPaneState['create']['remoteRetries']
+  bootstrapHooks: GrindstoneConfigResult['bootstrapHooks']
 }
 
 export type LoadWorkspaceStateOptions = LoadGrindstoneConfigOptions & {
@@ -85,7 +89,8 @@ async function buildWorkspaceState(
         repositories: [],
         diagnostics: config.diagnostics
       },
-      remoteRetries: []
+      remoteRetries: [],
+      bootstrapHooks: []
     }
 
     return {
@@ -110,7 +115,8 @@ async function buildWorkspaceState(
     },
     scanRoots,
     catalog,
-    remoteRetries
+    remoteRetries,
+    bootstrapHooks: config.bootstrapHooks
   }
 
   const workspaceState: InitialWorkspaceState = {
@@ -250,6 +256,58 @@ export async function createRepositoryInWorkspace(
   return currentWorkspaceState
 }
 
+export async function createFlowInWorkspace(
+  request: CreateFlowRequest,
+  options: {
+    runCommand?: FlowCommandRunner
+    prepareLaunch?: LaunchPreparer
+  } = {}
+): Promise<InitialWorkspaceState> {
+  const context = await getWorkspaceContext()
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  const selectedRepositoryId = workspaceState.repository.selectedRepositoryId
+  const selectedRepository = context.catalog.repositories.find(
+    (repository) => repository.id === selectedRepositoryId
+  )
+
+  if (selectedRepository === undefined) {
+    currentWorkspaceState = updateFlowCreateState(workspaceState, {
+      code: 'repository_unavailable',
+      message: 'Select a repository before creating a Flow.'
+    })
+    return currentWorkspaceState
+  }
+
+  const requestId = currentSelectionRequestId + 1
+  currentSelectionRequestId = requestId
+  const store = await currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot ?? ''
+  })
+  const result = await createFlow({
+    repository: selectedRepository,
+    artifactRoot: currentArtifactRoot,
+    bootstrapHooks: context.bootstrapHooks,
+    request,
+    store,
+    runCommand: options.runCommand,
+    prepareLaunch: options.prepareLaunch
+  })
+
+  if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
+    return currentWorkspaceState ?? workspaceState
+  }
+
+  const refreshedWorkspace = await createWorkspaceStateFromContext(
+    context,
+    selectedRepository.id,
+    null
+  )
+  currentWorkspaceState = result.ok
+    ? refreshedWorkspace
+    : updateFlowCreateState(refreshedWorkspace, result.error)
+  return currentWorkspaceState
+}
+
 export async function retryRepositoryRemoteInWorkspace(
   request: { retryId: string },
   options: { runCommand?: CommandRunner } = {}
@@ -326,7 +384,12 @@ async function createSelectedRepositoryState(
       description: repository.path,
       selectedRepositoryId: repository.id
     },
-    flow: await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory)
+    flow: await createFlowPaneState(repository, currentArtifactRoot, currentFlowStoreFactory),
+    shortcuts: workspaceState.shortcuts.map((shortcut) =>
+      shortcut.id === 'new-flow'
+        ? { ...shortcut, disabled: false }
+        : shortcut
+    )
   }
 }
 
@@ -336,6 +399,9 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.selectRepository, (request) =>
     selectRepository(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.createFlow, (request) =>
+    createFlowInWorkspace(request)
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.createRepository, (request) =>
     createRepositoryInWorkspace(request)
@@ -451,6 +517,26 @@ function updateRepositoryCreateState(
   }
 }
 
+function updateFlowCreateState(
+  workspaceState: InitialWorkspaceState,
+  error: FlowCreateError
+): InitialWorkspaceState {
+  if (workspaceState.flow.status !== 'ready' && workspaceState.flow.status !== 'empty') {
+    return workspaceState
+  }
+
+  return {
+    ...workspaceState,
+    flow: {
+      ...workspaceState.flow,
+      create: {
+        available: workspaceState.flow.create?.available ?? true,
+        error
+      }
+    }
+  }
+}
+
 function createRepositoryScanRoots(scanRoots: ConfiguredPath[]): RepositoryPaneState['create']['scanRoots'] {
   const usedIds = new Map<string, number>()
 
@@ -536,7 +622,11 @@ async function createFlowPaneState(
         title: `No Flows for ${repository.name}`,
         description: `No Flow records were found for ${repository.path}.`,
         repositoryId: repository.id,
-        repositoryName: repository.name
+        repositoryName: repository.name,
+        create: {
+          available: true,
+          error: null
+        }
       }
     }
 
@@ -544,7 +634,11 @@ async function createFlowPaneState(
       status: 'ready',
       repositoryId: repository.id,
       repositoryName: repository.name,
-      flows
+      flows,
+      create: {
+        available: true,
+        error: null
+      }
     }
   } catch (error) {
     return {

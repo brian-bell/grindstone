@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { ipcChannels } from '@shared/ipc'
 import type { FlowListRow, RepositoryRow } from '@shared/workspace'
 import {
+  createFlowInWorkspace,
   createRepositoryInWorkspace,
   getCurrentEditableConfig,
   loadInitialWorkspaceState,
@@ -14,6 +15,7 @@ import {
   updateCommonConfig
 } from './workspaceHandlers'
 import type { FlowStore } from './flowStore'
+import type { FlowCommandRunner } from './flowCreation'
 import { CommandRunError, type CommandRunner } from './repositoryCreation'
 
 async function makeTempDir(): Promise<string> {
@@ -60,6 +62,23 @@ function flowRow(flowId: string, repository: RepositoryRow): FlowListRow {
     repositoryPath: repository.id,
     createdAt: '2026-06-10T10:00:00.000Z',
     updatedAt: '2026-06-10T10:00:00.000Z'
+  }
+}
+
+function readOnlyFlowStore(
+  listFlowsForRepository: FlowStore['listFlowsForRepository']
+): FlowStore {
+  return {
+    async readFlow() {
+      return undefined
+    },
+    listFlowsForRepository,
+    async createFlowRecord() {
+      throw new Error('createFlowRecord is not expected in this test.')
+    },
+    async updateFlowRecord() {
+      throw new Error('updateFlowRecord is not expected in this test.')
+    }
   }
 }
 
@@ -426,6 +445,121 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('creates a Flow worktree for the selected repository and refreshes the Flow list', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-flow-create')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+    const commands: Array<{ command: string; args: string[]; cwd: string }> = []
+    const runCommand: FlowCommandRunner = async (command, args, options) => {
+      commands.push({ command, args, cwd: options.cwd })
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
+        throw new Error('branch not found')
+      }
+      if (args.join(' ') === 'rev-parse --verify main^{commit}') {
+        return { stdout: 'abc123\n' }
+      }
+      return { stdout: '' }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    const canonicalRepoPath = await realpath(repoPath)
+    await selectRepository({ repositoryId })
+
+    await expect(createFlowInWorkspace(
+      {
+        title: 'Ship workspace creation',
+        instructions: 'Build the end-to-end path.',
+        baseRef: 'main'
+      },
+      { runCommand }
+    )).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        create: {
+          error: null
+        },
+        flows: [
+          {
+            id: 'ship-workspace-creation',
+            status: 'active',
+            title: 'Ship workspace creation',
+            branch: 'flow/ship-workspace-creation',
+            baseRef: 'main',
+            commit: 'abc123',
+            worktreePath: join(`${canonicalRepoPath}-worktrees`, 'flow-ship-workspace-creation')
+          }
+        ]
+      }
+    })
+    expect(commands.map((command) => [command.command, command.args])).toEqual([
+      ['git', ['rev-parse', '--verify', 'refs/heads/flow/ship-workspace-creation']],
+      ['git', ['rev-parse', '--verify', 'main^{commit}']],
+      ['git', ['branch', 'flow/ship-workspace-creation', 'abc123']],
+      ['git', ['worktree', 'add', join(`${canonicalRepoPath}-worktrees`, 'flow-ship-workspace-creation'), 'flow/ship-workspace-creation']]
+    ])
+  })
+
+  it('persists bootstrap failures as selected repository Flow rows', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-bootstrap-failure')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(
+      configPath,
+      `repos = ["${repoPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n[[bootstrap_hooks]]\ncommand = "npm install"\n`
+    )
+    const runCommand: FlowCommandRunner = async (command, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
+        throw new Error('branch not found')
+      }
+      if (args.join(' ') === 'rev-parse --verify HEAD^{commit}') {
+        return { stdout: 'abc123\n' }
+      }
+      if (command === 'npm install') {
+        throw new Error('npm install failed')
+      }
+      return { stdout: '' }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const result = await createFlowInWorkspace(
+      {
+        title: 'Broken bootstrap',
+        instructions: 'Run hooks.'
+      },
+      { runCommand }
+    )
+
+    expect(result.flow).toMatchObject({
+      status: 'ready',
+      create: {
+        error: {
+          code: 'bootstrap_failed',
+          message: 'npm install failed'
+        }
+      },
+      flows: [
+        {
+          id: 'broken-bootstrap',
+          status: 'failed',
+          failure: {
+            stage: 'bootstrap',
+            message: 'npm install failed',
+            command: 'npm install'
+          }
+        }
+      ]
+    })
+  })
+
   it('maps fatal Flow store failures to a selected-repository Flow error state', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-error')
@@ -463,11 +597,8 @@ describe('workspace main handlers', () => {
 
     let resolveAlpha: ((flows: FlowListRow[]) => void) | undefined
     let resolveBeta: ((flows: FlowListRow[]) => void) | undefined
-    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> => ({
-      async readFlow() {
-        return undefined
-      },
-      listFlowsForRepository(repository) {
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> =>
+      readOnlyFlowStore((repository) => {
         return new Promise<FlowListRow[]>((resolve) => {
           if (repository.name === 'repo-alpha') {
             resolveAlpha = resolve
@@ -475,8 +606,8 @@ describe('workspace main handlers', () => {
             resolveBeta = resolve
           }
         })
-      }
-    }))
+      })
+    )
 
     const initialState = await loadInitialWorkspaceState({ configPath, flowStoreFactory })
     const alphaRepository = initialState.repository.repositories.find((repo) => repo.name === 'repo-alpha')
@@ -532,16 +663,13 @@ describe('workspace main handlers', () => {
     await writeFile(configPath, `repos = ["${alphaPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
 
     let resolveAlpha: ((flows: FlowListRow[]) => void) | undefined
-    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> => ({
-      async readFlow() {
-        return undefined
-      },
-      listFlowsForRepository(repository) {
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> =>
+      readOnlyFlowStore((repository) => {
         return new Promise<FlowListRow[]>((resolve) => {
           resolveAlpha = (flows) => resolve(flows.length > 0 ? flows : [flowRow('alpha-flow', repository)])
         })
-      }
-    }))
+      })
+    )
 
     const initialState = await loadInitialWorkspaceState({ configPath, flowStoreFactory })
     const alphaRepository = initialState.repository.repositories[0]
@@ -572,6 +700,7 @@ describe('workspace main handlers', () => {
             configuredPath: artifactRoot,
             resolvedPath: artifactRoot
           },
+          bootstrapHooks: [],
           diagnostics: []
         }
       },
@@ -614,16 +743,13 @@ describe('workspace main handlers', () => {
     await writeFile(alphaConfigPath, `repos = ["${alphaPath}"]\n[artifacts]\nroot = "${alphaArtifactRoot}"\n`)
 
     let resolveAlpha: ((flows: FlowListRow[]) => void) | undefined
-    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> => ({
-      async readFlow() {
-        return undefined
-      },
-      listFlowsForRepository(repository) {
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> =>
+      readOnlyFlowStore((repository) => {
         return new Promise<FlowListRow[]>((resolve) => {
           resolveAlpha = (flows) => resolve(flows.length > 0 ? flows : [flowRow('alpha-flow', repository)])
         })
-      }
-    }))
+      })
+    )
 
     const initialState = await loadInitialWorkspaceState({
       configPath: alphaConfigPath,
@@ -653,6 +779,7 @@ describe('workspace main handlers', () => {
             configuredPath: betaArtifactRoot,
             resolvedPath: betaArtifactRoot
           },
+          bootstrapHooks: [],
           diagnostics: []
         }
       },

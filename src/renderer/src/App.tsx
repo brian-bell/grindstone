@@ -19,6 +19,7 @@ import type {
 } from '@shared/config'
 import type {
   CatalogDiagnostic,
+  CreateFlowRequest,
   FlowPaneState,
   GitHubVisibility,
   InitialWorkspaceState,
@@ -229,7 +230,10 @@ export function App(): ReactElement {
           <Sparkles aria-hidden="true" size={18} />
           <h1 id="flow-workspace-title">Flow Workspace</h1>
         </div>
-        <FlowWorkspaceStateView state={flowState} />
+        <FlowWorkspaceStateView
+          state={flowState}
+          onWorkspaceUpdate={applyWorkspace}
+        />
       </main>
 
       <section
@@ -1084,7 +1088,13 @@ function getErrorMessage(error: unknown): string {
   return 'Unable to load Flow workspace'
 }
 
-function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactElement {
+function FlowWorkspaceStateView({
+  state,
+  onWorkspaceUpdate
+}: {
+  state: FlowPaneState
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+}): ReactElement {
   if (state.status === 'loading') {
     const title = state.repositoryName === undefined
       ? 'Loading Flow workspace'
@@ -1123,6 +1133,11 @@ function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactEleme
   if (state.status === 'ready') {
     return (
       <div className="flow-list-view">
+        <FlowCreatePanel
+          create={state.create}
+          onWorkspaceUpdate={onWorkspaceUpdate}
+        />
+
         <div className="flow-list-header">
           <p className="eyebrow">Flow</p>
           <h2>{state.repositoryName} Flows</h2>
@@ -1141,9 +1156,21 @@ function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactEleme
                 <span>{flow.repositoryPath}</span>
                 {flow.branch === undefined ? null : <span>{flow.branch}</span>}
                 {flow.worktreePath === undefined ? null : <span>{flow.worktreePath}</span>}
+                {flow.baseRef === undefined ? null : <span>base {flow.baseRef}</span>}
+                {flow.commit === undefined ? null : <span>{flow.commit}</span>}
                 {flow.planId === undefined ? null : <span>{flow.planId}</span>}
                 {flow.planPath === undefined ? null : <span>{flow.planPath}</span>}
               </div>
+              {flow.failure === undefined ? null : (
+                <div
+                  className="flow-failure"
+                  role="alert"
+                >
+                  <strong>{flow.failure.stage}</strong>
+                  <span>{flow.failure.message}</span>
+                  {flow.failure.output === undefined ? null : <span>{flow.failure.output}</span>}
+                </div>
+              )}
               {flow.phases === undefined ? null : (
                 <div className="phase-summary" aria-label={`${flow.title} phases`}>
                   {flow.phases.map((phase) => (
@@ -1162,10 +1189,127 @@ function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactEleme
   }
 
   return (
-    <div className="state-block">
-      <p className="eyebrow">Flow</p>
-      <h2>{state.title}</h2>
-      <p>{state.description}</p>
+    <div className="empty-flow-view">
+      {state.create === undefined ? null : (
+        <FlowCreatePanel
+          create={state.create}
+          onWorkspaceUpdate={onWorkspaceUpdate}
+        />
+      )}
+      <div className="state-block">
+        <p className="eyebrow">Flow</p>
+        <h2>{state.title}</h2>
+        <p>{state.description}</p>
+      </div>
     </div>
+  )
+}
+
+function FlowCreatePanel({
+  create,
+  onWorkspaceUpdate
+}: {
+  create: NonNullable<Extract<FlowPaneState, { status: 'ready' | 'empty' }>['create']>
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+}): ReactElement {
+  const [title, setTitle] = useState('')
+  const [instructions, setInstructions] = useState('')
+  const [baseRef, setBaseRef] = useState('')
+  const [localError, setLocalError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    const request: CreateFlowRequest = {
+      title: title.trim(),
+      instructions: instructions.trim(),
+      baseRef: baseRef.trim() === '' ? undefined : baseRef.trim()
+    }
+
+    if (request.title === '') {
+      setLocalError('Flow title is required.')
+      return
+    }
+
+    if (request.instructions === '') {
+      setLocalError('Flow instructions are required.')
+      return
+    }
+
+    setLocalError(null)
+    setIsSubmitting(true)
+    try {
+      const nextWorkspace = await window.grindstone.workspace.createFlow(request)
+      onWorkspaceUpdate(nextWorkspace)
+      if (
+        (nextWorkspace.flow.status === 'ready' || nextWorkspace.flow.status === 'empty') &&
+        nextWorkspace.flow.create?.error === null
+      ) {
+        setTitle('')
+        setInstructions('')
+        setBaseRef('')
+      }
+    } catch (error: unknown) {
+      setLocalError(getErrorMessage(error))
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const errorMessage = localError ?? create.error?.message ?? null
+
+  return (
+    <form
+      aria-label="Create Flow"
+      className="flow-create-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
+      <label className="field">
+        <span>Title</span>
+        <input
+          disabled={!create.available || isSubmitting}
+          onChange={(event) => setTitle(event.currentTarget.value)}
+          placeholder="Ship workspace creation"
+          value={title}
+        />
+      </label>
+      <label className="field">
+        <span>Instructions</span>
+        <textarea
+          disabled={!create.available || isSubmitting}
+          onChange={(event) => setInstructions(event.currentTarget.value)}
+          placeholder="Describe the implementation goal"
+          value={instructions}
+        />
+      </label>
+      <label className="field">
+        <span>Base ref</span>
+        <input
+          disabled={!create.available || isSubmitting}
+          onChange={(event) => setBaseRef(event.currentTarget.value)}
+          placeholder="HEAD"
+          value={baseRef}
+        />
+      </label>
+
+      {errorMessage === null ? null : (
+        <div
+          aria-label="Flow creation error"
+          className="create-error"
+          role="alert"
+        >
+          {errorMessage}
+        </div>
+      )}
+
+      <button
+        className="primary-action"
+        disabled={!create.available || isSubmitting || title.trim() === '' || instructions.trim() === ''}
+        type="submit"
+      >
+        <CirclePlus aria-hidden="true" size={16} />
+        <span>{isSubmitting ? 'Creating' : 'Create Flow'}</span>
+      </button>
+    </form>
   )
 }

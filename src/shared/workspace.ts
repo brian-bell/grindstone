@@ -45,6 +45,12 @@ export type RetryRepositoryRemoteRequest = {
   retryId: string
 }
 
+export type CreateFlowRequest = {
+  title: string
+  instructions: string
+  baseRef?: string
+}
+
 export type RepositoryCreateError = {
   code:
     | 'validation_error'
@@ -92,6 +98,39 @@ export type RepositoryPaneState = {
   create: RepositoryCreateState
 }
 
+export type FlowFailureStage = 'validation' | 'worktree' | 'bootstrap' | 'launch_prep'
+
+export type FlowFailureSummary = {
+  stage: FlowFailureStage
+  message: string
+  command?: string
+  output?: string
+}
+
+export type FlowStartMetadata = {
+  repositoryPath: string
+  worktreePath: string
+  branch: string
+  baseRef: string
+  commit: string
+}
+
+export type FlowCreateError = {
+  code:
+    | 'validation_error'
+    | 'repository_unavailable'
+    | 'artifact_root_unavailable'
+    | 'worktree_creation_failed'
+    | 'bootstrap_failed'
+    | 'launch_prep_failed'
+  message: string
+}
+
+export type FlowCreateState = {
+  available: boolean
+  error: FlowCreateError | null
+}
+
 export type FlowPhaseSummary = {
   id: string
   title: string
@@ -109,9 +148,13 @@ export type FlowListRow = {
   status: string
   repositoryId: string
   repositoryPath: string
+  instructions?: string
   branch?: string
   worktreePath?: string
+  baseRef?: string
   commit?: string
+  start?: FlowStartMetadata
+  failure?: FlowFailureSummary
   planId?: string
   planPath?: string
   createdAt: string
@@ -121,9 +164,22 @@ export type FlowListRow = {
 
 export type FlowPaneState =
   | { status: 'loading'; repositoryId?: string; repositoryName?: string }
-  | { status: 'empty'; title: string; description: string; repositoryId?: string; repositoryName?: string }
+  | {
+      status: 'empty'
+      title: string
+      description: string
+      repositoryId?: string
+      repositoryName?: string
+      create?: FlowCreateState
+    }
   | { status: 'error'; message: string; repositoryId?: string; repositoryName?: string }
-  | { status: 'ready'; repositoryId: string; repositoryName: string; flows: FlowListRow[] }
+  | {
+      status: 'ready'
+      repositoryId: string
+      repositoryName: string
+      flows: FlowListRow[]
+      create: FlowCreateState
+    }
 
 export type ContextHint = {
   id: string

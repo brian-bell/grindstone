@@ -192,6 +192,27 @@ textarea {
   margin-top: 28px;
 }
 
+.empty-flow-view {
+  display: grid;
+  gap: 18px;
+  margin-top: 28px;
+}
+
+.flow-create-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(220px, 1.4fr) minmax(110px, 0.55fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d1d7d4;
+  border-radius: 7px;
+  background: #f7faf9;
+}
+
+.flow-create-form .create-error {
+  grid-column: 1 / -1;
+}
+
 .flow-list-header {
   display: grid;
   gap: 8px;
@@ -282,6 +303,19 @@ textarea {
   background: #fff9ee;
   border-color: #dfd0ae;
   color: #534631;
+}
+
+.flow-failure {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border-left: 3px solid #a23535;
+  border-radius: 6px;
+  background: #fff0ee;
+  color: #7e2525;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .repository-list {
@@ -654,5 +688,9 @@ textarea {
   .repository-summary,
   .state-block {
     min-height: 180px;
+  }
+
+  .flow-create-form {
+    grid-template-columns: 1fr;
   }
 }

@@ -63,7 +63,11 @@ describe('middle pane Flow-only surface', () => {
         status: 'ready',
         repositoryId: '/repos/grindstone',
         repositoryName: 'grindstone',
-        flows: []
+        flows: [],
+        create: {
+          available: true,
+          error: null
+        }
       }
     ]
 

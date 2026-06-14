@@ -17,12 +17,20 @@ export type ConfiguredPath = {
   resolvedPath: string
 }
 
+export type RuntimeBootstrapHook = {
+  name?: string
+  command: string
+  cwd?: string
+  env?: Record<string, string>
+}
+
 export type GrindstoneConfigResult = {
   ok: boolean
   configPath: string | undefined
   scanRoots: ConfiguredPath[]
   repos: ConfiguredPath[]
   artifactRoot: ConfiguredPath
+  bootstrapHooks: RuntimeBootstrapHook[]
   diagnostics: CatalogDiagnostic[]
 }
 
@@ -112,6 +120,7 @@ export async function loadGrindstoneConfig(
       resolveConfiguredPath(path, configDir, homeDirectory)
     ),
     artifactRoot,
+    bootstrapHooks: normalizeRuntimeBootstrapHooks(rawConfig.bootstrap_hooks),
     diagnostics: []
   }
 }
@@ -373,6 +382,7 @@ function emptyConfig(
       configDir,
       homeDirectory
     ),
+    bootstrapHooks: [],
     diagnostics: []
   }
 }
@@ -578,6 +588,40 @@ function normalizeBootstrapHooks(value: unknown): EditableBootstrapHook[] {
     }
 
     return normalizedHook
+  })
+}
+
+function normalizeRuntimeBootstrapHooks(value: unknown): RuntimeBootstrapHook[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.filter(isRecord).flatMap((hook): RuntimeBootstrapHook[] => {
+    if (typeof hook.command !== 'string' || hook.command.trim() === '') {
+      return []
+    }
+
+    const normalizedHook: RuntimeBootstrapHook = {
+      command: hook.command
+    }
+
+    if (typeof hook.name === 'string' && hook.name.trim() !== '') {
+      normalizedHook.name = hook.name
+    }
+
+    if (typeof hook.cwd === 'string' && hook.cwd.trim() !== '') {
+      normalizedHook.cwd = hook.cwd
+    }
+
+    if (isRecord(hook.env)) {
+      normalizedHook.env = Object.fromEntries(
+        Object.entries(hook.env).filter((entry): entry is [string, string] =>
+          typeof entry[1] === 'string'
+        )
+      )
+    }
+
+    return [normalizedHook]
   })
 }
 

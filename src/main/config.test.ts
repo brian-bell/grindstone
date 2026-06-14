@@ -50,6 +50,7 @@ describe('Grindstone config loader', () => {
         configuredPath: '~/.local/state/wtui/sessions/v1',
         resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
       },
+      bootstrapHooks: [],
       diagnostics: []
     })
   })
@@ -147,6 +148,7 @@ describe('Grindstone config loader', () => {
         configuredPath: '~/.local/state/wtui/sessions/v1',
         resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
       },
+      bootstrapHooks: [],
       diagnostics: []
     })
   })

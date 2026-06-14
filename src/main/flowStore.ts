@@ -1,10 +1,19 @@
-import { mkdir, readFile, readdir, realpath } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { FlowListRow, FlowPhaseSummary, RepositoryRow } from '@shared/workspace'
+import { randomUUID } from 'node:crypto'
+import type {
+  FlowFailureSummary,
+  FlowListRow,
+  FlowPhaseSummary,
+  FlowStartMetadata,
+  RepositoryRow
+} from '@shared/workspace'
 
 export type FlowStore = {
   listFlowsForRepository: (repository: RepositoryRow) => Promise<FlowListRow[]>
   readFlow: (flowId: string) => Promise<FlowListRow | undefined>
+  createFlowRecord: (record: FlowRecordInput) => Promise<FlowListRow>
+  updateFlowRecord: (flowId: string, update: FlowRecordUpdate) => Promise<FlowListRow>
 }
 
 export type CreateFlowStoreOptions = {
@@ -12,6 +21,29 @@ export type CreateFlowStoreOptions = {
 }
 
 type RawFlowMetadata = Record<string, unknown>
+
+export type FlowRecordInput = {
+  id: string
+  title: string
+  instructions: string
+  status: string
+  repositoryPath: string
+  branch?: string
+  worktreePath?: string
+  baseRef?: string
+  commit?: string
+  start?: FlowStartMetadata
+  failure?: FlowFailureSummary
+  createdAt: string
+  updatedAt: string
+}
+
+export type FlowRecordUpdate = Partial<
+  Pick<
+    FlowRecordInput,
+    'status' | 'branch' | 'worktreePath' | 'baseRef' | 'commit' | 'start' | 'failure' | 'updatedAt'
+  >
+>
 
 const SAFE_FLOW_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
@@ -57,6 +89,59 @@ export async function createFlowStore(options: CreateFlowStoreOptions): Promise<
       }
 
       return readFlowFromDirectory(flowsRoot, flowId)
+    },
+
+    async createFlowRecord(record) {
+      if (!isSafeFlowId(record.id)) {
+        throw new Error(`Unsafe Flow id: ${record.id}`)
+      }
+
+      const flowDir = join(flowsRoot, record.id)
+      try {
+        await mkdir(flowDir)
+      } catch (error) {
+        throw new Error(`Flow record already exists or cannot be created: ${getErrorMessage(error)}`)
+      }
+
+      const metadata = toRawMetadata(record)
+      try {
+        await writeMetadataAtomically(flowDir, metadata)
+      } catch (error) {
+        throw createFatalStoreError(error)
+      }
+
+      const row = await mapFlowMetadata(record.id, metadata)
+      if (row === undefined) {
+        throw new Error(`Created Flow record is unreadable: ${record.id}`)
+      }
+
+      return row
+    },
+
+    async updateFlowRecord(flowId, update) {
+      if (!isSafeFlowId(flowId)) {
+        throw new Error(`Unsafe Flow id: ${flowId}`)
+      }
+
+      const flowDir = join(flowsRoot, flowId)
+      const existing = await readRawFlowFromDirectory(flowsRoot, flowId)
+      if (existing === undefined) {
+        throw new Error(`Flow record not found: ${flowId}`)
+      }
+
+      const metadata = applyMetadataUpdate(existing, update)
+      try {
+        await writeMetadataAtomically(flowDir, metadata)
+      } catch (error) {
+        throw createFatalStoreError(error)
+      }
+
+      const row = await mapFlowMetadata(flowId, metadata)
+      if (row === undefined) {
+        throw new Error(`Updated Flow record is unreadable: ${flowId}`)
+      }
+
+      return row
     }
   }
 }
@@ -65,19 +150,24 @@ async function readFlowFromDirectory(
   flowsRoot: string,
   flowId: string
 ): Promise<FlowListRow | undefined> {
-  let metadata: RawFlowMetadata
-  try {
-    const parsedMetadata = JSON.parse(await readFile(join(flowsRoot, flowId, 'meta.json'), 'utf8'))
-    if (!isRecord(parsedMetadata)) {
-      return undefined
-    }
-
-    metadata = parsedMetadata
-  } catch {
+  const rawMetadata = await readRawFlowFromDirectory(flowsRoot, flowId)
+  if (rawMetadata === undefined) {
     return undefined
   }
 
-  return mapFlowMetadata(flowId, metadata)
+  return mapFlowMetadata(flowId, rawMetadata)
+}
+
+async function readRawFlowFromDirectory(
+  flowsRoot: string,
+  flowId: string
+): Promise<RawFlowMetadata | undefined> {
+  try {
+    const parsedMetadata = JSON.parse(await readFile(join(flowsRoot, flowId, 'meta.json'), 'utf8'))
+    return isRecord(parsedMetadata) ? parsedMetadata : undefined
+  } catch {
+    return undefined
+  }
 }
 
 async function mapFlowMetadata(
@@ -110,15 +200,64 @@ async function mapFlowMetadata(
     status: metadata.status,
     repositoryId,
     repositoryPath: repositoryId,
+    instructions: optionalString(metadata.instructions),
     branch: optionalString(metadata.branch),
     worktreePath: optionalString(metadata.worktree_path),
+    baseRef: optionalString(metadata.base_ref),
     commit: optionalString(metadata.commit),
+    start: mapStartMetadata(metadata.start),
+    failure: mapFailureSummary(metadata.failure),
     planId: optionalString(metadata.plan_id),
     planPath: optionalString(metadata.plan_path),
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
     phases: mapPhases(metadata.phases)
   }
+}
+
+function mapStartMetadata(value: unknown): FlowStartMetadata | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.repository_path !== 'string' ||
+    typeof value.worktree_path !== 'string' ||
+    typeof value.branch !== 'string' ||
+    typeof value.base_ref !== 'string' ||
+    typeof value.commit !== 'string'
+  ) {
+    return undefined
+  }
+
+  return {
+    repositoryPath: value.repository_path,
+    worktreePath: value.worktree_path,
+    branch: value.branch,
+    baseRef: value.base_ref,
+    commit: value.commit
+  }
+}
+
+function mapFailureSummary(value: unknown): FlowFailureSummary | undefined {
+  if (
+    !isRecord(value) ||
+    !isFailureStage(value.stage) ||
+    typeof value.message !== 'string'
+  ) {
+    return undefined
+  }
+
+  return {
+    stage: value.stage,
+    message: value.message,
+    command: optionalString(value.command),
+    output: optionalString(value.output)
+  }
+}
+
+function isFailureStage(value: unknown): value is FlowFailureSummary['stage'] {
+  return value === 'validation' ||
+    value === 'worktree' ||
+    value === 'bootstrap' ||
+    value === 'launch_prep'
 }
 
 function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
@@ -204,7 +343,93 @@ function isSafeFlowId(flowId: string): boolean {
   return SAFE_FLOW_ID.test(flowId)
 }
 
+function toRawMetadata(record: FlowRecordInput): RawFlowMetadata {
+  return withoutUndefined({
+    schema_version: 1,
+    flow_id: record.id,
+    title: record.title,
+    instructions: record.instructions,
+    status: record.status,
+    repo_path: record.repositoryPath,
+    branch: record.branch,
+    worktree_path: record.worktreePath,
+    base_ref: record.baseRef,
+    commit: record.commit,
+    start: record.start === undefined ? undefined : toRawStart(record.start),
+    failure: record.failure === undefined ? undefined : withoutUndefined(record.failure),
+    created_at: record.createdAt,
+    updated_at: record.updatedAt
+  })
+}
+
+function applyMetadataUpdate(
+  metadata: RawFlowMetadata,
+  update: FlowRecordUpdate
+): RawFlowMetadata {
+  return withoutUndefined({
+    ...metadata,
+    status: update.status ?? metadata.status,
+    branch: update.branch ?? metadata.branch,
+    worktree_path: update.worktreePath ?? metadata.worktree_path,
+    base_ref: update.baseRef ?? metadata.base_ref,
+    commit: update.commit ?? metadata.commit,
+    start: update.start === undefined ? metadata.start : toRawStart(update.start),
+    failure:
+      update.failure === undefined ? metadata.failure : withoutUndefined(update.failure),
+    updated_at: update.updatedAt ?? metadata.updated_at
+  })
+}
+
+function toRawStart(start: FlowStartMetadata): RawFlowMetadata {
+  return {
+    repository_path: start.repositoryPath,
+    worktree_path: start.worktreePath,
+    branch: start.branch,
+    base_ref: start.baseRef,
+    commit: start.commit
+  }
+}
+
+function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter((entry) => entry[1] !== undefined)
+  ) as T
+}
+
+async function writeMetadataAtomically(flowDir: string, metadata: RawFlowMetadata): Promise<void> {
+  const tempPath = join(flowDir, `.meta.json.${process.pid}.${randomUUID()}.tmp`)
+  let tempFile: Awaited<ReturnType<typeof open>> | undefined
+
+  try {
+    tempFile = await open(tempPath, 'w', 0o600)
+    await tempFile.writeFile(`${JSON.stringify(metadata, null, 2)}\n`, 'utf8')
+    await tempFile.sync()
+    await tempFile.close()
+    tempFile = undefined
+    await rename(tempPath, join(flowDir, 'meta.json'))
+    await syncDirectory(flowDir)
+  } catch (error) {
+    await tempFile?.close().catch(() => undefined)
+    await unlink(tempPath).catch(() => undefined)
+    throw error
+  }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  let directory: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    directory = await open(path, 'r')
+    await directory.sync()
+  } finally {
+    await directory?.close().catch(() => undefined)
+  }
+}
+
 function createFatalStoreError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : 'Unknown error'
   return new Error(`Flow artifact store unavailable: ${detail}`)
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown error'
 }

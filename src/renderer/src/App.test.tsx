@@ -7,7 +7,7 @@ import type {
   ConfigUpdateResponse,
   EditableConfigState
 } from '@shared/config'
-import type { CreateRepositoryRequest, InitialWorkspaceState } from '@shared/workspace'
+import type { CreateFlowRequest, CreateRepositoryRequest, InitialWorkspaceState } from '@shared/workspace'
 
 const defaultInitialState: InitialWorkspaceState = {
   repository: {
@@ -110,6 +110,10 @@ const selectedCatalogState: InitialWorkspaceState = {
     status: 'ready',
     repositoryId: '/repos/grindstone',
     repositoryName: 'grindstone',
+    create: {
+      available: true,
+      error: null
+    },
     flows: [
       {
         id: 'artifact-backed-flow',
@@ -142,7 +146,11 @@ const emptySelectedCatalogState: InitialWorkspaceState = {
     title: 'No Flows for grindstone',
     description: 'No Flow records were found for /repos/grindstone.',
     repositoryId: '/repos/grindstone',
-    repositoryName: 'grindstone'
+    repositoryName: 'grindstone',
+    create: {
+      available: true,
+      error: null
+    }
   }
 }
 
@@ -192,6 +200,10 @@ const alphaSelectedCatalogState: InitialWorkspaceState = {
     status: 'ready',
     repositoryId: '/repos/alpha',
     repositoryName: 'alpha',
+    create: {
+      available: true,
+      error: null
+    },
     flows: [
       {
         id: 'alpha-flow',
@@ -218,6 +230,10 @@ const betaSelectedCatalogState: InitialWorkspaceState = {
     status: 'ready',
     repositoryId: '/repos/beta',
     repositoryName: 'beta',
+    create: {
+      available: true,
+      error: null
+    },
     flows: [
       {
         id: 'beta-flow',
@@ -261,7 +277,8 @@ const setWorkspaceApi = (
     config: editableConfigState
   } satisfies ConfigUpdateResponse),
   createRepository = vi.fn().mockResolvedValue(catalogState),
-  retryRepositoryRemote = vi.fn().mockResolvedValue(catalogState)
+  retryRepositoryRemote = vi.fn().mockResolvedValue(catalogState),
+  createFlow = vi.fn().mockResolvedValue(selectedCatalogState)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -269,6 +286,7 @@ const setWorkspaceApi = (
       workspace: {
         getInitialState,
         selectRepository,
+        createFlow,
         createRepository,
         retryRepositoryRemote
       },
@@ -341,6 +359,133 @@ describe('App shell', () => {
     expect(flowPane).toHaveTextContent('flow/list')
     expect(flowPane).toHaveTextContent('plan-flow-list')
     expect(flowPane).toHaveTextContent('Render list')
+  })
+
+  it('submits Flow creation through preload and clears the form after success', async () => {
+    const user = userEvent.setup()
+    const createdState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            id: 'ship-workspace-creation',
+            title: 'Ship workspace creation',
+            status: 'active',
+            repositoryId: '/repos/grindstone',
+            repositoryPath: '/repos/grindstone',
+            branch: 'flow/ship-workspace-creation',
+            worktreePath: '/repos/grindstone-worktrees/flow-ship-workspace-creation',
+            baseRef: 'main',
+            commit: 'abc123',
+            createdAt: '2026-06-14T10:00:00.000Z',
+            updatedAt: '2026-06-14T10:01:00.000Z'
+          }
+        ]
+      }
+    }
+    const createFlow = vi.fn().mockResolvedValue(createdState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: selectedCatalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      createFlow
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.type(within(flowPane).getByLabelText(/^title$/i), 'Ship workspace creation')
+    await user.type(within(flowPane).getByLabelText(/instructions/i), 'Build the path')
+    await user.type(within(flowPane).getByLabelText(/base ref/i), 'main')
+    await user.click(within(flowPane).getByRole('button', { name: /create flow/i }))
+
+    expect(createFlow).toHaveBeenCalledWith({
+      title: 'Ship workspace creation',
+      instructions: 'Build the path',
+      baseRef: 'main'
+    } satisfies CreateFlowRequest)
+    expect(await within(flowPane).findByText('Ship workspace creation')).toBeInTheDocument()
+    expect(within(flowPane).getByText('flow/ship-workspace-creation')).toBeInTheDocument()
+    expect(within(flowPane).getByLabelText(/^title$/i)).toHaveValue('')
+  })
+
+  it('keeps Flow creation input and renders persisted start failures', async () => {
+    const user = userEvent.setup()
+    const failedState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: {
+            code: 'bootstrap_failed',
+            message: 'npm install failed'
+          }
+        },
+        flows: [
+          {
+            id: 'broken-bootstrap',
+            title: 'Broken bootstrap',
+            status: 'failed',
+            repositoryId: '/repos/grindstone',
+            repositoryPath: '/repos/grindstone',
+            branch: 'flow/broken-bootstrap',
+            worktreePath: '/repos/grindstone-worktrees/flow-broken-bootstrap',
+            baseRef: 'HEAD',
+            commit: 'abc123',
+            failure: {
+              stage: 'bootstrap',
+              message: 'npm install failed',
+              output: 'missing package'
+            },
+            createdAt: '2026-06-14T10:00:00.000Z',
+            updatedAt: '2026-06-14T10:01:00.000Z'
+          }
+        ]
+      }
+    }
+    const createFlow = vi.fn().mockResolvedValue(failedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: selectedCatalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      createFlow
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.type(within(flowPane).getByLabelText(/^title$/i), 'Broken bootstrap')
+    await user.type(within(flowPane).getByLabelText(/instructions/i), 'Run hooks')
+    await user.click(within(flowPane).getByRole('button', { name: /create flow/i }))
+
+    expect(await within(flowPane).findByRole('alert', { name: /flow creation error/i }))
+      .toHaveTextContent('npm install failed')
+    expect(within(flowPane).getByText('missing package')).toBeInTheDocument()
+    expect(within(flowPane).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
   })
 
   it('shows repo-scoped loading while repository selection is pending', async () => {
