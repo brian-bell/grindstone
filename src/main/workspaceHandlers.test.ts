@@ -72,6 +72,9 @@ function readOnlyFlowStore(
     async readFlow() {
       return undefined
     },
+    async flowArtifactExists() {
+      return false
+    },
     listFlowsForRepository,
     async createFlowRecord() {
       throw new Error('createFlowRecord is not expected in this test.')

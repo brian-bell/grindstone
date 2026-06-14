@@ -243,13 +243,13 @@ async function allocateFlowResources({
     const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt + 1}`
     const branch = `flow/${slug}`
     const worktreePath = getFlowWorktreePath(repositoryPath, slug)
-    const [existingFlow, branchExists, worktreeExists] = await Promise.all([
-      store.readFlow(slug),
+    const [flowArtifactExists, branchExists, worktreeExists] = await Promise.all([
+      store.flowArtifactExists(slug),
       gitBranchExists(repositoryPath, branch, runCommand),
       pathExists(worktreePath)
     ])
 
-    if (existingFlow === undefined && !branchExists && !worktreeExists) {
+    if (!flowArtifactExists && !branchExists && !worktreeExists) {
       return {
         flowId: slug,
         branch,

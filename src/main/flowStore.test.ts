@@ -254,6 +254,10 @@ describe('Flow artifact store', () => {
     )
     await expect(store.readFlow('missing-flow')).resolves.toBeUndefined()
     await expect(store.readFlow('../unsafe')).resolves.toBeUndefined()
+    await expect(store.flowArtifactExists('valid-flow')).resolves.toBe(true)
+    await expect(store.flowArtifactExists('missing-meta')).resolves.toBe(true)
+    await expect(store.flowArtifactExists('missing-flow')).resolves.toBe(false)
+    await expect(store.flowArtifactExists('../unsafe')).resolves.toBe(false)
   })
 
   it('creates and updates Flow records under the artifact root', async () => {

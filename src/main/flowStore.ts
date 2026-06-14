@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
@@ -12,6 +12,7 @@ import type {
 export type FlowStore = {
   listFlowsForRepository: (repository: RepositoryRow) => Promise<FlowListRow[]>
   readFlow: (flowId: string) => Promise<FlowListRow | undefined>
+  flowArtifactExists: (flowId: string) => Promise<boolean>
   createFlowRecord: (record: FlowRecordInput) => Promise<FlowListRow>
   updateFlowRecord: (flowId: string, update: FlowRecordUpdate) => Promise<FlowListRow>
 }
@@ -91,6 +92,19 @@ export async function createFlowStore(options: CreateFlowStoreOptions): Promise<
       }
 
       return readFlowFromDirectory(flowsRoot, flowId)
+    },
+
+    async flowArtifactExists(flowId) {
+      if (!isSafeFlowId(flowId)) {
+        return false
+      }
+
+      try {
+        await stat(join(flowsRoot, flowId))
+        return true
+      } catch {
+        return false
+      }
     },
 
     async createFlowRecord(record) {

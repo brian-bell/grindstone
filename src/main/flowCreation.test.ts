@@ -180,6 +180,33 @@ describe('Flow creation engine', () => {
     })
   })
 
+  it('uses a deterministic suffix when a stale artifact directory uses the requested Flow id', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-stale-artifact')
+    const store = await createFlowStore({ artifactRoot })
+    await mkdir(join(artifactRoot, 'flows', 'stale-title'), { recursive: true })
+
+    await expect(createFlow({
+      repository,
+      artifactRoot,
+      bootstrapHooks: [],
+      request: {
+        title: 'Stale title',
+        instructions: 'Skip the stale artifact directory.'
+      },
+      store,
+      runCommand: gitRunner(),
+      now: () => '2026-06-14T11:30:00.000Z'
+    })).resolves.toMatchObject({
+      ok: true,
+      flow: {
+        id: 'stale-title-2',
+        branch: 'flow/stale-title-2'
+      }
+    })
+  })
+
   it('returns a structured worktree error when no collision-free allocation is available', async () => {
     const root = await makeTempDir()
     const repository = await makeRepository(root, 'repo-allocation-exhausted')
