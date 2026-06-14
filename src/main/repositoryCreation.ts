@@ -338,6 +338,10 @@ function validateRepositoryName(name: string): string | null {
     return 'Repository name cannot be . or ...'
   }
 
+  if (name.startsWith('-')) {
+    return 'Repository name cannot start with a dash.'
+  }
+
   if (isCatalogPrunedDirectoryName(name)) {
     return 'Repository name is reserved by the catalog scanner.'
   }

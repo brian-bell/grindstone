@@ -47,7 +47,7 @@ function request(
 }
 
 describe('repository creation service', () => {
-  it.each(['', '.', '..', '../escape', 'nested/repo', 'nested\\repo'])(
+  it.each(['', '.', '..', '-repo', '--help', '../escape', 'nested/repo', 'nested\\repo'])(
     'rejects invalid repository name %j before filesystem mutation',
     async (name) => {
       const root = await makeTempDir()
