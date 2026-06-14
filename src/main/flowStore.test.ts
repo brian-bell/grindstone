@@ -188,6 +188,8 @@ describe('Flow artifact store', () => {
     await writeFile(join(artifactRoot, 'flows', '.update.lock'), '')
     await mkdir(join(artifactRoot, 'flows', 'bad-json'), { recursive: true })
     await writeFile(join(artifactRoot, 'flows', 'bad-json', 'meta.json'), '{')
+    await mkdir(join(artifactRoot, 'flows', 'null-json'), { recursive: true })
+    await writeFile(join(artifactRoot, 'flows', 'null-json', 'meta.json'), 'null')
 
     const store = await createFlowStore({ artifactRoot })
 

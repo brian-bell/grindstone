@@ -64,6 +64,28 @@ describe('Grindstone config loader', () => {
     })
   })
 
+  it('resolves the default wtui artifact root below XDG_STATE_HOME when set', async () => {
+    const root = await makeTempDir()
+    const stateRoot = join(root, 'state-home')
+
+    await expect(
+      loadGrindstoneConfig({
+        cwd: join(root, 'missing-cwd'),
+        env: {
+          XDG_CONFIG_HOME: join(root, 'missing-xdg'),
+          XDG_STATE_HOME: stateRoot
+        },
+        homeDir: root
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      artifactRoot: {
+        configuredPath: join(stateRoot, 'wtui', 'sessions', 'v1'),
+        resolvedPath: join(stateRoot, 'wtui', 'sessions', 'v1')
+      }
+    })
+  })
+
   it('resolves configured artifact roots with the existing path rules', async () => {
     const root = await makeTempDir()
     const configDir = join(root, 'config')

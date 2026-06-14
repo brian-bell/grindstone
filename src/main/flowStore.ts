@@ -67,7 +67,12 @@ async function readFlowFromDirectory(
 ): Promise<FlowListRow | undefined> {
   let metadata: RawFlowMetadata
   try {
-    metadata = JSON.parse(await readFile(join(flowsRoot, flowId, 'meta.json'), 'utf8')) as RawFlowMetadata
+    const parsedMetadata = JSON.parse(await readFile(join(flowsRoot, flowId, 'meta.json'), 'utf8'))
+    if (!isRecord(parsedMetadata)) {
+      return undefined
+    }
+
+    metadata = parsedMetadata
   } catch {
     return undefined
   }

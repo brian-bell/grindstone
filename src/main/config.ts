@@ -22,7 +22,7 @@ export type LoadGrindstoneConfigOptions = {
   artifactRoot?: string
   configPath?: string
   cwd?: string
-  env?: Partial<Pick<NodeJS.ProcessEnv, 'XDG_CONFIG_HOME'>>
+  env?: Partial<Pick<NodeJS.ProcessEnv, 'XDG_CONFIG_HOME' | 'XDG_STATE_HOME'>>
   homeDir?: string
 }
 
@@ -74,7 +74,7 @@ export async function loadGrindstoneConfig(
   const configDir = dirname(configPath)
   const homeDirectory = options.homeDir ?? homedir()
   const artifactRoot = resolveConfiguredPath(
-    options.artifactRoot ?? getConfiguredArtifactRoot(rawConfig) ?? DEFAULT_ARTIFACT_ROOT,
+    options.artifactRoot ?? getConfiguredArtifactRoot(rawConfig) ?? getDefaultArtifactRoot(options),
     configDir,
     homeDirectory
   )
@@ -177,6 +177,15 @@ function getConfiguredArtifactRoot(rawConfig: RawConfig): string | undefined {
   return typeof rawConfig.artifacts.root === 'string' ? rawConfig.artifacts.root : undefined
 }
 
+function getDefaultArtifactRoot(options: LoadGrindstoneConfigOptions): string {
+  const xdgStateHome =
+    options.env === undefined ? process.env.XDG_STATE_HOME : options.env.XDG_STATE_HOME
+
+  return xdgStateHome === undefined || xdgStateHome === ''
+    ? DEFAULT_ARTIFACT_ROOT
+    : join(xdgStateHome, 'wtui', 'sessions', 'v1')
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -218,7 +227,7 @@ function emptyConfig(
     scanRoots: [],
     repos: [],
     artifactRoot: resolveConfiguredPath(
-      options.artifactRoot ?? DEFAULT_ARTIFACT_ROOT,
+      options.artifactRoot ?? getDefaultArtifactRoot(options),
       configDir,
       homeDirectory
     ),
