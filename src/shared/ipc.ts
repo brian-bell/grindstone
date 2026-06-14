@@ -4,6 +4,7 @@ import type {
   EditableConfigState
 } from './config'
 import type {
+  CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
   RetryRepositoryRemoteRequest
@@ -13,6 +14,7 @@ export const ipcChannels = {
   workspace: {
     getInitialState: 'workspace:getInitialState',
     selectRepository: 'workspace:selectRepository',
+    createFlow: 'workspace:createFlow',
     createRepository: 'workspace:createRepository',
     retryRepositoryRemote: 'workspace:retryRepositoryRemote'
   },
@@ -31,6 +33,7 @@ export type IpcRequestMap = {
   'workspace:selectRepository': {
     repositoryId: string
   }
+  'workspace:createFlow': CreateFlowRequest
   'workspace:createRepository': CreateRepositoryRequest
   'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
   'config:getEditableConfig': undefined
@@ -40,6 +43,7 @@ export type IpcRequestMap = {
 export type IpcResponseMap = {
   'workspace:getInitialState': InitialWorkspaceState
   'workspace:selectRepository': InitialWorkspaceState
+  'workspace:createFlow': InitialWorkspaceState
   'workspace:createRepository': InitialWorkspaceState
   'workspace:retryRepositoryRemote': InitialWorkspaceState
   'config:getEditableConfig': EditableConfigState

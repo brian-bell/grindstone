@@ -254,6 +254,117 @@ describe('Flow artifact store', () => {
     )
     await expect(store.readFlow('missing-flow')).resolves.toBeUndefined()
     await expect(store.readFlow('../unsafe')).resolves.toBeUndefined()
+    await expect(store.flowArtifactExists('valid-flow')).resolves.toBe(true)
+    await expect(store.flowArtifactExists('missing-meta')).resolves.toBe(true)
+    await expect(store.flowArtifactExists('missing-flow')).resolves.toBe(false)
+    await expect(store.flowArtifactExists('../unsafe')).resolves.toBe(false)
+  })
+
+  it('creates and updates Flow records under the artifact root', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-created-flow')
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.createFlowRecord({
+      id: 'created-flow',
+      title: 'Created Flow',
+      instructions: 'Build the feature',
+      status: 'creating',
+      repositoryPath: repository.path,
+      branch: 'flow/created-flow',
+      worktreePath: join(root, 'repo-created-flow-worktrees', 'flow-created-flow'),
+      baseRef: 'main',
+      createdAt: '2026-06-14T10:00:00.000Z',
+      updatedAt: '2026-06-14T10:00:00.000Z'
+    })).resolves.toMatchObject({
+      id: 'created-flow',
+      title: 'Created Flow',
+      instructions: 'Build the feature',
+      status: 'creating',
+      branch: 'flow/created-flow',
+      baseRef: 'main'
+    })
+
+    await expect(store.updateFlowRecord('created-flow', {
+      status: 'failed',
+      commit: 'abc123',
+      start: {
+        repositoryPath: repository.id,
+        worktreePath: join(root, 'repo-created-flow-worktrees', 'flow-created-flow'),
+        branch: 'flow/created-flow',
+        baseRef: 'main',
+        commit: 'abc123'
+      },
+      failure: {
+        stage: 'bootstrap',
+        message: 'npm install failed',
+        command: 'npm install',
+        output: 'missing package'
+      },
+      updatedAt: '2026-06-14T10:02:00.000Z'
+    })).resolves.toMatchObject({
+      id: 'created-flow',
+      status: 'failed',
+      commit: 'abc123',
+      start: {
+        branch: 'flow/created-flow',
+        baseRef: 'main',
+        commit: 'abc123'
+      },
+      failure: {
+        stage: 'bootstrap',
+        message: 'npm install failed',
+        command: 'npm install',
+        output: 'missing package'
+      },
+      updatedAt: '2026-06-14T10:02:00.000Z'
+    })
+
+    await expect(store.listFlowsForRepository(repository)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'created-flow',
+        failure: expect.objectContaining({
+          stage: 'bootstrap'
+        })
+      })
+    ])
+  })
+
+  it('clears failure metadata when a Flow record update sets failure to null', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-clear-failure')
+    const store = await createFlowStore({ artifactRoot })
+
+    await store.createFlowRecord({
+      id: 'recovering-flow',
+      title: 'Recovering Flow',
+      instructions: 'Clear stale failure metadata.',
+      status: 'failed',
+      repositoryPath: repository.path,
+      failure: {
+        stage: 'launch_prep',
+        message: 'launch failed'
+      },
+      createdAt: '2026-06-14T10:00:00.000Z',
+      updatedAt: '2026-06-14T10:00:00.000Z'
+    })
+
+    await expect(store.updateFlowRecord('recovering-flow', {
+      status: 'active',
+      failure: null,
+      updatedAt: '2026-06-14T10:01:00.000Z'
+    })).resolves.toMatchObject({
+      id: 'recovering-flow',
+      status: 'active',
+      failure: undefined
+    })
+    await expect(store.readFlow('recovering-flow')).resolves.toMatchObject({
+      id: 'recovering-flow',
+      status: 'active',
+      failure: undefined
+    })
   })
 
   it('treats artifact root and flows collection access failures as fatal', async () => {

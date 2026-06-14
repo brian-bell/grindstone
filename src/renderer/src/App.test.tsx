@@ -7,7 +7,7 @@ import type {
   ConfigUpdateResponse,
   EditableConfigState
 } from '@shared/config'
-import type { CreateRepositoryRequest, InitialWorkspaceState } from '@shared/workspace'
+import type { CreateFlowRequest, CreateRepositoryRequest, InitialWorkspaceState } from '@shared/workspace'
 
 const defaultInitialState: InitialWorkspaceState = {
   repository: {
@@ -110,6 +110,10 @@ const selectedCatalogState: InitialWorkspaceState = {
     status: 'ready',
     repositoryId: '/repos/grindstone',
     repositoryName: 'grindstone',
+    create: {
+      available: true,
+      error: null
+    },
     flows: [
       {
         id: 'artifact-backed-flow',
@@ -128,6 +132,12 @@ const selectedCatalogState: InitialWorkspaceState = {
             status: 'done',
             order: 1,
             summary: 'Rows are visible'
+          },
+          {
+            id: 'phase-launch',
+            title: 'Launch workspace',
+            status: 'active',
+            order: 2
           }
         ]
       }
@@ -142,7 +152,11 @@ const emptySelectedCatalogState: InitialWorkspaceState = {
     title: 'No Flows for grindstone',
     description: 'No Flow records were found for /repos/grindstone.',
     repositoryId: '/repos/grindstone',
-    repositoryName: 'grindstone'
+    repositoryName: 'grindstone',
+    create: {
+      available: true,
+      error: null
+    }
   }
 }
 
@@ -192,6 +206,10 @@ const alphaSelectedCatalogState: InitialWorkspaceState = {
     status: 'ready',
     repositoryId: '/repos/alpha',
     repositoryName: 'alpha',
+    create: {
+      available: true,
+      error: null
+    },
     flows: [
       {
         id: 'alpha-flow',
@@ -218,6 +236,10 @@ const betaSelectedCatalogState: InitialWorkspaceState = {
     status: 'ready',
     repositoryId: '/repos/beta',
     repositoryName: 'beta',
+    create: {
+      available: true,
+      error: null
+    },
     flows: [
       {
         id: 'beta-flow',
@@ -261,7 +283,8 @@ const setWorkspaceApi = (
     config: editableConfigState
   } satisfies ConfigUpdateResponse),
   createRepository = vi.fn().mockResolvedValue(catalogState),
-  retryRepositoryRemote = vi.fn().mockResolvedValue(catalogState)
+  retryRepositoryRemote = vi.fn().mockResolvedValue(catalogState),
+  createFlow = vi.fn().mockResolvedValue(selectedCatalogState)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -269,6 +292,7 @@ const setWorkspaceApi = (
       workspace: {
         getInitialState,
         selectRepository,
+        createFlow,
         createRepository,
         retryRepositoryRemote
       },
@@ -320,7 +344,7 @@ describe('App shell', () => {
     )
   })
 
-  it('selects a repository through preload and renders its Flow rows', async () => {
+  it('selects a repository through preload and renders its Flow records in a table', async () => {
     const user = userEvent.setup()
     const selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
     setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
@@ -330,17 +354,243 @@ describe('App shell', () => {
     await user.click(await screen.findByRole('button', { name: /grindstone/i }))
 
     expect(selectRepository).toHaveBeenCalledWith({ repositoryId: '/repos/grindstone' })
-    expect(screen.getByRole('button', { name: /grindstone/i })).toHaveAttribute(
+    const repositoryPane = screen.getByRole('region', { name: /repository area/i })
+    expect(within(repositoryPane).getByRole('button', { name: /grindstone/i })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
     const flowPane = screen.getByRole('main', { name: /flow workspace/i })
-    expect(flowPane).toHaveTextContent('Artifact backed Flow')
-    expect(flowPane).toHaveTextContent('active')
-    expect(flowPane).toHaveTextContent('Updated 2026-06-11T12:30:00.000Z')
-    expect(flowPane).toHaveTextContent('flow/list')
-    expect(flowPane).toHaveTextContent('plan-flow-list')
-    expect(flowPane).toHaveTextContent('Render list')
+    const flowTable = within(flowPane).getByRole('table', { name: /grindstone flow records/i })
+    expect(within(flowTable).getByRole('columnheader', { name: /flow/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /status/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /updated/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /branch/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /plan/i })).toBeInTheDocument()
+    expect(within(flowTable).getByRole('columnheader', { name: /phases/i })).toBeInTheDocument()
+
+    const rows = within(flowTable).getAllByRole('row')
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toHaveTextContent('Artifact backed Flow')
+    expect(rows[1]).toHaveTextContent('active')
+    expect(rows[1]).toHaveTextContent('2026-06-11T12:30:00.000Z')
+    expect(rows[1]).toHaveTextContent('flow/list')
+    expect(rows[1]).toHaveTextContent('plan-flow-list')
+    expect(rows[1]).toHaveTextContent('1/2 done, 1 active')
+    expect(rows[1]).not.toHaveTextContent('/repos/grindstone')
+    expect(rows[1]).not.toHaveTextContent('Render list')
+    const detailsButton = within(rows[1]).getByRole('button', {
+      name: /artifact backed flow details/i
+    })
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'false')
+    expect(detailsButton).toHaveAttribute(
+      'title',
+      expect.stringContaining('Repository: /repos/grindstone')
+    )
+    expect(detailsButton).toHaveAttribute(
+      'title',
+      expect.stringContaining('Phase: Render list - done - Rows are visible')
+    )
+
+    await user.click(detailsButton)
+
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'true')
+    expect(await within(flowTable).findByRole('region', { name: /artifact backed flow details/i }))
+      .toHaveTextContent('Phase: Launch workspace - active')
+  })
+
+  it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {
+    const user = userEvent.setup()
+    const createdState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            id: 'ship-workspace-creation',
+            title: 'Ship workspace creation',
+            status: 'active',
+            repositoryId: '/repos/grindstone',
+            repositoryPath: '/repos/grindstone',
+            branch: 'flow/ship-workspace-creation',
+            worktreePath: '/repos/grindstone-worktrees/flow-ship-workspace-creation',
+            baseRef: 'main',
+            commit: 'abc123',
+            createdAt: '2026-06-14T10:00:00.000Z',
+            updatedAt: '2026-06-14T10:01:00.000Z'
+          }
+        ]
+      }
+    }
+    const createFlow = vi.fn().mockResolvedValue(createdState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: selectedCatalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      createFlow
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    expect(within(flowPane).queryByLabelText(/^title$/i)).not.toBeInTheDocument()
+
+    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+
+    const dialog = await screen.findByRole('dialog', { name: /create flow/i })
+    const titleInput = within(dialog).getByLabelText(/^title$/i)
+    const closeButton = within(dialog).getByRole('button', { name: /close flow creation/i })
+    expect(titleInput).toHaveFocus()
+    const sentinels = dialog.querySelectorAll<HTMLElement>('[data-focus-sentinel="true"]')
+    expect(sentinels).toHaveLength(2)
+    sentinels[0]?.focus()
+    expect(closeButton).toHaveFocus()
+    sentinels[1]?.focus()
+    expect(titleInput).toHaveFocus()
+    titleInput.focus()
+    await user.type(within(dialog).getByLabelText(/^title$/i), 'Ship workspace creation')
+    await user.type(within(dialog).getByLabelText(/instructions/i), 'Build the path')
+    await user.type(within(dialog).getByLabelText(/base ref/i), 'main')
+    await user.click(within(dialog).getByRole('button', { name: /create flow/i }))
+
+    expect(createFlow).toHaveBeenCalledWith({
+      title: 'Ship workspace creation',
+      instructions: 'Build the path',
+      baseRef: 'main'
+    } satisfies CreateFlowRequest)
+    expect(await within(flowPane).findByText('Ship workspace creation')).toBeInTheDocument()
+    expect(within(flowPane).getByText('flow/ship-workspace-creation')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: /create flow/i })).not.toBeInTheDocument()
+
+    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+    expect(within(await screen.findByRole('dialog', { name: /create flow/i })).getByLabelText(/^title$/i))
+      .toHaveValue('')
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: /create flow/i })).not.toBeInTheDocument()
+    expect(within(flowPane).getByRole('button', { name: /new flow/i })).toHaveFocus()
+  })
+
+  it('opens Flow creation from the enabled right-pane shortcut', async () => {
+    const user = userEvent.setup()
+    const stateWithEnabledShortcut: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      shortcuts: selectedCatalogState.shortcuts.map((shortcut) =>
+        shortcut.id === 'new-flow'
+          ? { ...shortcut, disabled: false }
+          : shortcut
+      )
+    }
+    setWorkspaceApi(vi.fn().mockResolvedValue(stateWithEnabledShortcut))
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    expect(within(flowPane).queryByLabelText(/^title$/i)).not.toBeInTheDocument()
+    const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
+    const newFlowShortcut = within(contextPane).getByRole('button', { name: /new flow/i })
+    expect(newFlowShortcut).toBeEnabled()
+
+    await user.click(newFlowShortcut)
+
+    expect(await screen.findByRole('dialog', { name: /create flow/i })).toBeInTheDocument()
+  })
+
+  it('keeps failed Flow creation input in the modal and renders persisted start failures', async () => {
+    const user = userEvent.setup()
+    const failedState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: {
+            code: 'bootstrap_failed',
+            message: 'npm install failed'
+          }
+        },
+        flows: [
+          {
+            id: 'broken-bootstrap',
+            title: 'Broken bootstrap',
+            status: 'failed',
+            repositoryId: '/repos/grindstone',
+            repositoryPath: '/repos/grindstone',
+            branch: 'flow/broken-bootstrap',
+            worktreePath: '/repos/grindstone-worktrees/flow-broken-bootstrap',
+            baseRef: 'HEAD',
+            commit: 'abc123',
+            failure: {
+              stage: 'bootstrap',
+              message: 'npm install failed',
+              command: 'npm install',
+              output: 'missing package'
+            },
+            createdAt: '2026-06-14T10:00:00.000Z',
+            updatedAt: '2026-06-14T10:01:00.000Z'
+          }
+        ]
+      }
+    }
+    const createFlow = vi.fn().mockResolvedValue(failedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: selectedCatalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      createFlow
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+
+    const dialog = await screen.findByRole('dialog', { name: /create flow/i })
+    await user.type(within(dialog).getByLabelText(/^title$/i), 'Broken bootstrap')
+    await user.type(within(dialog).getByLabelText(/instructions/i), 'Run hooks')
+    await user.click(within(dialog).getByRole('button', { name: /create flow/i }))
+
+    expect(await within(dialog).findByRole('alert', { name: /flow creation error/i }))
+      .toHaveTextContent('npm install failed')
+    const failedRows = within(
+      within(flowPane).getByRole('table', { name: /grindstone flow records/i })
+    ).getAllByRole('row')
+    const failedRow = failedRows[1]
+    expect(failedRow).toHaveTextContent('Broken bootstrap')
+    expect(failedRow).toHaveTextContent('failed')
+    expect(failedRow).toHaveTextContent('bootstrap: npm install failed')
+    expect(failedRow).not.toHaveTextContent('missing package')
+    const detailsButton = within(failedRow as HTMLElement).getByRole('button', {
+      name: /broken bootstrap details/i
+    })
+    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Failure: bootstrap'))
+    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Command: npm install'))
+    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Output: missing package'))
+    await user.click(detailsButton)
+    expect(await within(flowPane).findByRole('region', { name: /broken bootstrap details/i }))
+      .toHaveTextContent('Output: missing package')
+    expect(within(dialog).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
   })
 
   it('shows repo-scoped loading while repository selection is pending', async () => {
@@ -382,8 +632,9 @@ describe('App shell', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /alpha/i }))
-    await user.click(screen.getByRole('button', { name: /beta/i }))
+    const repositoryPane = await screen.findByRole('region', { name: /repository area/i })
+    await user.click(within(repositoryPane).getByRole('button', { name: /alpha/i }))
+    await user.click(within(repositoryPane).getByRole('button', { name: /beta/i }))
 
     await act(async () => {
       resolveBeta(betaSelectedCatalogState)
@@ -395,7 +646,7 @@ describe('App shell', () => {
     })
     expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
     expect(screen.getByRole('main', { name: /flow workspace/i })).not.toHaveTextContent('Alpha Flow')
-    expect(screen.getByRole('button', { name: /beta/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(repositoryPane).getByRole('button', { name: /beta/i })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('renders selected repository empty and artifact error Flow states', async () => {
@@ -413,7 +664,10 @@ describe('App shell', () => {
       'No Flows for grindstone'
     )
 
-    await user.click(screen.getByRole('button', { name: /grindstone/i }))
+    await user.click(
+      within(screen.getByRole('region', { name: /repository area/i }))
+        .getByRole('button', { name: /grindstone/i })
+    )
     expect(
       await screen.findByRole('alert', { name: /flow workspace error/i })
     ).toHaveTextContent('Flow artifact store unavailable')
@@ -681,9 +935,6 @@ describe('App shell', () => {
     await user.selectOptions(screen.getByLabelText('Default agent'), 'claude')
     await user.clear(screen.getByLabelText('Artifact root'))
     await user.type(screen.getByLabelText('Artifact root'), './new-artifacts')
-    await user.click(screen.getByRole('button', { name: /add hook/i }))
-    await user.type(screen.getByLabelText('Hook 2 command'), 'npm test')
-    await user.type(screen.getByLabelText('Hook 2 environment'), 'CI=true')
     await user.click(screen.getByRole('button', { name: /^save$/i }))
 
     expect(updateCommonConfig).toHaveBeenCalledWith({
@@ -700,16 +951,29 @@ describe('App shell', () => {
           env: {
             NODE_ENV: 'test'
           }
-        },
-        {
-          command: 'npm test',
-          env: {
-            CI: 'true'
-          }
         }
       ]
     } satisfies CommonConfigUpdateInput)
     expect(await screen.findByRole('status')).toHaveTextContent('Config saved')
+  })
+
+  it('shows configured bootstrap hooks as read-only trusted config', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn()
+    )
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /configure/i }))
+
+    expect(screen.queryByRole('button', { name: /add hook/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /remove hook/i })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Hook 1 command')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('Hook 1 environment')).toHaveAttribute('readonly')
   })
 
   it('shows field validation errors and keeps unsaved input visible', async () => {
@@ -740,29 +1004,6 @@ describe('App shell', () => {
     expect(await screen.findByText('scan_roots entries must be non-empty strings.'))
       .toBeInTheDocument()
     expect(screen.getByLabelText('Scan root 1')).toHaveValue('')
-  })
-
-  it('shows malformed bootstrap hook env lines without submitting the edit', async () => {
-    const user = userEvent.setup()
-    const updateCommonConfig = vi.fn()
-    setWorkspaceApi(
-      vi.fn().mockResolvedValue(catalogState),
-      vi.fn().mockResolvedValue(selectedCatalogState),
-      vi.fn().mockResolvedValue(editableConfigState),
-      updateCommonConfig
-    )
-
-    render(<App />)
-
-    await user.click(await screen.findByRole('button', { name: /configure/i }))
-    await user.clear(screen.getByLabelText('Hook 1 environment'))
-    await user.type(screen.getByLabelText('Hook 1 environment'), 'BROKEN')
-    await user.click(screen.getByRole('button', { name: /^save$/i }))
-
-    expect(updateCommonConfig).not.toHaveBeenCalled()
-    expect(await screen.findByText('Environment lines must use KEY=value.'))
-      .toBeInTheDocument()
-    expect(screen.getByLabelText('Hook 1 environment')).toHaveValue('BROKEN')
   })
 
   it('refreshes repository catalog state returned by a successful config save', async () => {

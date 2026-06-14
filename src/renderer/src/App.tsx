@@ -1,6 +1,7 @@
 import {
   CirclePlus,
   GitBranch,
+  Info,
   Plus,
   RotateCcw,
   Save,
@@ -9,7 +10,15 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactElement
+} from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
 import type {
   CommonConfigUpdateInput,
@@ -19,6 +28,8 @@ import type {
 } from '@shared/config'
 import type {
   CatalogDiagnostic,
+  CreateFlowRequest,
+  FlowListRow,
   FlowPaneState,
   GitHubVisibility,
   InitialWorkspaceState,
@@ -70,6 +81,7 @@ export function App(): ReactElement {
   const [flowState, setFlowState] = useState<FlowPaneState>(
     routeFlowState ?? { status: 'loading' }
   )
+  const [flowCreateOpenRequest, setFlowCreateOpenRequest] = useState(0)
   const selectionRequestIdRef = useRef(0)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>('hints')
   const [editableConfig, setEditableConfig] = useState<EditableConfigState | null>(null)
@@ -166,6 +178,10 @@ export function App(): ReactElement {
     setFlowState(routeFlowState ?? nextWorkspace.flow)
   }
 
+  function requestFlowCreate(): void {
+    setFlowCreateOpenRequest((request) => request + 1)
+  }
+
   async function handleConfigReload(): Promise<void> {
     const [nextWorkspace, nextConfig] = await Promise.all([
       window.grindstone.workspace.getInitialState(),
@@ -229,7 +245,11 @@ export function App(): ReactElement {
           <Sparkles aria-hidden="true" size={18} />
           <h1 id="flow-workspace-title">Flow Workspace</h1>
         </div>
-        <FlowWorkspaceStateView state={flowState} />
+        <FlowWorkspaceStateView
+          createOpenRequest={flowCreateOpenRequest}
+          state={flowState}
+          onWorkspaceUpdate={applyWorkspace}
+        />
       </main>
 
       <section
@@ -245,7 +265,10 @@ export function App(): ReactElement {
             onSave={handleConfigSave}
           />
         ) : (
-          <ContextHintsPanel workspace={shellState} />
+          <ContextHintsPanel
+            workspace={shellState}
+            onNewFlow={requestFlowCreate}
+          />
         )}
       </section>
     </div>
@@ -566,7 +589,13 @@ function CatalogDiagnosticRow({
   )
 }
 
-function ContextHintsPanel({ workspace }: { workspace: InitialWorkspaceState }): ReactElement {
+function ContextHintsPanel({
+  workspace,
+  onNewFlow
+}: {
+  workspace: InitialWorkspaceState
+  onNewFlow: () => void
+}): ReactElement {
   return (
     <>
       <div className="pane-header">
@@ -589,6 +618,7 @@ function ContextHintsPanel({ workspace }: { workspace: InitialWorkspaceState }):
             className="shortcut-button"
             disabled={shortcut.disabled}
             key={shortcut.id}
+            onClick={shortcut.id === 'new-flow' ? onNewFlow : undefined}
             title={shortcut.description}
             type="button"
           >
@@ -748,9 +778,6 @@ function ConfigEditorPanel({
         <BootstrapHookEditor
           hooks={draft.bootstrap_hooks}
           errorsByField={errorsByField}
-          onChange={(bootstrapHooks) =>
-            setDraft({ ...draft, bootstrap_hooks: bootstrapHooks })
-          }
         />
 
         {statusMessage !== null ? (
@@ -844,12 +871,10 @@ function PathListEditor({
 
 function BootstrapHookEditor({
   hooks,
-  errorsByField,
-  onChange
+  errorsByField
 }: {
   hooks: BootstrapHookDraft[]
   errorsByField: Map<string, string>
-  onChange: (hooks: BootstrapHookDraft[]) => void
 }): ReactElement {
   return (
     <fieldset className="form-group">
@@ -858,54 +883,33 @@ function BootstrapHookEditor({
         <div className="hook-editor" key={`hook-${index}`}>
           <div className="hook-header">
             <span>{`Hook ${index + 1}`}</span>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={`Remove hook ${index + 1}`}
-              onClick={() => onChange(hooks.filter((_, currentIndex) => currentIndex !== index))}
-            >
-              <Trash2 aria-hidden="true" size={16} />
-            </button>
           </div>
           <HookField
             label={`Hook ${index + 1} command`}
             value={hook.command}
             error={errorsByField.get(`bootstrap_hooks[${index}].command`)}
-            onChange={(value) => replaceHook(hooks, index, { ...hook, command: value }, onChange)}
           />
           <HookField
             label={`Hook ${index + 1} name`}
             value={hook.name}
             error={errorsByField.get(`bootstrap_hooks[${index}].name`)}
-            onChange={(value) => replaceHook(hooks, index, { ...hook, name: value }, onChange)}
           />
           <HookField
             label={`Hook ${index + 1} cwd`}
             value={hook.cwd}
             error={errorsByField.get(`bootstrap_hooks[${index}].cwd`)}
-            onChange={(value) => replaceHook(hooks, index, { ...hook, cwd: value }, onChange)}
           />
           <label className="form-field">
             <span>{`Hook ${index + 1} environment`}</span>
             <textarea
               aria-label={`Hook ${index + 1} environment`}
+              readOnly
               value={hook.env}
-              onChange={(event) =>
-                replaceHook(hooks, index, { ...hook, env: event.currentTarget.value }, onChange)
-              }
             />
             <FieldError message={getFieldError(errorsByField, `bootstrap_hooks[${index}].env`)} />
           </label>
         </div>
       ))}
-      <button
-        className="secondary-button"
-        type="button"
-        onClick={() => onChange([...hooks, { name: '', command: '', cwd: '', env: '' }])}
-      >
-        <Plus aria-hidden="true" size={16} />
-        <span>Add hook</span>
-      </button>
     </fieldset>
   )
 }
@@ -913,21 +917,19 @@ function BootstrapHookEditor({
 function HookField({
   label,
   value,
-  error,
-  onChange
+  error
 }: {
   label: string
   value: string
   error: string | undefined
-  onChange: (value: string) => void
 }): ReactElement {
   return (
     <label className="form-field">
       <span>{label}</span>
       <input
         aria-label={label}
+        readOnly
         value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
       />
       <FieldError message={error} />
     </label>
@@ -1002,17 +1004,6 @@ function createConfigInput(draft: ConfigDraft): ConfigInputResult {
   }
 }
 
-function replaceHook(
-  hooks: BootstrapHookDraft[],
-  index: number,
-  hook: BootstrapHookDraft,
-  onChange: (hooks: BootstrapHookDraft[]) => void
-): void {
-  const nextHooks = [...hooks]
-  nextHooks[index] = hook
-  onChange(nextHooks)
-}
-
 function formatEnv(env: Record<string, string> | undefined): string {
   if (env === undefined) {
     return ''
@@ -1084,7 +1075,15 @@ function getErrorMessage(error: unknown): string {
   return 'Unable to load Flow workspace'
 }
 
-function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactElement {
+function FlowWorkspaceStateView({
+  createOpenRequest,
+  state,
+  onWorkspaceUpdate
+}: {
+  createOpenRequest: number
+  state: FlowPaneState
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+}): ReactElement {
   if (state.status === 'loading') {
     const title = state.repositoryName === undefined
       ? 'Loading Flow workspace'
@@ -1123,49 +1122,443 @@ function FlowWorkspaceStateView({ state }: { state: FlowPaneState }): ReactEleme
   if (state.status === 'ready') {
     return (
       <div className="flow-list-view">
+        <FlowCreatePanel
+          create={state.create}
+          openRequest={createOpenRequest}
+          onWorkspaceUpdate={onWorkspaceUpdate}
+        />
+
         <div className="flow-list-header">
           <p className="eyebrow">Flow</p>
           <h2>{state.repositoryName} Flows</h2>
           <p>{state.flows.length} {state.flows.length === 1 ? 'Flow' : 'Flows'} found.</p>
         </div>
 
-        <div className="flow-list" aria-label={`${state.repositoryName} Flow records`}>
-          {state.flows.map((flow) => (
-            <article className="flow-row" key={flow.id}>
-              <div className="flow-row-header">
-                <h3>{flow.title}</h3>
-                <span className="flow-status">{flow.status}</span>
-              </div>
-              <p className="flow-updated">Updated {flow.updatedAt}</p>
-              <div className="flow-labels" aria-label={`${flow.title} metadata`}>
-                <span>{flow.repositoryPath}</span>
-                {flow.branch === undefined ? null : <span>{flow.branch}</span>}
-                {flow.worktreePath === undefined ? null : <span>{flow.worktreePath}</span>}
-                {flow.planId === undefined ? null : <span>{flow.planId}</span>}
-                {flow.planPath === undefined ? null : <span>{flow.planPath}</span>}
-              </div>
-              {flow.phases === undefined ? null : (
-                <div className="phase-summary" aria-label={`${flow.title} phases`}>
-                  {flow.phases.map((phase) => (
-                    <span key={phase.id}>
-                      {phase.title} - {phase.status}
-                      {phase.summary === undefined ? '' : ` - ${phase.summary}`}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </article>
-          ))}
-        </div>
+        <FlowRecordTable
+          flows={state.flows}
+          repositoryName={state.repositoryName}
+        />
       </div>
     )
   }
 
   return (
-    <div className="state-block">
-      <p className="eyebrow">Flow</p>
-      <h2>{state.title}</h2>
-      <p>{state.description}</p>
+    <div className="empty-flow-view">
+      {state.create === undefined ? null : (
+        <FlowCreatePanel
+          create={state.create}
+          openRequest={createOpenRequest}
+          onWorkspaceUpdate={onWorkspaceUpdate}
+        />
+      )}
+      <div className="state-block">
+        <p className="eyebrow">Flow</p>
+        <h2>{state.title}</h2>
+        <p>{state.description}</p>
+      </div>
+    </div>
+  )
+}
+
+function FlowRecordTable({
+  flows,
+  repositoryName
+}: {
+  flows: FlowListRow[]
+  repositoryName: string
+}): ReactElement {
+  const [expandedFlowId, setExpandedFlowId] = useState<string | null>(null)
+
+  return (
+    <div className="flow-table-wrap">
+      <table className="flow-table" aria-label={`${repositoryName} Flow records`}>
+        <thead>
+          <tr>
+            <th scope="col">Flow</th>
+            <th scope="col">Status</th>
+            <th scope="col">Updated</th>
+            <th scope="col">Branch</th>
+            <th scope="col">Plan</th>
+            <th scope="col">Phases</th>
+            <th scope="col">Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {flows.map((flow) => {
+            const details = formatFlowTooltip(flow)
+            const detailsId = `flow-details-${flow.id}`
+            const isExpanded = expandedFlowId === flow.id
+
+            return (
+              <Fragment key={flow.id}>
+                <tr>
+                  <td>
+                    <span className="flow-title">{flow.title}</span>
+                  </td>
+                  <td>
+                    <span className="flow-status">{flow.status}</span>
+                    {flow.failure === undefined ? null : (
+                      <span className="flow-failure-summary">
+                        {formatFailureSummary(flow.failure)}
+                      </span>
+                    )}
+                  </td>
+                  <td>{flow.updatedAt}</td>
+                  <td>
+                    {flow.branch === undefined ? '-' : flow.branch}
+                  </td>
+                  <td>
+                    {flow.planId ?? '-'}
+                  </td>
+                  <td>
+                    {formatPhaseSummary(flow)}
+                  </td>
+                  <td>
+                    <button
+                      aria-controls={detailsId}
+                      aria-expanded={isExpanded}
+                      aria-label={`${flow.title} details`}
+                      className="flow-details-button"
+                      onClick={() => setExpandedFlowId(isExpanded ? null : flow.id)}
+                      title={details}
+                      type="button"
+                    >
+                      <Info aria-hidden="true" size={14} />
+                    </button>
+                  </td>
+                </tr>
+                {isExpanded ? (
+                  <tr className="flow-detail-row">
+                    <td colSpan={7}>
+                      <div
+                        className="flow-detail-panel"
+                        id={detailsId}
+                        role="region"
+                        aria-label={`${flow.title} details`}
+                      >
+                        {details.split('\n').map((line, index) => (
+                          <span key={`${index}:${line}`}>{line}</span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function formatFlowTooltip(flow: FlowListRow): string {
+  return [
+    `Repository: ${flow.repositoryPath}`,
+    flow.worktreePath === undefined ? null : `Worktree: ${flow.worktreePath}`,
+    flow.branch === undefined ? null : `Branch: ${flow.branch}`,
+    flow.baseRef === undefined ? null : `Base ref: ${flow.baseRef}`,
+    flow.commit === undefined ? null : `Commit: ${flow.commit}`,
+    flow.planId === undefined ? null : `Plan: ${flow.planId}`,
+    flow.planPath === undefined ? null : `Plan path: ${flow.planPath}`,
+    flow.failure === undefined ? null : `Failure: ${flow.failure.stage} - ${flow.failure.message}`,
+    flow.failure?.command === undefined ? null : `Command: ${flow.failure.command}`,
+    flow.failure?.output === undefined ? null : `Output: ${flow.failure.output}`,
+    ...(flow.phases ?? []).map((phase) =>
+      `Phase: ${phase.title} - ${phase.status}${phase.summary === undefined ? '' : ` - ${phase.summary}`}`
+    )
+  ].filter((line): line is string => line !== null).join('\n')
+}
+
+function formatFailureSummary(failure: NonNullable<FlowListRow['failure']>): string {
+  const firstLine = failure.message
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line !== '') ?? failure.message.trim()
+
+  return `${failure.stage}: ${truncateText(firstLine, 72)}`
+}
+
+function formatPhaseSummary(flow: FlowListRow): string {
+  if (flow.phases === undefined || flow.phases.length === 0) {
+    return '-'
+  }
+
+  const doneCount = flow.phases.filter((phase) => phase.status === 'done').length
+  const nonDoneCounts = flow.phases
+    .filter((phase) => phase.status !== 'done')
+    .reduce<Record<string, number>>((counts, phase) => {
+      counts[phase.status] = (counts[phase.status] ?? 0) + 1
+      return counts
+    }, {})
+
+  const nonDoneSummary = Object.entries(nonDoneCounts)
+    .map(([status, count]) => `${count} ${status}`)
+    .join(', ')
+
+  return nonDoneSummary === ''
+    ? `${doneCount}/${flow.phases.length} done`
+    : `${doneCount}/${flow.phases.length} done, ${nonDoneSummary}`
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}...`
+}
+
+function FlowCreatePanel({
+  create,
+  openRequest,
+  onWorkspaceUpdate
+}: {
+  create: NonNullable<Extract<FlowPaneState, { status: 'ready' | 'empty' }>['create']>
+  openRequest: number
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+}): ReactElement {
+  const [isOpen, setIsOpen] = useState(false)
+  const [title, setTitle] = useState('')
+  const [instructions, setInstructions] = useState('')
+  const [baseRef, setBaseRef] = useState('')
+  const [localError, setLocalError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const newFlowButtonRef = useRef<HTMLButtonElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const titleInputRef = useRef<HTMLInputElement | null>(null)
+  const shouldRestoreFocusRef = useRef(false)
+  const lastOpenRequestRef = useRef(openRequest)
+
+  useEffect(() => {
+    if (isOpen) {
+      titleInputRef.current?.focus()
+      return
+    }
+
+    if (shouldRestoreFocusRef.current) {
+      shouldRestoreFocusRef.current = false
+      newFlowButtonRef.current?.focus()
+    }
+  }, [isOpen])
+
+  useEffect(() => {
+    if (openRequest === lastOpenRequestRef.current) {
+      return
+    }
+    lastOpenRequestRef.current = openRequest
+    if (create.available) {
+      shouldRestoreFocusRef.current = false
+      setIsOpen(true)
+    }
+  }, [create.available, openRequest])
+
+  function openFlowDialog(): void {
+    shouldRestoreFocusRef.current = false
+    setIsOpen(true)
+  }
+
+  function closeFlowDialog(): void {
+    shouldRestoreFocusRef.current = true
+    setIsOpen(false)
+  }
+
+  function focusFirstDialogElement(): void {
+    titleInputRef.current?.focus()
+  }
+
+  function focusLastDialogElement(): void {
+    closeButtonRef.current?.focus()
+  }
+
+  function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeFlowDialog()
+      return
+    }
+
+    if (event.key !== 'Tab') {
+      return
+    }
+
+    const firstElement = titleInputRef.current
+    const lastElement = closeButtonRef.current
+
+    if (firstElement === null || lastElement === null) {
+      event.preventDefault()
+      return
+    }
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault()
+      focusLastDialogElement()
+      return
+    }
+
+    if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault()
+      focusFirstDialogElement()
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    const request: CreateFlowRequest = {
+      title: title.trim(),
+      instructions: instructions.trim(),
+      baseRef: baseRef.trim() === '' ? undefined : baseRef.trim()
+    }
+
+    if (request.title === '') {
+      setLocalError('Flow title is required.')
+      return
+    }
+
+    if (request.instructions === '') {
+      setLocalError('Flow instructions are required.')
+      return
+    }
+
+    setLocalError(null)
+    setIsSubmitting(true)
+    try {
+      const nextWorkspace = await window.grindstone.workspace.createFlow(request)
+      onWorkspaceUpdate(nextWorkspace)
+      if (
+        (nextWorkspace.flow.status === 'ready' || nextWorkspace.flow.status === 'empty') &&
+        nextWorkspace.flow.create?.error === null
+      ) {
+        setTitle('')
+        setInstructions('')
+        setBaseRef('')
+        closeFlowDialog()
+      }
+    } catch (error: unknown) {
+      setLocalError(getErrorMessage(error))
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const errorMessage = localError ?? create.error?.message ?? null
+
+  return (
+    <div className="flow-create">
+      <button
+        className="primary-action"
+        disabled={!create.available}
+        onClick={openFlowDialog}
+        ref={newFlowButtonRef}
+        type="button"
+      >
+        <CirclePlus aria-hidden="true" size={16} />
+        <span>New Flow</span>
+      </button>
+
+      {isOpen ? (
+        <div className="modal-backdrop">
+          <div
+            aria-labelledby="flow-create-dialog-title"
+            aria-modal="true"
+            className="modal-dialog"
+            onKeyDown={handleDialogKeyDown}
+            role="dialog"
+          >
+            <span
+              className="focus-sentinel"
+              data-focus-sentinel="true"
+              onFocus={focusLastDialogElement}
+              tabIndex={0}
+            />
+            <div className="modal-header">
+              <h2 id="flow-create-dialog-title">Create Flow</h2>
+            </div>
+
+            <form
+              aria-label="Create Flow"
+              className="flow-create-form"
+              onSubmit={(event) => void handleSubmit(event)}
+            >
+              <label className="field">
+                <span>Title</span>
+                <input
+                  disabled={!create.available || isSubmitting}
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                  placeholder="Ship workspace creation"
+                  ref={titleInputRef}
+                  value={title}
+                />
+              </label>
+              <label className="field">
+                <span>Instructions</span>
+                <textarea
+                  disabled={!create.available || isSubmitting}
+                  onChange={(event) => setInstructions(event.currentTarget.value)}
+                  placeholder="Describe the implementation goal"
+                  value={instructions}
+                />
+              </label>
+              <label className="field">
+                <span>Base ref</span>
+                <input
+                  disabled={!create.available || isSubmitting}
+                  onChange={(event) => setBaseRef(event.currentTarget.value)}
+                  placeholder="HEAD"
+                  value={baseRef}
+                />
+              </label>
+
+              {errorMessage === null ? null : (
+                <div
+                  aria-label="Flow creation error"
+                  className="create-error"
+                  role="alert"
+                >
+                  {errorMessage}
+                </div>
+              )}
+
+              <div className="form-actions">
+                <button
+                  className="secondary-button"
+                  disabled={isSubmitting}
+                  onClick={closeFlowDialog}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={16} />
+                  <span>Cancel</span>
+                </button>
+                <button
+                  className="primary-action"
+                  disabled={
+                    !create.available ||
+                    isSubmitting ||
+                    title.trim() === '' ||
+                    instructions.trim() === ''
+                  }
+                  type="submit"
+                >
+                  <CirclePlus aria-hidden="true" size={16} />
+                  <span>{isSubmitting ? 'Creating' : 'Create Flow'}</span>
+                </button>
+              </div>
+            </form>
+            <button
+              aria-label="Close Flow creation"
+              className="icon-button modal-close-button"
+              disabled={isSubmitting}
+              onClick={closeFlowDialog}
+              ref={closeButtonRef}
+              type="button"
+            >
+              <X aria-hidden="true" size={16} />
+            </button>
+            <span
+              className="focus-sentinel"
+              data-focus-sentinel="true"
+              onFocus={focusFirstDialogElement}
+              tabIndex={0}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

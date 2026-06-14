@@ -27,6 +27,7 @@ describe('IPC contract', () => {
   it('pins the initial workspace channel name', () => {
     expect(ipcChannels.workspace.getInitialState).toBe('workspace:getInitialState')
     expect(ipcChannels.workspace.selectRepository).toBe('workspace:selectRepository')
+    expect(ipcChannels.workspace.createFlow).toBe('workspace:createFlow')
     expect(ipcChannels.workspace.createRepository).toBe('workspace:createRepository')
     expect(ipcChannels.workspace.retryRepositoryRemote).toBe('workspace:retryRepositoryRemote')
     expect(ipcChannels.config.getEditableConfig).toBe('config:getEditableConfig')
@@ -69,6 +70,21 @@ describe('IPC contract', () => {
 
     expect(request.scanRootId).toBe('scan-root:0:abc123')
     expect(request.github.visibility).toBe('private')
+    expect(response).toEqual(defaultInitialWorkspaceState)
+    expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
+  })
+
+  it('maps workspace:createFlow to a typed Flow creation request and workspace response', () => {
+    type CreateFlowChannel = typeof ipcChannels.workspace.createFlow
+    const request = {
+      title: 'Create Flow worktree',
+      instructions: 'Build the end-to-end creation path.',
+      baseRef: 'main'
+    } satisfies IpcRequestMap[CreateFlowChannel]
+    const response = defaultInitialWorkspaceState satisfies IpcResponseMap[CreateFlowChannel]
+
+    expect(request.title).toBe('Create Flow worktree')
+    expect(request.baseRef).toBe('main')
     expect(response).toEqual(defaultInitialWorkspaceState)
     expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
   })
@@ -131,6 +147,17 @@ describe('IPC contract', () => {
     ).resolves.toEqual(defaultInitialWorkspaceState)
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.selectRepository, {
       repositoryId: '/repos/example'
+    })
+
+    await expect(
+      invokeTypedIpc(invoke, ipcChannels.workspace.createFlow, {
+        title: 'Create Flow worktree',
+        instructions: 'Build the end-to-end creation path.'
+      })
+    ).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.createFlow, {
+      title: 'Create Flow worktree',
+      instructions: 'Build the end-to-end creation path.'
     })
 
     await expect(
