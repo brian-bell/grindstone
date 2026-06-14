@@ -752,9 +752,6 @@ function ConfigEditorPanel({
         <BootstrapHookEditor
           hooks={draft.bootstrap_hooks}
           errorsByField={errorsByField}
-          onChange={(bootstrapHooks) =>
-            setDraft({ ...draft, bootstrap_hooks: bootstrapHooks })
-          }
         />
 
         {statusMessage !== null ? (
@@ -848,12 +845,10 @@ function PathListEditor({
 
 function BootstrapHookEditor({
   hooks,
-  errorsByField,
-  onChange
+  errorsByField
 }: {
   hooks: BootstrapHookDraft[]
   errorsByField: Map<string, string>
-  onChange: (hooks: BootstrapHookDraft[]) => void
 }): ReactElement {
   return (
     <fieldset className="form-group">
@@ -862,54 +857,33 @@ function BootstrapHookEditor({
         <div className="hook-editor" key={`hook-${index}`}>
           <div className="hook-header">
             <span>{`Hook ${index + 1}`}</span>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={`Remove hook ${index + 1}`}
-              onClick={() => onChange(hooks.filter((_, currentIndex) => currentIndex !== index))}
-            >
-              <Trash2 aria-hidden="true" size={16} />
-            </button>
           </div>
           <HookField
             label={`Hook ${index + 1} command`}
             value={hook.command}
             error={errorsByField.get(`bootstrap_hooks[${index}].command`)}
-            onChange={(value) => replaceHook(hooks, index, { ...hook, command: value }, onChange)}
           />
           <HookField
             label={`Hook ${index + 1} name`}
             value={hook.name}
             error={errorsByField.get(`bootstrap_hooks[${index}].name`)}
-            onChange={(value) => replaceHook(hooks, index, { ...hook, name: value }, onChange)}
           />
           <HookField
             label={`Hook ${index + 1} cwd`}
             value={hook.cwd}
             error={errorsByField.get(`bootstrap_hooks[${index}].cwd`)}
-            onChange={(value) => replaceHook(hooks, index, { ...hook, cwd: value }, onChange)}
           />
           <label className="form-field">
             <span>{`Hook ${index + 1} environment`}</span>
             <textarea
               aria-label={`Hook ${index + 1} environment`}
+              readOnly
               value={hook.env}
-              onChange={(event) =>
-                replaceHook(hooks, index, { ...hook, env: event.currentTarget.value }, onChange)
-              }
             />
             <FieldError message={getFieldError(errorsByField, `bootstrap_hooks[${index}].env`)} />
           </label>
         </div>
       ))}
-      <button
-        className="secondary-button"
-        type="button"
-        onClick={() => onChange([...hooks, { name: '', command: '', cwd: '', env: '' }])}
-      >
-        <Plus aria-hidden="true" size={16} />
-        <span>Add hook</span>
-      </button>
     </fieldset>
   )
 }
@@ -917,21 +891,19 @@ function BootstrapHookEditor({
 function HookField({
   label,
   value,
-  error,
-  onChange
+  error
 }: {
   label: string
   value: string
   error: string | undefined
-  onChange: (value: string) => void
 }): ReactElement {
   return (
     <label className="form-field">
       <span>{label}</span>
       <input
         aria-label={label}
+        readOnly
         value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
       />
       <FieldError message={error} />
     </label>
@@ -1004,17 +976,6 @@ function createConfigInput(draft: ConfigDraft): ConfigInputResult {
       bootstrap_hooks: bootstrapHooks
     }
   }
-}
-
-function replaceHook(
-  hooks: BootstrapHookDraft[],
-  index: number,
-  hook: BootstrapHookDraft,
-  onChange: (hooks: BootstrapHookDraft[]) => void
-): void {
-  const nextHooks = [...hooks]
-  nextHooks[index] = hook
-  onChange(nextHooks)
 }
 
 function formatEnv(env: Record<string, string> | undefined): string {

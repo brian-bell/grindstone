@@ -58,9 +58,10 @@ const EDITABLE_CONFIG_KEYS = [
   'scan_roots',
   'repos',
   'default_agent',
-  'artifact_root',
-  'bootstrap_hooks'
+  'artifact_root'
 ] as const
+
+const TRUSTED_BOOTSTRAP_HOOKS_ERROR = 'bootstrap_hooks are trusted config and must be edited outside the app.'
 
 export async function loadGrindstoneConfig(
   options: LoadGrindstoneConfigOptions = {}
@@ -179,40 +180,6 @@ export function mergeCommonConfig(
     nextConfig.artifact_root = input.artifact_root
   }
 
-  if (input.bootstrap_hooks.length > 0) {
-    const existingHooks = Array.isArray(rawConfig.bootstrap_hooks) ? rawConfig.bootstrap_hooks : []
-    nextConfig.bootstrap_hooks = input.bootstrap_hooks.map((hook) => {
-      const sourceIndex = getHookSourceIndex(hook)
-      const existingHook =
-        sourceIndex !== undefined && isRecord(existingHooks[sourceIndex])
-          ? { ...existingHooks[sourceIndex] }
-          : {}
-      delete existingHook.name
-      delete existingHook.command
-      delete existingHook.cwd
-      delete existingHook.env
-
-      const nextHook: RawConfig = {
-        ...existingHook,
-        command: hook.command
-      }
-
-      if (hook.name !== undefined) {
-        nextHook.name = hook.name
-      }
-
-      if (hook.cwd !== undefined) {
-        nextHook.cwd = hook.cwd
-      }
-
-      if (hook.env !== undefined) {
-        nextHook.env = { ...hook.env }
-      }
-
-      return nextHook
-    })
-  }
-
   return nextConfig
 }
 
@@ -230,6 +197,11 @@ export async function updateCommonConfigFile(
 
   const configPath = await resolveConfigPath(options) ?? resolveDefaultUserConfigPath(options)
   const existingConfig = await loadRawConfigForUpdate(configPath)
+  const trustedErrors = validateTrustedBootstrapHooks(input, existingConfig)
+  if (trustedErrors.length > 0) {
+    return { ok: false, kind: 'validation', errors: trustedErrors }
+  }
+
   const mergedConfig = mergeCommonConfig(existingConfig, input)
   const serializedConfig = stringify(mergedConfig as never)
 
@@ -545,6 +517,55 @@ function validateBootstrapHooks(
   })
 }
 
+function validateTrustedBootstrapHooks(
+  input: CommonConfigUpdateInput,
+  rawConfig: RawConfig
+): ConfigFieldError[] {
+  if (areBootstrapHooksEqual(input.bootstrap_hooks, normalizeBootstrapHooks(rawConfig.bootstrap_hooks))) {
+    return []
+  }
+
+  return [
+    {
+      field: 'bootstrap_hooks',
+      message: TRUSTED_BOOTSTRAP_HOOKS_ERROR
+    }
+  ]
+}
+
+function areBootstrapHooksEqual(
+  inputHooks: EditableBootstrapHook[],
+  trustedHooks: EditableBootstrapHook[]
+): boolean {
+  return inputHooks.length === trustedHooks.length &&
+    inputHooks.every((inputHook, index) => areBootstrapHookEqual(inputHook, trustedHooks[index]))
+}
+
+function areBootstrapHookEqual(
+  inputHook: EditableBootstrapHook,
+  trustedHook: EditableBootstrapHook | undefined
+): boolean {
+  return trustedHook !== undefined &&
+    inputHook.sourceIndex === trustedHook.sourceIndex &&
+    inputHook.command === trustedHook.command &&
+    inputHook.name === trustedHook.name &&
+    inputHook.cwd === trustedHook.cwd &&
+    areStringMapsEqual(inputHook.env, trustedHook.env)
+}
+
+function areStringMapsEqual(
+  input: Record<string, string> | undefined,
+  trusted: Record<string, string> | undefined
+): boolean {
+  const inputEntries = Object.entries(input ?? {}).sort(([left], [right]) => left.localeCompare(right))
+  const trustedEntries = Object.entries(trusted ?? {}).sort(([left], [right]) => left.localeCompare(right))
+  return inputEntries.length === trustedEntries.length &&
+    inputEntries.every(([key, value], index) => {
+      const trustedEntry = trustedEntries[index]
+      return trustedEntry !== undefined && trustedEntry[0] === key && trustedEntry[1] === value
+    })
+}
+
 function normalizeEditableConfig(rawConfig: RawConfig, configPath: string): EditableConfigState {
   return {
     configPath,
@@ -623,14 +644,6 @@ function normalizeRuntimeBootstrapHooks(value: unknown): RuntimeBootstrapHook[] 
 
     return [normalizedHook]
   })
-}
-
-function getHookSourceIndex(hook: EditableBootstrapHook): number | undefined {
-  return hook.sourceIndex !== undefined &&
-    Number.isInteger(hook.sourceIndex) &&
-    hook.sourceIndex >= 0
-    ? hook.sourceIndex
-    : undefined
 }
 
 function resolveDefaultUserConfigPath(options: LoadGrindstoneConfigOptions): string {

@@ -828,9 +828,6 @@ describe('App shell', () => {
     await user.selectOptions(screen.getByLabelText('Default agent'), 'claude')
     await user.clear(screen.getByLabelText('Artifact root'))
     await user.type(screen.getByLabelText('Artifact root'), './new-artifacts')
-    await user.click(screen.getByRole('button', { name: /add hook/i }))
-    await user.type(screen.getByLabelText('Hook 2 command'), 'npm test')
-    await user.type(screen.getByLabelText('Hook 2 environment'), 'CI=true')
     await user.click(screen.getByRole('button', { name: /^save$/i }))
 
     expect(updateCommonConfig).toHaveBeenCalledWith({
@@ -847,16 +844,29 @@ describe('App shell', () => {
           env: {
             NODE_ENV: 'test'
           }
-        },
-        {
-          command: 'npm test',
-          env: {
-            CI: 'true'
-          }
         }
       ]
     } satisfies CommonConfigUpdateInput)
     expect(await screen.findByRole('status')).toHaveTextContent('Config saved')
+  })
+
+  it('shows configured bootstrap hooks as read-only trusted config', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn()
+    )
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /configure/i }))
+
+    expect(screen.queryByRole('button', { name: /add hook/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /remove hook/i })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Hook 1 command')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('Hook 1 environment')).toHaveAttribute('readonly')
   })
 
   it('shows field validation errors and keeps unsaved input visible', async () => {
@@ -887,29 +897,6 @@ describe('App shell', () => {
     expect(await screen.findByText('scan_roots entries must be non-empty strings.'))
       .toBeInTheDocument()
     expect(screen.getByLabelText('Scan root 1')).toHaveValue('')
-  })
-
-  it('shows malformed bootstrap hook env lines without submitting the edit', async () => {
-    const user = userEvent.setup()
-    const updateCommonConfig = vi.fn()
-    setWorkspaceApi(
-      vi.fn().mockResolvedValue(catalogState),
-      vi.fn().mockResolvedValue(selectedCatalogState),
-      vi.fn().mockResolvedValue(editableConfigState),
-      updateCommonConfig
-    )
-
-    render(<App />)
-
-    await user.click(await screen.findByRole('button', { name: /configure/i }))
-    await user.clear(screen.getByLabelText('Hook 1 environment'))
-    await user.type(screen.getByLabelText('Hook 1 environment'), 'BROKEN')
-    await user.click(screen.getByRole('button', { name: /^save$/i }))
-
-    expect(updateCommonConfig).not.toHaveBeenCalled()
-    expect(await screen.findByText('Environment lines must use KEY=value.'))
-      .toBeInTheDocument()
-    expect(screen.getByLabelText('Hook 1 environment')).toHaveValue('BROKEN')
   })
 
   it('refreshes repository catalog state returned by a successful config save', async () => {

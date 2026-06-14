@@ -455,8 +455,7 @@ describe('editable Grindstone config', () => {
       bootstrap_hooks: [
         {
           sourceIndex: 0,
-          command: 'npm test',
-          name: 'Tests'
+          command: 'before'
         }
       ]
     }
@@ -475,8 +474,7 @@ describe('editable Grindstone config', () => {
       artifact_root: 'artifacts',
       bootstrap_hooks: [
         {
-          command: 'npm test',
-          name: 'Tests',
+          command: 'before',
           timeout: 30,
           shell: 'zsh'
         }
@@ -531,7 +529,7 @@ describe('editable Grindstone config', () => {
     await expect(readFile(configPath, 'utf8')).resolves.toBe('repos = ["before"]\n')
   })
 
-  it('preserves unknown bootstrap hook fields by source index instead of draft position', async () => {
+  it('rejects bootstrap hook changes from common config updates', async () => {
     const root = await makeTempDir()
     const configPath = join(root, 'grindstone.toml')
     await writeFile(
@@ -547,7 +545,7 @@ describe('editable Grindstone config', () => {
       ].join('\n')
     )
 
-    await updateCommonConfigFile(
+    await expect(updateCommonConfigFile(
       {
         scan_roots: [],
         repos: [],
@@ -561,12 +559,25 @@ describe('editable Grindstone config', () => {
         ]
       },
       { configPath }
-    )
+    )).resolves.toEqual({
+      ok: false,
+      kind: 'validation',
+      errors: [
+        {
+          field: 'bootstrap_hooks',
+          message: 'bootstrap_hooks are trusted config and must be edited outside the app.'
+        }
+      ]
+    })
 
     expect(parse(await readFile(configPath, 'utf8'))).toMatchObject({
       bootstrap_hooks: [
         {
-          command: 'second edited',
+          command: 'first',
+          timeout: 10
+        },
+        {
+          command: 'second',
           shell: 'zsh'
         }
       ]
