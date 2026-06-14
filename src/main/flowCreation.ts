@@ -6,6 +6,8 @@ import type { RuntimeBootstrapHook } from './config'
 import type { CommandResult } from './repositoryCreation'
 import type { FlowStore } from './flowStore'
 
+const DISABLE_GIT_HOOKS_ARGS = ['-c', 'core.hooksPath=/dev/null'] as const
+
 export type FlowCommandRunner = (
   command: string,
   args: string[],
@@ -124,13 +126,15 @@ export async function createFlow({
 
     worktreeCommand = formatCommand('git', ['branch', allocation.branch, commit])
     await runCommand('git', ['branch', allocation.branch, commit], { cwd: repositoryPath })
-    worktreeCommand = formatCommand('git', [
+    const worktreeArgs = [
+      ...DISABLE_GIT_HOOKS_ARGS,
       'worktree',
       'add',
       allocation.worktreePath,
       allocation.branch
-    ])
-    await runCommand('git', ['worktree', 'add', allocation.worktreePath, allocation.branch], {
+    ]
+    worktreeCommand = formatCommand('git', worktreeArgs)
+    await runCommand('git', worktreeArgs, {
       cwd: repositoryPath
     })
   } catch (error) {

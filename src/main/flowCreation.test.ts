@@ -23,6 +23,15 @@ async function makeRepository(root: string, name: string): Promise<RepositoryRow
   }
 }
 
+function getWorktreeAddPath(args: string[]): string | undefined {
+  const worktreeIndex = args.indexOf('worktree')
+  if (worktreeIndex === -1 || args[worktreeIndex + 1] !== 'add') {
+    return undefined
+  }
+
+  return args[worktreeIndex + 2]
+}
+
 function gitRunner(): FlowCommandRunner {
   return async (_command, args) => {
     if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
@@ -31,8 +40,9 @@ function gitRunner(): FlowCommandRunner {
     if (args[0] === 'rev-parse' && args[1] === '--verify') {
       return { stdout: 'abc123\n' }
     }
-    if (args[0] === 'worktree' && args[1] === 'add' && args[2] !== undefined) {
-      await mkdir(args[2], { recursive: true })
+    const worktreePath = getWorktreeAddPath(args)
+    if (worktreePath !== undefined) {
+      await mkdir(worktreePath, { recursive: true })
     }
     return { stdout: '' }
   }
@@ -239,6 +249,53 @@ describe('Flow creation engine', () => {
     await expect(store.listFlowsForRepository(repository)).resolves.toEqual([])
   })
 
+  it('disables repository hooks while checking out the Flow worktree', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo-disable-hooks')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+    const commands: Array<{ command: string; args: string[] }> = []
+    const runCommand: FlowCommandRunner = async (command, args) => {
+      commands.push({ command, args })
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
+        throw new Error('branch not found')
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return { stdout: 'abc123\n' }
+      }
+      const worktreePath = getWorktreeAddPath(args)
+      if (worktreePath !== undefined) {
+        await mkdir(worktreePath, { recursive: true })
+      }
+      return { stdout: '' }
+    }
+
+    await expect(createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [],
+      request: {
+        title: 'Disable hooks',
+        instructions: 'Do not run checkout hooks.'
+      },
+      store,
+      runCommand
+    })).resolves.toMatchObject({
+      ok: true
+    })
+
+    expect(commands.map((command) => [command.command, command.args])).toContainEqual([
+      'git',
+      [
+        '-c',
+        'core.hooksPath=/dev/null',
+        'worktree',
+        'add',
+        join(dirname(repository.path), 'grindstone-worktrees', `${basename(repository.path)}-flow-disable-hooks`),
+        'flow/disable-hooks'
+      ]
+    ])
+  })
+
   it('persists launch preparation failures after worktree metadata exists', async () => {
     const root = await makeTempDir()
     const repository = await makeRepository(root, 'repo-launch-failure')
@@ -298,7 +355,7 @@ describe('Flow creation engine', () => {
       if (args[0] === 'rev-parse' && args[1] === '--verify') {
         return { stdout: 'abc123\n' }
       }
-      if (args[0] === 'worktree') {
+      if (getWorktreeAddPath(args) !== undefined) {
         throw new FlowCommandRunError(command, args, 'worktree failed', 'worktree stdout', 'worktree stderr')
       }
 
@@ -328,7 +385,7 @@ describe('Flow creation engine', () => {
         failure: {
           stage: 'worktree',
           message: 'worktree failed',
-          command: `git worktree add '${join(
+          command: `git -c core.hooksPath=/dev/null worktree add '${join(
             dirname(repository.path),
             'grindstone-worktrees',
             `${basename(repository.path)}-flow-worktree-failure`
@@ -398,8 +455,9 @@ describe('Flow creation engine', () => {
       store,
       runCommand: async (command, args, options) => {
         const result = await runCommand(command, args, options)
-        if (args[0] === 'worktree' && args[1] === 'add') {
-          await symlink(outside, join(args[2] ?? '', 'escape'))
+        const worktreePath = getWorktreeAddPath(args)
+        if (worktreePath !== undefined) {
+          await symlink(outside, join(worktreePath, 'escape'))
         }
         return result
       }

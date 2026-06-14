@@ -506,7 +506,7 @@ describe('workspace main handlers', () => {
       ['git', ['rev-parse', '--verify', 'refs/heads/flow/ship-workspace-creation']],
       ['git', ['rev-parse', '--verify', 'main^{commit}']],
       ['git', ['branch', 'flow/ship-workspace-creation', 'abc123']],
-      ['git', ['worktree', 'add', join(
+      ['git', ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', join(
         dirname(canonicalRepoPath),
         'grindstone-worktrees',
         `${basename(canonicalRepoPath)}-flow-ship-workspace-creation`
@@ -531,8 +531,9 @@ describe('workspace main handlers', () => {
       if (args.join(' ') === 'rev-parse --verify HEAD^{commit}') {
         return { stdout: 'abc123\n' }
       }
-      if (args[0] === 'worktree' && args[1] === 'add' && args[2] !== undefined) {
-        await mkdir(args[2], { recursive: true })
+      const worktreeIndex = args.indexOf('worktree')
+      if (worktreeIndex !== -1 && args[worktreeIndex + 1] === 'add' && args[worktreeIndex + 2] !== undefined) {
+        await mkdir(args[worktreeIndex + 2], { recursive: true })
       }
       if (command === 'npm install') {
         throw new Error('npm install failed')
