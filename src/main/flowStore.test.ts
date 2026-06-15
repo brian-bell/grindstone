@@ -1,4 +1,4 @@
-import { mkdir, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { mkdtemp, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -303,7 +303,25 @@ describe('Flow artifact store', () => {
           head: '',
           base: 'main',
           status: 'open'
-        }
+        },
+        phases: [
+          {
+            phase_id: 'pr-creation',
+            title: 'PR Creation',
+            kind: 'pr_creation',
+            status: 'completed',
+            outcome: 'pr_recorded',
+            summary: 'Opened PR with malformed metadata.',
+            order: 6
+          },
+          {
+            phase_id: 'human-review',
+            title: 'Human Review',
+            kind: 'human_review',
+            status: 'done',
+            order: 7
+          }
+        ]
       })
     )
 
@@ -312,7 +330,17 @@ describe('Flow artifact store', () => {
     await expect(store.listFlowsForRepository(repository)).resolves.toEqual([
       expect.objectContaining({
         id: 'malformed-pr',
-        pr: undefined
+        pr: undefined,
+        phases: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'pr-creation',
+            status: 'ready'
+          }),
+          expect.objectContaining({
+            id: 'human-review',
+            status: 'pending'
+          })
+        ])
       }),
       expect.objectContaining({
         id: 'with-pr',
@@ -326,6 +354,18 @@ describe('Flow artifact store', () => {
         }
       })
     ])
+
+    await store.updateFlowRecord('malformed-pr', {
+      updatedAt: '2026-06-10T10:02:00.000Z'
+    })
+    const rawFlow = JSON.parse(
+      await readFile(join(artifactRoot, 'flows', 'malformed-pr', 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(rawFlow.pr).toBeUndefined()
+    expect(rawFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+    ]))
   })
 
   it('creates and updates Flow records under the artifact root', async () => {

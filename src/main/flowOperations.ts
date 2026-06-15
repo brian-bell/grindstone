@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  normalizeFlowPullRequestMetadata,
   validateFlowPullRequestMetadata,
   type FlowPullRequestMetadata,
   type PersistedFlowMetadata,
@@ -134,7 +135,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
     if (flow.flow_id !== flowId) {
       throw new ArtifactStoreError('corrupt_artifact', `Flow id mismatch: ${flowId}`, flowId)
     }
-    return flow
+    return normalizePersistedFlowPrState(flow)
   }
 
   async function setPhaseInternal(
@@ -178,9 +179,10 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       phaseId: input.phaseId,
       nextStatus
     })
+    const nextKind = input.kind ?? existing?.kind
     validatePrCreationCompletion({
-      phase: existing,
       phaseId: input.phaseId,
+      phaseKind: nextKind,
       nextStatus,
       pr: options.pr
     })
@@ -195,7 +197,6 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       notes: input.notes
     })
 
-    const nextKind = input.kind ?? existing?.kind
     validatePhaseNotes({
       kind: nextKind,
       status: nextStatus,
@@ -562,17 +563,17 @@ function validateImplementationCompletion({
 }
 
 function validatePrCreationCompletion({
-  phase,
   phaseId,
+  phaseKind,
   nextStatus,
   pr
 }: {
-  phase?: PersistedFlowPhase
   phaseId: string
+  phaseKind?: string
   nextStatus: string
   pr?: FlowPullRequestMetadata
 }): void {
-  const isPrCreationPhase = phaseId === 'pr-creation' || phase?.kind === 'pr_creation'
+  const isPrCreationPhase = phaseId === 'pr-creation' || phaseKind === 'pr_creation'
   if (!isPrCreationPhase || nextStatus !== 'completed') {
     return
   }
@@ -582,6 +583,55 @@ function validatePrCreationCompletion({
       'PR Creation can only complete with valid pull request metadata.'
     )
   }
+}
+
+function normalizePersistedFlowPrState(flow: PersistedFlowMetadata): PersistedFlowMetadata {
+  const pr = normalizeFlowPullRequestMetadata(flow.pr)
+  return withoutUndefined({
+    ...flow,
+    pr,
+    phases: pr === undefined && flow.phases !== undefined
+      ? gatePrDependentPersistedPhases(flow.phases)
+      : flow.phases
+  })
+}
+
+function gatePrDependentPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[] {
+  return phases.map((phase) => {
+    if (
+      phase.phase_id === 'pr-creation' &&
+      phase.status === 'completed' &&
+      phase.outcome === 'pr_recorded'
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'ready',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+
+    if (
+      phase.phase_id === 'human-review' &&
+      (
+        phase.status === 'ready' ||
+        phase.status === 'running' ||
+        phase.status === 'needs_attention' ||
+        phase.status === 'completed' ||
+        phase.status === 'active' ||
+        phase.status === 'done'
+      )
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'pending',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+
+    return phase
+  })
 }
 
 function promotePhase(

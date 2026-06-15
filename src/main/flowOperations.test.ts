@@ -489,12 +489,45 @@ describe('Flow operations', () => {
       code: 'validation_error',
       message: 'PR Creation can only complete with valid pull request metadata.'
     })
+    await rewriteFlow(root, 'guard-pr-creation', (flow) => ({
+      ...flow,
+      phases: [
+        ...(Array.isArray(flow.phases) ? flow.phases : []),
+        {
+          phase_id: 'custom-pr-gate',
+          title: 'Custom PR Gate',
+          status: 'ready',
+          order: 8
+        }
+      ]
+    }))
+    await expect(flows.setPhase({
+      flowId: 'guard-pr-creation',
+      phaseId: 'custom-pr-gate',
+      kind: 'pr_creation',
+      status: 'completed'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'PR Creation can only complete with valid pull request metadata.'
+    })
+    await expect(flows.setPhase({
+      flowId: 'guard-pr-creation',
+      phaseId: 'new-pr-gate',
+      title: 'New PR Gate',
+      order: 9,
+      kind: 'pr_creation',
+      status: 'completed'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'PR Creation can only complete with valid pull request metadata.'
+    })
     const guardedFlow = await flows.readFlow('guard-pr-creation')
     expect(guardedFlow.pr).toBeUndefined()
     expect(guardedFlow).toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'pr-creation', status: 'running' }),
-        expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+        expect.objectContaining({ phase_id: 'human-review', status: 'pending' }),
+        expect.objectContaining({ phase_id: 'custom-pr-gate', status: 'ready' })
       ])
     })
   })
@@ -607,6 +640,78 @@ describe('Flow operations', () => {
         expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
       ])
     })
+  })
+
+  it('locks legacy PR-dependent phases when persisted PR metadata is malformed', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'malformed-pr-gate',
+      title: 'Malformed PR gate',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'malformed-pr-gate', (flow) => ({
+      ...flow,
+      pr: {
+        provider: 'github',
+        number: '12',
+        url: 'http://github.com/acme/grindstone/pull/12',
+        head: '',
+        base: 'main',
+        status: 'open'
+      },
+      phases: [
+        {
+          phase_id: 'review-loop-2',
+          title: 'Review Loop 2',
+          kind: 'review_loop',
+          status: 'ready',
+          order: 5
+        },
+        {
+          phase_id: 'pr-creation',
+          title: 'PR Creation',
+          kind: 'pr_creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened malformed PR.',
+          order: 6
+        },
+        {
+          phase_id: 'human-review',
+          title: 'Human Review',
+          kind: 'human_review',
+          status: 'active',
+          order: 7
+        }
+      ]
+    }))
+
+    const lockedFlow = await flows.readFlow('malformed-pr-gate')
+    expect(lockedFlow.pr).toBeUndefined()
+    expect(lockedFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+    ]))
+    expect(lockedFlow.phases?.find((phase) => phase.phase_id === 'pr-creation')?.outcome)
+      .toBeUndefined()
+    expect(lockedFlow.phases?.find((phase) => phase.phase_id === 'pr-creation')?.summary)
+      .toBeUndefined()
+
+    await flows.setPhase({
+      flowId: 'malformed-pr-gate',
+      phaseId: 'review-loop-2',
+      status: 'running'
+    })
+    const rawFlow = JSON.parse(
+      await readFile(join(root, 'flows', 'malformed-pr-gate', 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(rawFlow.pr).toBeUndefined()
+    expect(rawFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+    ]))
   })
 
   it('only promotes implementation-child rows when Implementation starts', async () => {

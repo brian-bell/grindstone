@@ -212,6 +212,8 @@ async function mapFlowMetadata(
     return undefined
   }
 
+  const pr = normalizeFlowPullRequestMetadata(metadata.pr)
+
   return {
     id: directoryFlowId,
     title: metadata.title,
@@ -227,10 +229,10 @@ async function mapFlowMetadata(
     failure: mapFailureSummary(metadata.failure),
     planId: optionalString(metadata.plan_id),
     planPath: optionalString(metadata.plan_path),
-    pr: normalizeFlowPullRequestMetadata(metadata.pr),
+    pr,
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
-    phases: mapPhases(metadata.phases)
+    phases: mapPhases(metadata.phases, pr !== undefined)
   }
 }
 
@@ -279,7 +281,7 @@ function isFailureStage(value: unknown): value is FlowFailureSummary['stage'] {
     value === 'launch_prep'
 }
 
-function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
+function mapPhases(value: unknown, hasValidPullRequestMetadata: boolean): FlowPhaseSummary[] | undefined {
   if (!Array.isArray(value)) {
     return undefined
   }
@@ -315,9 +317,51 @@ function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
     ]
   })
 
-  return phases.length === 0
+  const gatedPhases = hasValidPullRequestMetadata
+    ? phases
+    : gatePrDependentPhaseSummaries(phases)
+
+  return gatedPhases.length === 0
     ? undefined
-    : sortPhaseSummaries(phases)
+    : sortPhaseSummaries(gatedPhases)
+}
+
+function gatePrDependentPhaseSummaries(phases: FlowPhaseSummary[]): FlowPhaseSummary[] {
+  return phases.map((phase) => {
+    if (
+      phase.id === 'pr-creation' &&
+      phase.status === 'completed' &&
+      phase.outcome === 'pr_recorded'
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'ready',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+
+    if (
+      phase.id === 'human-review' &&
+      (
+        phase.status === 'ready' ||
+        phase.status === 'running' ||
+        phase.status === 'needs_attention' ||
+        phase.status === 'completed' ||
+        phase.status === 'active' ||
+        phase.status === 'done'
+      )
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'pending',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+
+    return phase
+  })
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -461,8 +505,13 @@ function applyMetadataUpdate(
   metadata: RawFlowMetadata,
   update: FlowRecordUpdate
 ): RawFlowMetadata {
+  const pr = normalizeFlowPullRequestMetadata(metadata.pr)
   return withoutUndefined({
     ...metadata,
+    pr,
+    phases: pr === undefined
+      ? gatePrDependentRawPhases(metadata.phases)
+      : metadata.phases,
     status: update.status ?? metadata.status,
     branch: update.branch ?? metadata.branch,
     worktree_path: update.worktreePath ?? metadata.worktree_path,
@@ -475,6 +524,49 @@ function applyMetadataUpdate(
         ? undefined
         : withoutUndefined(update.failure),
     updated_at: update.updatedAt ?? metadata.updated_at
+  })
+}
+
+function gatePrDependentRawPhases(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value
+  }
+
+  return value.map((phase) => {
+    if (!isRecord(phase)) {
+      return phase
+    }
+    if (
+      phase.phase_id === 'pr-creation' &&
+      phase.status === 'completed' &&
+      phase.outcome === 'pr_recorded'
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'ready',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+    if (
+      phase.phase_id === 'human-review' &&
+      (
+        phase.status === 'ready' ||
+        phase.status === 'running' ||
+        phase.status === 'needs_attention' ||
+        phase.status === 'completed' ||
+        phase.status === 'active' ||
+        phase.status === 'done'
+      )
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'pending',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+    return phase
   })
 }
 
