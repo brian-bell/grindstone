@@ -22,6 +22,7 @@ import {
   type ReactElement
 } from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
+import { RECENT_TERMINAL_OUTPUT_LIMIT } from '@shared/workspace'
 import type {
   CommonConfigUpdateInput,
   ConfigFieldError,
@@ -172,7 +173,9 @@ export function App(): ReactElement {
                   terminal.terminalId === event.terminalId
                     ? {
                         ...terminal,
-                        recentOutput: `${terminal.recentOutput ?? ''}${event.data}`
+                        recentOutput: trimRecentTerminalOutput(
+                          `${terminal.recentOutput ?? ''}${event.data}`
+                        )
                       }
                     : terminal
                 )
@@ -354,6 +357,12 @@ export function App(): ReactElement {
       </section>
     </div>
   )
+}
+
+function trimRecentTerminalOutput(output: string): string {
+  return output.length <= RECENT_TERMINAL_OUTPUT_LIMIT
+    ? output
+    : output.slice(output.length - RECENT_TERMINAL_OUTPUT_LIMIT)
 }
 
 function RepositoryCatalogView({

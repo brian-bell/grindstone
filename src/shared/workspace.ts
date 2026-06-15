@@ -63,6 +63,8 @@ export type TerminalStatus =
   | 'failed'
   | 'dismissed'
 
+export const RECENT_TERMINAL_OUTPUT_LIMIT = 20_000
+
 export type FlowTerminalSummary = {
   terminalId: string
   launchId: string

@@ -2,6 +2,7 @@ import { appendFile, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import * as nodePty from 'node-pty'
+import { RECENT_TERMINAL_OUTPUT_LIMIT } from '@shared/workspace'
 import type {
   AgentLaunchMode,
   AgentProvider,
@@ -57,8 +58,6 @@ type ManagedTerminal = {
   terminateTimer: NodeJS.Timeout | null
   outputQueue: Promise<void>
 }
-
-const RECENT_OUTPUT_LIMIT = 20_000
 
 export const nodePtyAdapter: PtyAdapter = {
   spawn(command, args, options) {
@@ -447,9 +446,9 @@ function processEnvToRecord(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 function trimRecentOutput(output: string): string {
-  return output.length <= RECENT_OUTPUT_LIMIT
+  return output.length <= RECENT_TERMINAL_OUTPUT_LIMIT
     ? output
-    : output.slice(output.length - RECENT_OUTPUT_LIMIT)
+    : output.slice(output.length - RECENT_TERMINAL_OUTPUT_LIMIT)
 }
 
 function toRawTerminal(terminal: FlowTerminalSummary): Record<string, unknown> {
