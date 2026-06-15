@@ -1,4 +1,4 @@
-import { mkdtemp, stat } from 'node:fs/promises'
+import { mkdtemp, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -104,6 +104,30 @@ describe('plan artifact store and Flow linkage', () => {
     })
     await expect(flows.linkPlan({ flowId: 'flow-one', planId: 'plan-two' }))
       .rejects.toThrow(/already links plan/)
+  })
+
+  it('reads plan bodies from the artifact directory instead of trusting persisted plan_path', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const metadata = await plans.savePlan({
+      planId: 'plan-one',
+      title: 'Plan One',
+      body: 'safe body',
+      now: '2026-06-15T10:00:00.000Z'
+    })
+    const outsidePath = join(root, 'outside.md')
+    await writeFile(outsidePath, 'outside body')
+    await writeFile(join(root, 'plans', 'plan-one', 'meta.json'), JSON.stringify({
+      ...metadata,
+      plan_path: outsidePath
+    }))
+
+    await expect(plans.readPlan('plan-one')).resolves.toMatchObject({
+      metadata: {
+        plan_path: join(root, 'plans', 'plan-one', 'plan.md')
+      },
+      body: 'safe body'
+    })
   })
 
   it('rejects duplicate Flow ids without overwriting the existing artifact', async () => {

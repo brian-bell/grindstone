@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { SavedPlanMetadata, SavedPlanStatus } from '@shared/artifacts'
@@ -5,8 +6,8 @@ import {
   ArtifactStoreError,
   assertSafeArtifactId,
   ensurePrivateDirectory,
+  getErrorMessage,
   listSafeDirectories,
-  pathExists,
   readJsonArtifact,
   readTextArtifact,
   writeJsonAtomically,
@@ -47,10 +48,15 @@ export function createPlanStore(options: { artifactRoot: string }): PlanStore {
       const status = input.status ?? 'draft'
       validatePlanStatus(status)
       const planDir = join(plansRoot, planId)
-      if (await pathExists(join(planDir, 'meta.json'))) {
-        throw new ArtifactStoreError('validation_error', `Plan already exists: ${planId}`, planId)
+      await ensurePrivateDirectory(plansRoot)
+      try {
+        await mkdir(planDir, { mode: 0o700 })
+      } catch (error) {
+        if (isNodeErrorWithCode(error, 'EEXIST')) {
+          throw new ArtifactStoreError('validation_error', `Plan already exists: ${planId}`, planId)
+        }
+        throw new ArtifactStoreError('write_failed', `Plan directory create failed: ${getErrorMessage(error)}`, planId)
       }
-      await ensurePrivateDirectory(planDir)
       const planPath = join(planDir, 'plan.md')
       const metadata: SavedPlanMetadata = withoutUndefined({
         schema_version: 1,
@@ -78,7 +84,7 @@ export function createPlanStore(options: { artifactRoot: string }): PlanStore {
         planId,
         isSavedPlanMetadata
       )
-      const planPath = metadata.plan_path ?? join(planDir, 'plan.md')
+      const planPath = join(planDir, 'plan.md')
       const body = await readTextArtifact(planPath, planId)
       return {
         metadata: {
@@ -170,6 +176,10 @@ function compareUpdatedAtDescending(left: SavedPlanMetadata, right: SavedPlanMet
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === code
 }
 
 function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
