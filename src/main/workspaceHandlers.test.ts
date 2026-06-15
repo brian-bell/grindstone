@@ -604,6 +604,11 @@ describe('workspace main handlers', () => {
 
     await expect(skipFlowPhaseInWorkspace({
       flowId: 'flow-complete-phase',
+      phaseId: 'implementation',
+      notes: 'Do not skip parent Implementation.'
+    })).rejects.toThrow('Phase cannot be skipped from this workspace: implementation')
+    await expect(skipFlowPhaseInWorkspace({
+      flowId: 'flow-complete-phase',
       phaseId: 'implementation-ui',
       notes: ''
     })).rejects.toThrow('Skipping a phase requires notes.')

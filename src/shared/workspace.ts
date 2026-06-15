@@ -166,6 +166,7 @@ export type FlowPhaseSummary = {
   outcome?: string
   summary?: string
   notes?: string
+  launchIds?: string[]
   generated?: boolean
   editable?: boolean
   sourcePlanId?: string

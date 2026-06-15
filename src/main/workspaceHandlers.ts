@@ -447,7 +447,7 @@ export async function skipFlowPhaseInWorkspace(
   request: SkipFlowPhaseRequest
 ): Promise<InitialWorkspaceState> {
   const { phase, workspaceState } = await getSelectedPhaseForAction(request, 'skip')
-  if (!isLaunchableImplementationPhase(phase)) {
+  if (!isSkippableImplementationChildPhase(phase)) {
     throw new Error(`Phase cannot be skipped from this workspace: ${phase.id}`)
   }
   if (typeof request.notes !== 'string') {
@@ -532,6 +532,10 @@ function isFlowPhaseActionRequest(
 
 function isLaunchableImplementationPhase(phase: FlowPhaseSummary): boolean {
   return phase.id === 'implementation' || phase.parentPhaseId === 'implementation'
+}
+
+function isSkippableImplementationChildPhase(phase: FlowPhaseSummary): boolean {
+  return phase.parentPhaseId === 'implementation'
 }
 
 function createFlowPhaseLaunchContext({

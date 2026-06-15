@@ -305,6 +305,7 @@ function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
         outcome: optionalString(phase.outcome),
         summary: optionalString(phase.summary),
         notes: optionalString(phase.notes),
+        launchIds: optionalStringArray(phase.launch_ids),
         generated: optionalBoolean(phase.generated),
         editable: optionalBoolean(phase.editable),
         sourcePlanId: optionalString(phase.source_plan_id),
@@ -324,6 +325,14 @@ function optionalString(value: unknown): string | undefined {
 
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
+}
+
+function optionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    return undefined
+  }
+
+  return value
 }
 
 function sortPhaseSummaries(phases: FlowPhaseSummary[]): FlowPhaseSummary[] {

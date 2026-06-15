@@ -85,6 +85,7 @@ describe('Flow artifact store', () => {
             order: 2,
             kind: 'implementation',
             summary: 'List rendered',
+            launch_ids: ['wtui-launch-one'],
             updated_at: '2026-06-10T10:30:00.000Z'
           }
         ]
@@ -135,6 +136,7 @@ describe('Flow artifact store', () => {
             order: 2,
             kind: 'implementation',
             summary: 'List rendered',
+            launchIds: ['wtui-launch-one'],
             updatedAt: '2026-06-10T10:30:00.000Z'
           }
         ]
