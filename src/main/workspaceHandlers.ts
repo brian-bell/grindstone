@@ -1,8 +1,10 @@
 import type { IpcMain } from 'electron'
 import { createHash } from 'node:crypto'
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/config'
-import type { LinkedFlowPlanResponse } from '@shared/artifacts'
+import type { LinkedFlowPlanResponse, PersistedFlowPhase } from '@shared/artifacts'
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
@@ -436,14 +438,27 @@ export async function launchFlowPhaseInWorkspace(
     launchId: createFlowPhaseLaunchId()
   })
   await runExclusiveFlowMutation(request.flowId, async () => {
-    await flowOperations.setPhase({
-      flowId: request.flowId,
-      phaseId: request.phaseId,
-      status: 'running',
-      notes: phase.status === 'needs_attention' ? 'Retrying phase launch.' : undefined,
-      launchId: launchContext.launchId
-    })
+    const currentFlow = await flowOperations.readFlow(request.flowId)
+    const currentPhase = currentFlow.phases?.find((candidate) => candidate.phase_id === request.phaseId)
+    if (currentPhase === undefined || !isLaunchablePersistedImplementationPhase(currentPhase)) {
+      throw new Error(`Phase cannot be launched from this workspace: ${request.phaseId}`)
+    }
+    if (currentPhase.status !== 'ready' && currentPhase.status !== 'needs_attention') {
+      throw new Error(`Phase is not ready to launch: ${request.phaseId}`)
+    }
     await createFlowPhaseLaunchRecord(launchContext)
+    try {
+      await flowOperations.setPhase({
+        flowId: request.flowId,
+        phaseId: request.phaseId,
+        status: 'running',
+        notes: currentPhase.status === 'needs_attention' ? 'Retrying phase launch.' : undefined,
+        launchId: launchContext.launchId
+      })
+    } catch (error) {
+      await removeFlowPhaseLaunchRecord(launchContext)
+      throw error
+    }
   })
 
   try {
@@ -580,6 +595,14 @@ function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
     (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
 }
 
+function isLaunchablePersistedImplementationPhase(phase: PersistedFlowPhase): boolean {
+  return phase.phase_id === 'implementation' ||
+    (
+      phase.parent_phase_id === 'implementation' &&
+      (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
+    )
+}
+
 function createFlowPhaseLaunchContext({
   artifactRoot,
   flow,
@@ -605,6 +628,13 @@ function createFlowPhaseLaunchContext({
     planId: flow.planId,
     planPath: flow.planPath
   }
+}
+
+async function removeFlowPhaseLaunchRecord(context: FlowPhaseLaunchContext): Promise<void> {
+  await rm(join(context.artifactRoot, 'launches', context.launchId), {
+    force: true,
+    recursive: true
+  })
 }
 
 async function refreshSelectedRepositoryWorkspace(

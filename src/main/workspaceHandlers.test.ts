@@ -582,7 +582,7 @@ describe('workspace main handlers', () => {
     await expect(launchFlowPhaseInWorkspace({
       flowId: 'flow-launch-overlap',
       phaseId: 'implementation'
-    }, { runPhase })).rejects.toThrow('Phase is already running: implementation')
+    }, { runPhase })).rejects.toThrow('Phase is not ready to launch: implementation')
     expect(runPhase).toHaveBeenCalledTimes(1)
     releaseRun()
     await expect(firstLaunch).resolves.toMatchObject({
