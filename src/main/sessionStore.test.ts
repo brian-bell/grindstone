@@ -3,10 +3,34 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createFlowOperations } from './flowOperations'
+import { createPlanStore } from './planStore'
 import { ingestSessionHook } from './sessionStore'
 
 async function makeTempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'grindstone-session-store-'))
+}
+
+async function startImplementation(
+  flows: ReturnType<typeof createFlowOperations>,
+  root: string,
+  flowId: string
+): Promise<void> {
+  const plans = createPlanStore({ artifactRoot: root })
+  const planId = `${flowId}-plan`
+  await plans.savePlan({
+    planId,
+    title: 'Implementation Plan',
+    status: 'approved',
+    body: '# Plan\n\n## Implementation Phases\n\n- Build the implementation\n'
+  })
+  await flows.linkPlan({ flowId, planId })
+  await flows.completePhase({ flowId, phaseId: 'plan', outcome: 'plan_saved' })
+  await flows.completePhase({ flowId, phaseId: 'plan-review', outcome: 'approved' })
+  await flows.setPhase({
+    flowId,
+    phaseId: 'implementation',
+    status: 'running'
+  })
 }
 
 describe('session-hook transcript ingestion', () => {
@@ -14,13 +38,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-fixture', title: 'Fixture Flow', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-fixture',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-fixture')
 
     const fixtureRoot = join(process.cwd(), 'src', 'cli', 'session-hook', '__fixtures__')
     const codex = await ingestSessionHook({ artifactRoot: root }, {
@@ -52,13 +70,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-one', title: 'Flow One', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-one')
 
     const result = await ingestSessionHook({ artifactRoot: root }, {
       provider: 'codex',
@@ -96,7 +108,7 @@ describe('session-hook transcript ingestion', () => {
       'utf8'
     )).resolves.toContain('Implemented the slice.')
     await expect(flows.readFlow('flow-one')).resolves.toMatchObject({
-      phases: [
+      phases: expect.arrayContaining([
         expect.objectContaining({
           phase_id: 'implementation',
           sessions: [
@@ -107,7 +119,7 @@ describe('session-hook transcript ingestion', () => {
             })
           ]
         })
-      ]
+      ])
     })
   })
 
@@ -180,13 +192,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-structured', title: 'Structured Flow', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-structured',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-structured')
 
     const codex = await ingestSessionHook({ artifactRoot: root }, {
       provider: 'codex',
@@ -240,13 +246,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-many-events', title: 'Many Events Flow', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-many-events',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-many-events')
     const eventCount = 70_000
     const payload = Array.from({ length: eventCount }, (_, index) => JSON.stringify({
       id: `event-${index}`,
@@ -271,13 +271,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-fallback', title: 'Fallback Flow', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-fallback',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-fallback')
 
     const first = await ingestSessionHook({ artifactRoot: root }, {
       provider: 'codex',
@@ -296,14 +290,15 @@ describe('session-hook transcript ingestion', () => {
 
     expect(first.metadata.session_id).not.toBe(second.metadata.session_id)
     await expect(flows.readFlow('flow-fallback')).resolves.toMatchObject({
-      phases: [
+      phases: expect.arrayContaining([
         expect.objectContaining({
+          phase_id: 'implementation',
           sessions: expect.arrayContaining([
             expect.objectContaining({ session_id: first.metadata.session_id }),
             expect.objectContaining({ session_id: second.metadata.session_id })
           ])
         })
-      ]
+      ])
     })
   })
 
@@ -335,13 +330,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-one', title: 'Flow One', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-one')
     const hookDir = join(root, 'hooks')
     await mkdir(hookDir)
     await writeFile(join(hookDir, 'transcript.jsonl'), 'x'.repeat((10 * 1024 * 1024) + 1))
@@ -362,13 +351,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-one', title: 'Flow One', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-one')
     const hookDir = join(root, 'hooks')
     await mkdir(hookDir)
 
@@ -419,13 +402,7 @@ describe('session-hook transcript ingestion', () => {
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-one', title: 'Flow One', repoPath: '/repo' })
     await flows.createFlow({ id: 'flow-two', title: 'Flow Two', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-one')
     await flows.setPhase({
       flowId: 'flow-two',
       phaseId: 'review-loop',
@@ -475,13 +452,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-one', title: 'Flow One', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-one')
 
     await expect(ingestSessionHook({ artifactRoot: root }, {
       provider: 'codex',
@@ -515,13 +486,7 @@ describe('session-hook transcript ingestion', () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({ id: 'flow-one', title: 'Flow One', repoPath: '/repo' })
-    await flows.setPhase({
-      flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
-      status: 'running',
-      order: 1
-    })
+    await startImplementation(flows, root, 'flow-one')
     const sessionDir = join(root, 'sessions', 'codex', 'codex-session')
     await mkdir(sessionDir, { recursive: true })
     await writeFile(join(sessionDir, 'meta.json'), JSON.stringify({

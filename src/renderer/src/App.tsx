@@ -1293,6 +1293,7 @@ function FlowWorkspaceStateView({
 
         <FlowRecordTable
           flows={state.flows}
+          onWorkspaceUpdate={onWorkspaceUpdate}
           repositoryName={state.repositoryName}
         />
       </div>
@@ -1319,9 +1320,11 @@ function FlowWorkspaceStateView({
 
 function FlowRecordTable({
   flows,
+  onWorkspaceUpdate,
   repositoryName
 }: {
   flows: FlowListRow[]
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
   repositoryName: string
 }): ReactElement {
   const [expandedFlowId, setExpandedFlowId] = useState<string | null>(null)
@@ -1445,9 +1448,11 @@ function FlowRecordTable({
                         role="region"
                         aria-label={`${flow.title} details`}
                       >
-                        {details.split('\n').map((line, index) => (
-                          <span key={`${index}:${line}`}>{line}</span>
-                        ))}
+                        <FlowDetailBadges details={details} />
+                        <FlowPhaseTree
+                          flow={flow}
+                          onWorkspaceUpdate={onWorkspaceUpdate}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -1468,6 +1473,253 @@ function FlowRecordTable({
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function FlowDetailBadges({ details }: { details: string }): ReactElement {
+  return (
+    <div className="flow-detail-badges">
+      {details
+        .split('\n')
+        .filter((line) => !line.startsWith('Phase: '))
+        .map((line, index) => (
+          <span key={`${index}:${line}`}>{line}</span>
+        ))}
+    </div>
+  )
+}
+
+function FlowPhaseTree({
+  flow,
+  onWorkspaceUpdate
+}: {
+  flow: FlowListRow
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+}): ReactElement | null {
+  if (flow.phases === undefined || flow.phases.length === 0) {
+    return null
+  }
+
+  const childrenByParent = new Map<string, FlowPhaseSummary[]>()
+  for (const phase of flow.phases) {
+    if (phase.parentPhaseId === undefined) {
+      continue
+    }
+    childrenByParent.set(phase.parentPhaseId, [
+      ...(childrenByParent.get(phase.parentPhaseId) ?? []),
+      phase
+    ])
+  }
+
+  const topLevel = flow.phases
+    .filter((phase) => phase.parentPhaseId === undefined)
+    .sort((left, right) => left.order - right.order)
+
+  return (
+    <div className="phase-tree" aria-label={`${flow.title} phase tree`}>
+      {topLevel.map((phase) => (
+        <FlowPhaseNode
+          childrenByParent={childrenByParent}
+          flow={flow}
+          key={phase.id}
+          level={0}
+          onWorkspaceUpdate={onWorkspaceUpdate}
+          phase={phase}
+        />
+      ))}
+    </div>
+  )
+}
+
+function FlowPhaseNode({
+  childrenByParent,
+  flow,
+  level,
+  onWorkspaceUpdate,
+  phase
+}: {
+  childrenByParent: Map<string, FlowPhaseSummary[]>
+  flow: FlowListRow
+  level: number
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+  phase: FlowPhaseSummary
+}): ReactElement {
+  const children = (childrenByParent.get(phase.id) ?? [])
+    .sort((left, right) => left.order - right.order)
+
+  return (
+    <div className="phase-tree-node">
+      <FlowPhaseRow
+        flow={flow}
+        level={level}
+        onWorkspaceUpdate={onWorkspaceUpdate}
+        phase={phase}
+      />
+      {children.length > 0 ? (
+        <div className="phase-tree-children">
+          {children.map((child) => (
+            <FlowPhaseNode
+              childrenByParent={childrenByParent}
+              flow={flow}
+              key={child.id}
+              level={level + 1}
+              onWorkspaceUpdate={onWorkspaceUpdate}
+              phase={child}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function FlowPhaseRow({
+  flow,
+  level,
+  onWorkspaceUpdate,
+  phase
+}: {
+  flow: FlowListRow
+  level: number
+  onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
+  phase: FlowPhaseSummary
+}): ReactElement {
+  const [isEditing, setIsEditing] = useState(false)
+  const [title, setTitle] = useState(phase.title)
+  const [order, setOrder] = useState(String(phase.order))
+  const [notes, setNotes] = useState(phase.notes ?? '')
+  const [error, setError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const canEdit = phase.generated === true &&
+    phase.editable === true &&
+    (phase.status === 'pending' || phase.status === 'ready')
+
+  useEffect(() => {
+    if (!isEditing) {
+      setTitle(phase.title)
+      setOrder(String(phase.order))
+      setNotes(phase.notes ?? '')
+      setError(null)
+    }
+  }, [isEditing, phase.notes, phase.order, phase.title])
+
+  async function handleSave(): Promise<void> {
+    const parsedOrder = Number(order)
+    if (title.trim() === '') {
+      setError('Phase title cannot be empty.')
+      return
+    }
+    if (!Number.isInteger(parsedOrder)) {
+      setError('Phase order must be an integer.')
+      return
+    }
+
+    setIsSaving(true)
+    setError(null)
+    try {
+      const workspace = await window.grindstone.workspace.updateFlowPhase({
+        flowId: flow.id,
+        phaseId: phase.id,
+        title: title.trim(),
+        order: parsedOrder,
+        notes
+      })
+      onWorkspaceUpdate(workspace)
+      setIsEditing(false)
+    } catch (saveError: unknown) {
+      setError(getErrorMessage(saveError))
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <form
+        aria-label={`Edit ${phase.title}`}
+        className="phase-edit-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void handleSave()
+        }}
+        style={{ marginLeft: `${level * 18}px` }}
+      >
+        <label className="phase-edit-field">
+          <span>Phase title</span>
+          <input
+            aria-label="Phase title"
+            disabled={isSaving}
+            onChange={(event) => setTitle(event.currentTarget.value)}
+            value={title}
+          />
+        </label>
+        <label className="phase-edit-field phase-order-field">
+          <span>Order</span>
+          <input
+            aria-label="Order"
+            disabled={isSaving}
+            onChange={(event) => setOrder(event.currentTarget.value)}
+            value={order}
+          />
+        </label>
+        <label className="phase-edit-field phase-notes-field">
+          <span>Notes</span>
+          <textarea
+            aria-label="Notes"
+            disabled={isSaving}
+            onChange={(event) => setNotes(event.currentTarget.value)}
+            value={notes}
+          />
+        </label>
+        {error === null ? null : (
+          <div className="phase-edit-error" role="alert">
+            {error}
+          </div>
+        )}
+        <div className="phase-edit-actions">
+          <button
+            className="secondary-button"
+            disabled={isSaving}
+            onClick={() => setIsEditing(false)}
+            type="button"
+          >
+            <X aria-hidden="true" size={15} />
+            <span>Cancel</span>
+          </button>
+          <button
+            className="primary-button"
+            disabled={isSaving}
+            type="submit"
+          >
+            <Save aria-hidden="true" size={15} />
+            <span>{isSaving ? 'Saving' : 'Save'}</span>
+          </button>
+        </div>
+      </form>
+    )
+  }
+
+  return (
+    <div
+      className="phase-tree-row"
+      style={{ marginLeft: `${level * 18}px` }}
+    >
+      <span className="phase-tree-copy">
+        <span>{formatPhaseDetail(phase)}</span>
+        {phase.notes === undefined ? null : (
+          <span className="phase-tree-notes">{phase.notes}</span>
+        )}
+      </span>
+      {canEdit ? (
+        <button
+          className="secondary-button phase-edit-button"
+          onClick={() => setIsEditing(true)}
+          type="button"
+        >
+          <span>Edit</span>
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -1540,10 +1792,12 @@ function formatFlowTooltip(flow: FlowListRow): string {
     flow.failure === undefined ? null : `Failure: ${flow.failure.stage} - ${flow.failure.message}`,
     flow.failure?.command === undefined ? null : `Command: ${flow.failure.command}`,
     flow.failure?.output === undefined ? null : `Output: ${flow.failure.output}`,
-    ...(flow.phases ?? []).map((phase) =>
-      `Phase: ${phase.title} - ${phase.status}${phase.summary === undefined ? '' : ` - ${phase.summary}`}`
-    )
+    ...(flow.phases ?? []).map(formatPhaseDetail)
   ].filter((line): line is string => line !== null).join('\n')
+}
+
+function formatPhaseDetail(phase: FlowPhaseSummary): string {
+  return `Phase: ${phase.title} - ${phase.status}${phase.summary === undefined ? '' : ` - ${phase.summary}`}`
 }
 
 function formatFailureSummary(failure: NonNullable<FlowListRow['failure']>): string {

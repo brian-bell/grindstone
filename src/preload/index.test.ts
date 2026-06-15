@@ -7,7 +7,8 @@ import {
   type CreateFlowRequest,
   type CreateRepositoryRequest,
   type InitialWorkspaceState,
-  type RetryRepositoryRemoteRequest
+  type RetryRepositoryRemoteRequest,
+  type UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
 type PreloadApi = {
@@ -16,6 +17,7 @@ type PreloadApi = {
     selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
     readFlowPlan: (request: { flowId: string }) => Promise<LinkedFlowPlanResponse>
     createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
+    updateFlowPhase: (request: UpdateFlowPhaseRequest) => Promise<InitialWorkspaceState>
     createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
     retryRepositoryRemote: (
       request: RetryRepositoryRemoteRequest
@@ -75,6 +77,7 @@ describe('preload bridge', () => {
       'selectRepository',
       'readFlowPlan',
       'createFlow',
+      'updateFlowPhase',
       'createRepository',
       'retryRepositoryRemote'
     ])
@@ -163,6 +166,21 @@ describe('preload bridge', () => {
 
     await expect(api.workspace.createFlow(request)).resolves.toEqual(defaultInitialWorkspaceState)
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.createFlow, request)
+  })
+
+  it('invokes Flow phase updates through the shared channel', async () => {
+    const { invoke, api } = await loadPreload()
+    invoke.mockResolvedValue(defaultInitialWorkspaceState)
+    const request: UpdateFlowPhaseRequest = {
+      flowId: 'flow-one',
+      phaseId: 'implementation-first-slice',
+      title: 'Edited slice',
+      order: 2,
+      notes: 'Keep the edit.'
+    }
+
+    await expect(api.workspace.updateFlowPhase(request)).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.updateFlowPhase, request)
   })
 
   it('invokes remote retry through the shared channel', async () => {

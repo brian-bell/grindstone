@@ -9,6 +9,23 @@ async function makeTempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'grindstone-plan-store-'))
 }
 
+async function readyPlanReview(
+  flows: ReturnType<typeof createFlowOperations>,
+  root: string,
+  flowId: string
+): Promise<void> {
+  const plans = createPlanStore({ artifactRoot: root })
+  const planId = `${flowId}-plan`
+  await plans.savePlan({
+    planId,
+    title: 'Implementation Plan',
+    status: 'approved',
+    body: '# Plan\n\n## Implementation Phases\n\n- Build the implementation\n'
+  })
+  await flows.linkPlan({ flowId, planId })
+  await flows.completePhase({ flowId, phaseId: 'plan', outcome: 'plan_saved' })
+}
+
 describe('plan artifact store and Flow linkage', () => {
   it('saves Markdown plans with metadata, lists by filters, and reads body exactly', async () => {
     const root = await makeTempDir()
@@ -184,13 +201,18 @@ describe('plan artifact store and Flow linkage', () => {
       repoPath: '/repo',
       now: '2026-06-15T10:00:00.000Z'
     })
+    await readyPlanReview(flows, root, 'flow-one')
+    await flows.completePhase({
+      flowId: 'flow-one',
+      phaseId: 'plan-review',
+      outcome: 'approved',
+      now: '2026-06-15T10:01:00.000Z'
+    })
     await flows.setPhase({
       flowId: 'flow-one',
       phaseId: 'implementation',
-      title: 'Implementation',
       status: 'running',
-      order: 1,
-      now: '2026-06-15T10:01:00.000Z'
+      now: '2026-06-15T10:01:30.000Z'
     })
 
     await expect(flows.createFlow({
@@ -202,12 +224,12 @@ describe('plan artifact store and Flow linkage', () => {
     await expect(flows.readFlow('flow-one')).resolves.toMatchObject({
       title: 'Flow One',
       repo_path: '/repo',
-      phases: [
+      phases: expect.arrayContaining([
         expect.objectContaining({
           phase_id: 'implementation',
           status: 'running'
         })
-      ]
+      ])
     })
   })
 
@@ -220,6 +242,7 @@ describe('plan artifact store and Flow linkage', () => {
       repoPath: '/repo',
       now: '2026-06-15T10:00:00.000Z'
     })
+    await readyPlanReview(flows, root, 'flow-one')
 
     await expect(flows.setPhase({
       flowId: 'flow-one',
@@ -241,43 +264,43 @@ describe('plan artifact store and Flow linkage', () => {
 
     await expect(flows.completePhase({
       flowId: 'flow-one',
-      phaseId: 'implementation',
+      phaseId: 'missing-phase',
       title: 'Implementation',
       order: 2
     })).rejects.toThrow(/Unknown phase/)
 
+    await flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'custom-phase',
+      title: 'Custom Phase',
+      status: 'running',
+      order: 20
+    })
+
     await expect(flows.setPhase({
       flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
+      phaseId: 'custom-phase',
       status: 'blocked',
-      order: 2
     })).rejects.toThrow(/blocked requires notes/)
 
     await expect(flows.setPhase({
       flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
+      phaseId: 'custom-phase',
       status: 'needs_attention',
-      order: 2
     })).rejects.toThrow(/needs_attention requires notes/)
 
     await expect(flows.setPhase({
       flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
+      phaseId: 'custom-phase',
       status: 'completed',
-      outcome: 'unsafe outcome',
-      order: 2
+      outcome: 'unsafe outcome'
     })).rejects.toThrow(/Invalid phase outcome/)
 
     await expect(flows.setPhase({
       flowId: 'flow-one',
-      phaseId: 'implementation',
-      title: 'Implementation',
+      phaseId: 'custom-phase',
       status: 'completed',
-      outcome: 'x'.repeat(65),
-      order: 2
+      outcome: 'x'.repeat(65)
     })).rejects.toThrow(/Invalid phase outcome/)
 
     await expect(flows.setPhase({
@@ -291,7 +314,7 @@ describe('plan artifact store and Flow linkage', () => {
       order: 1,
       now: '2026-06-15T10:05:00.000Z'
     })).resolves.toMatchObject({
-      phases: [
+      phases: expect.arrayContaining([
         expect.objectContaining({
           phase_id: 'plan-review',
           status: 'completed',
@@ -305,25 +328,25 @@ describe('plan artifact store and Flow linkage', () => {
             }
           ]
         })
-      ]
+      ])
     })
 
     await expect(flows.restartPhase({ flowId: 'flow-one', phaseId: 'plan-review' }))
       .resolves.toMatchObject({
-        phases: [
+        phases: expect.arrayContaining([
           expect.objectContaining({ status: 'running' })
-        ]
+        ])
       })
 
     await expect(flows.completePhase({ flowId: 'flow-one', phaseId: 'plan-review' }))
       .resolves.toMatchObject({
-        phases: [
+        phases: expect.arrayContaining([
           expect.objectContaining({
             status: 'completed',
             outcome: 'approved_with_concerns',
             notes: 'Phase restarted for rerun.'
           })
-        ]
+        ])
       })
 
     await flows.setPhase({

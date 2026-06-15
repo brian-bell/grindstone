@@ -190,6 +190,38 @@ describe('Flow creation engine', () => {
     })
   })
 
+  it('creates Electron Flows with the default Grindstone phase graph', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo-default-graph')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+
+    await expect(createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [],
+      request: {
+        title: 'Default graph',
+        instructions: 'Create default phase graph.'
+      },
+      store,
+      runCommand: gitRunner(),
+      now: () => '2026-06-15T12:00:00.000Z'
+    })).resolves.toMatchObject({
+      ok: true,
+      flow: {
+        phases: [
+          { id: 'plan', title: 'Plan', kind: 'plan', status: 'ready', order: 1 },
+          { id: 'plan-review', title: 'Plan Review', kind: 'plan_review', status: 'pending', order: 2 },
+          { id: 'implementation', title: 'Implementation', kind: 'implementation', status: 'pending', order: 3 },
+          { id: 'review-loop-1', title: 'Review Loop 1', kind: 'review_loop', status: 'pending', order: 4 },
+          { id: 'review-loop-2', title: 'Review Loop 2', kind: 'review_loop', status: 'pending', order: 5 },
+          { id: 'pr-creation', title: 'PR Creation', kind: 'pr_creation', status: 'pending', order: 6 },
+          { id: 'human-review', title: 'Human Review', kind: 'human_review', status: 'pending', order: 7 }
+        ]
+      }
+    })
+  })
+
   it('uses a deterministic suffix when a stale artifact directory uses the requested Flow id', async () => {
     const root = await makeTempDir()
     const artifactRoot = join(root, 'artifacts')

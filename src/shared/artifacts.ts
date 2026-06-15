@@ -1,4 +1,6 @@
 export type PersistedFlowPhaseStatus =
+  | 'pending'
+  | 'ready'
   | 'running'
   | 'needs_attention'
   | 'completed'
@@ -24,9 +26,13 @@ export type PersistedFlowPhase = {
   kind?: string
   status: PersistedFlowPhaseStatus | string
   order: number
+  parent_phase_id?: string
   outcome?: string
   summary?: string
   notes?: string
+  generated?: boolean
+  editable?: boolean
+  source_plan_id?: string
   note_history?: Array<{
     created_at: string
     note: string

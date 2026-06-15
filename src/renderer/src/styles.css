@@ -396,8 +396,7 @@ textarea {
 }
 
 .flow-detail-panel {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 6px;
   padding: 8px 10px;
   color: #44504b;
@@ -406,13 +405,113 @@ textarea {
   white-space: normal;
 }
 
-.flow-detail-panel span {
+.flow-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.flow-detail-badges span,
+.flow-plan-panel > span {
   max-width: 100%;
   padding: 3px 6px;
   border: 1px solid #d7dfdc;
   border-radius: 6px;
   background: #fffdf8;
   overflow-wrap: anywhere;
+}
+
+.phase-tree {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.phase-tree-node {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.phase-tree-children {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.phase-tree-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #d7dfdc;
+  border-radius: 6px;
+  background: #fffdf8;
+}
+
+.phase-tree-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #25302d;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.phase-tree-notes {
+  color: #65706c;
+  font-weight: 500;
+}
+
+.phase-edit-button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 0.76rem;
+}
+
+.phase-edit-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.6fr) minmax(80px, 0.5fr);
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #c8d0cd;
+  border-radius: 6px;
+  background: #fffdf8;
+}
+
+.phase-edit-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #3f4946;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.phase-notes-field,
+.phase-edit-error,
+.phase-edit-actions {
+  grid-column: 1 / -1;
+}
+
+.phase-edit-field textarea {
+  min-height: 58px;
+}
+
+.phase-edit-error {
+  padding: 7px 9px;
+  border-left: 3px solid #a23535;
+  border-radius: 6px;
+  background: #fff0ee;
+  color: #7e2525;
+}
+
+.phase-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .flow-plan-panel {
