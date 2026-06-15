@@ -96,7 +96,6 @@ const PLAN_REVIEW_NOTES_REQUIRED = new Set([
   'blocked'
 ])
 const DEFAULT_PHASE_COMPLETION_PROMOTIONS = new Map([
-  ['implementation', 'review-loop-1'],
   ['review-loop-1', 'review-loop-2'],
   ['review-loop-2', 'pr-creation'],
   ['pr-creation', 'human-review']
@@ -206,6 +205,11 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         phaseId: input.phaseId,
         nextStatus
       })
+      validateImplementationCompletion({
+        phases,
+        phaseId: input.phaseId,
+        nextStatus
+      })
       validatePhaseTransition({
         currentStatus: existing?.status,
         nextStatus,
@@ -282,6 +286,9 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         if (nextDefaultPhaseId !== undefined) {
           nextPhases = promotePhase(nextPhases, nextDefaultPhaseId, 'ready', now)
         }
+      }
+      if (input.phaseId === 'implementation' && nextStatus === 'completed') {
+        nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
       }
       if (implementationChildrenAreSettled(nextPhases)) {
         nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
@@ -481,6 +488,26 @@ function isApprovingPlanReview(phase: PersistedFlowPhase): boolean {
     (phase.outcome === 'approved' || phase.outcome === 'approved_with_concerns')
 }
 
+function validateImplementationCompletion({
+  phases,
+  phaseId,
+  nextStatus
+}: {
+  phases: PersistedFlowPhase[]
+  phaseId: string
+  nextStatus: string
+}): void {
+  if (phaseId !== 'implementation' || nextStatus !== 'completed') {
+    return
+  }
+  if (!implementationCanComplete(phases)) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'Implementation cannot complete until all generated implementation children are completed or skipped with notes.'
+    )
+  }
+}
+
 function promotePhase(
   phases: PersistedFlowPhase[],
   phaseId: string,
@@ -497,10 +524,18 @@ function promotePhase(
 function implementationChildrenAreSettled(phases: PersistedFlowPhase[]): boolean {
   const implementationChildren = phases.filter(isImplementationChildPhase)
   return implementationChildren.length > 0 &&
-    implementationChildren.every((phase) =>
-      phase.status === 'completed' ||
-        (phase.status === 'skipped' && phase.notes !== undefined && phase.notes.trim() !== '')
-    )
+    implementationChildren.every(isSettledImplementationChild)
+}
+
+function implementationCanComplete(phases: PersistedFlowPhase[]): boolean {
+  return phases
+    .filter(isImplementationChildPhase)
+    .every(isSettledImplementationChild)
+}
+
+function isSettledImplementationChild(phase: PersistedFlowPhase): boolean {
+  return phase.status === 'completed' ||
+    (phase.status === 'skipped' && phase.notes !== undefined && phase.notes.trim() !== '')
 }
 
 function isImplementationChildPhase(phase: PersistedFlowPhase): boolean {

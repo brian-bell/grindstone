@@ -825,6 +825,13 @@ describe('workspace main handlers', () => {
       phaseId: 'implementation-ui',
       notes: ''
     })).rejects.toThrow('Skipping a phase requires notes.')
+    await expect(completeFlowPhaseInWorkspace({
+      flowId: 'flow-complete-phase',
+      phaseId: 'implementation',
+      summary: 'Do not complete before children settle.'
+    })).rejects.toThrow(
+      'Implementation cannot complete until all generated implementation children are completed or skipped with notes.'
+    )
     await expect(skipFlowPhaseInWorkspace({
       flowId: 'flow-complete-phase',
       phaseId: 'implementation-ui',

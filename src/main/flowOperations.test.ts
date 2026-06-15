@@ -336,6 +336,28 @@ describe('Flow operations', () => {
       phaseId: 'implementation',
       outcome: 'implemented',
       now: '2026-06-15T12:05:00.000Z'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Implementation cannot complete until all generated implementation children are completed or skipped with notes.'
+    })
+
+    await flows.setPhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation-build-the-graph',
+      status: 'running',
+      now: '2026-06-15T12:05:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation-build-the-graph',
+      outcome: 'implemented',
+      now: '2026-06-15T12:06:00.000Z'
+    })
+    await expect(flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation',
+      outcome: 'implemented',
+      now: '2026-06-15T12:07:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'review-loop-1', status: 'ready' })
@@ -346,13 +368,13 @@ describe('Flow operations', () => {
       flowId: 'downstream-flow',
       phaseId: 'review-loop-1',
       status: 'running',
-      now: '2026-06-15T12:06:00.000Z'
+      now: '2026-06-15T12:08:00.000Z'
     })
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'review-loop-1',
       outcome: 'completed',
-      now: '2026-06-15T12:07:00.000Z'
+      now: '2026-06-15T12:09:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'review-loop-2', status: 'ready' })
@@ -363,13 +385,13 @@ describe('Flow operations', () => {
       flowId: 'downstream-flow',
       phaseId: 'review-loop-2',
       status: 'running',
-      now: '2026-06-15T12:08:00.000Z'
+      now: '2026-06-15T12:10:00.000Z'
     })
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'review-loop-2',
       outcome: 'completed',
-      now: '2026-06-15T12:09:00.000Z'
+      now: '2026-06-15T12:11:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' })
@@ -380,13 +402,13 @@ describe('Flow operations', () => {
       flowId: 'downstream-flow',
       phaseId: 'pr-creation',
       status: 'running',
-      now: '2026-06-15T12:10:00.000Z'
+      now: '2026-06-15T12:12:00.000Z'
     })
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'pr-creation',
       outcome: 'pr_open',
-      now: '2026-06-15T12:11:00.000Z'
+      now: '2026-06-15T12:13:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'human-review', status: 'ready' })

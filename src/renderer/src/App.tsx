@@ -1602,12 +1602,12 @@ function FlowPhaseRow({
   const canEdit = phase.generated === true &&
     phase.editable === true &&
     (phase.status === 'pending' || phase.status === 'ready')
-  const isImplementationPhase = phase.id === 'implementation' ||
-    (phase.parentPhaseId === 'implementation' && phase.kind === 'implementation_child')
+  const isImplementationPhase = phase.id === 'implementation' || isImplementationChildPhase(phase)
   const canLaunch = isImplementationPhase && phase.status === 'ready'
-  const canComplete = isImplementationPhase && phase.status === 'running'
-  const canSkip = phase.parentPhaseId === 'implementation' &&
-    phase.kind === 'implementation_child' &&
+  const canComplete = isImplementationPhase &&
+    phase.status === 'running' &&
+    (phase.id !== 'implementation' || implementationChildrenCanComplete(flow.phases ?? []))
+  const canSkip = isImplementationChildPhase(phase) &&
     (phase.status === 'pending' || phase.status === 'ready' || phase.status === 'running')
 
   useEffect(() => {
@@ -1905,6 +1905,20 @@ function FlowPhaseRow({
       )}
     </div>
   )
+}
+
+function implementationChildrenCanComplete(phases: FlowPhaseSummary[]): boolean {
+  return phases
+    .filter(isImplementationChildPhase)
+    .every((phase) =>
+      phase.status === 'completed' ||
+        (phase.status === 'skipped' && phase.notes !== undefined && phase.notes.trim() !== '')
+    )
+}
+
+function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
+  return phase.parentPhaseId === 'implementation' &&
+    (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
 }
 
 type FlowPlanViewState =

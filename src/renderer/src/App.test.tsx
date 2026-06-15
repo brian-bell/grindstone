@@ -725,6 +725,8 @@ describe('App shell', () => {
     })
     expect(await within(flowPane).findByText('Phase: Implementation - running'))
       .toBeInTheDocument()
+    expect(within(flowPane).queryByRole('button', { name: /complete implementation/i }))
+      .not.toBeInTheDocument()
 
     await user.click(within(flowPane).getByRole('button', { name: /launch build api/i }))
     expect(launchFlowPhase).toHaveBeenLastCalledWith({
