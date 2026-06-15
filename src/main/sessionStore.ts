@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   FlowPhaseSessionReference,
   NormalizedSessionMetadata,
@@ -248,13 +248,17 @@ async function normalizeClaude(
 }
 
 async function readClaudeTranscript(input: SessionIngestInput, transcriptPath: string): Promise<string> {
-  const resolvedPath = isAbsolute(transcriptPath)
-    ? transcriptPath
-    : input.sourcePath === undefined
-      ? undefined
-      : resolve(dirname(input.sourcePath), transcriptPath)
-  if (resolvedPath === undefined) {
-    throw new ArtifactStoreError('validation_error', 'Claude stdin hooks require an absolute transcript_path.')
+  if (input.sourcePath === undefined) {
+    throw new ArtifactStoreError('validation_error', 'Claude transcript_path requires a hook file source.')
+  }
+  if (isAbsolute(transcriptPath)) {
+    throw new ArtifactStoreError('validation_error', 'Claude transcript_path must be relative to the hook file.')
+  }
+  const transcriptRoot = dirname(input.sourcePath)
+  const resolvedPath = resolve(transcriptRoot, transcriptPath)
+  const relativePath = relative(transcriptRoot, resolvedPath)
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new ArtifactStoreError('validation_error', 'Claude transcript_path must stay inside the hook directory.')
   }
   if ((await stat(resolvedPath)).size > MAX_TRANSCRIPT_TEXT_BYTES) {
     throw new ArtifactStoreError(
