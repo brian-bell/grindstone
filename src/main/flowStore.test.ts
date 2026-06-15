@@ -367,6 +367,68 @@ describe('Flow artifact store', () => {
     })
   })
 
+  it('skips persisted terminal records with unsafe identifiers', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-terminal-ids')
+    await writeFlowMeta(artifactRoot, 'terminal-id-flow', flowMeta('terminal-id-flow', repository.path, {
+      terminals: [
+        {
+          terminal_id: '../escape',
+          launch_id: 'launch-unsafe-terminal',
+          provider: 'codex',
+          mode: 'interactive',
+          flow_id: 'terminal-id-flow',
+          phase_id: 'plan',
+          status: 'failed',
+          command: 'codex',
+          argv: [],
+          cwd: repository.path,
+          started_at: '2026-06-14T10:00:00.000Z'
+        },
+        {
+          terminal_id: 'terminal-unsafe-flow',
+          launch_id: 'launch-unsafe-flow',
+          provider: 'codex',
+          mode: 'interactive',
+          flow_id: '../escape',
+          phase_id: 'plan',
+          status: 'failed',
+          command: 'codex',
+          argv: [],
+          cwd: repository.path,
+          started_at: '2026-06-14T10:00:00.000Z'
+        },
+        {
+          terminal_id: 'terminal-safe',
+          launch_id: 'launch-safe',
+          provider: 'claude',
+          mode: 'interactive',
+          flow_id: 'terminal-id-flow',
+          phase_id: 'review',
+          status: 'running',
+          command: 'claude',
+          argv: ['review'],
+          cwd: repository.path,
+          started_at: '2026-06-14T10:01:00.000Z',
+          recent_output: 'ready\n'
+        }
+      ]
+    }))
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.readFlow('terminal-id-flow')).resolves.toMatchObject({
+      terminals: [
+        {
+          terminalId: 'terminal-safe',
+          flowId: 'terminal-id-flow',
+          recentOutput: 'ready\n'
+        }
+      ]
+    })
+  })
+
   it('treats artifact root and flows collection access failures as fatal', async () => {
     const root = await makeTempDir()
     const artifactRootFile = join(root, 'artifact-root-file')

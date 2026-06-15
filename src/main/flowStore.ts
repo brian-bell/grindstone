@@ -332,10 +332,12 @@ function mapTerminals(value: unknown): FlowTerminalSummary[] | undefined {
     if (
       !isRecord(terminal) ||
       typeof terminal.terminal_id !== 'string' ||
+      !isSafeFlowId(terminal.terminal_id) ||
       typeof terminal.launch_id !== 'string' ||
       !isAgentProvider(terminal.provider) ||
       !isAgentLaunchMode(terminal.mode) ||
       typeof terminal.flow_id !== 'string' ||
+      !isSafeFlowId(terminal.flow_id) ||
       typeof terminal.phase_id !== 'string' ||
       !isTerminalStatus(terminal.status) ||
       typeof terminal.command !== 'string' ||
