@@ -94,6 +94,12 @@ const PLAN_REVIEW_NOTES_REQUIRED = new Set([
   'changes_requested',
   'blocked'
 ])
+const DEFAULT_PHASE_COMPLETION_PROMOTIONS = new Map([
+  ['implementation', 'review-loop-1'],
+  ['review-loop-1', 'review-loop-2'],
+  ['review-loop-2', 'pr-creation'],
+  ['pr-creation', 'human-review']
+])
 const PHASE_STATUSES_REQUIRING_NOTES = new Set(['blocked', 'needs_attention', 'skipped'])
 const SAFE_PHASE_OUTCOME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
@@ -268,6 +274,12 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
             ? { ...candidate, status: 'ready', updated_at: now }
             : candidate
         )
+      }
+      if (nextStatus === 'completed') {
+        const nextDefaultPhaseId = DEFAULT_PHASE_COMPLETION_PROMOTIONS.get(input.phaseId)
+        if (nextDefaultPhaseId !== undefined) {
+          nextPhases = promotePhase(nextPhases, nextDefaultPhaseId, 'ready', now)
+        }
       }
 
       return writeFlow({

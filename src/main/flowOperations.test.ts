@@ -219,6 +219,109 @@ describe('Flow operations', () => {
     })
   })
 
+  it('promotes downstream default phases as predecessors complete', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'downstream-plan',
+      title: 'Downstream Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build the graph\n'
+    })
+    await flows.createFlow({
+      id: 'downstream-flow',
+      title: 'Downstream Flow',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await flows.linkPlan({
+      flowId: 'downstream-flow',
+      planId: 'downstream-plan',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'plan',
+      outcome: 'plan_saved',
+      now: '2026-06-15T12:02:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:03:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:04:00.000Z'
+    })
+
+    await expect(flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation',
+      outcome: 'implemented',
+      now: '2026-06-15T12:05:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'review-loop-1', status: 'ready' })
+      ])
+    })
+
+    await flows.setPhase({
+      flowId: 'downstream-flow',
+      phaseId: 'review-loop-1',
+      status: 'running',
+      now: '2026-06-15T12:06:00.000Z'
+    })
+    await expect(flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'review-loop-1',
+      outcome: 'completed',
+      now: '2026-06-15T12:07:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'review-loop-2', status: 'ready' })
+      ])
+    })
+
+    await flows.setPhase({
+      flowId: 'downstream-flow',
+      phaseId: 'review-loop-2',
+      status: 'running',
+      now: '2026-06-15T12:08:00.000Z'
+    })
+    await expect(flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'review-loop-2',
+      outcome: 'completed',
+      now: '2026-06-15T12:09:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' })
+      ])
+    })
+
+    await flows.setPhase({
+      flowId: 'downstream-flow',
+      phaseId: 'pr-creation',
+      status: 'running',
+      now: '2026-06-15T12:10:00.000Z'
+    })
+    await expect(flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'pr-creation',
+      outcome: 'pr_open',
+      now: '2026-06-15T12:11:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'human-review', status: 'ready' })
+      ])
+    })
+  })
+
   it('keeps Plan Review unapproved when linked plan phase extraction fails', async () => {
     const root = await makeTempDir()
     const plans = createPlanStore({ artifactRoot: root })
