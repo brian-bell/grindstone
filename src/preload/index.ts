@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { invokeTypedIpc, ipcChannels, normalizeIpcError } from '@shared/ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
+import type { LinkedFlowPlanResponse } from '@shared/artifacts'
 import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
@@ -26,6 +27,17 @@ const grindstoneApi = {
         return await invokeTypedIpc(
           ipcRenderer.invoke.bind(ipcRenderer),
           ipcChannels.workspace.selectRepository,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async readFlowPlan(request: { flowId: string }): Promise<LinkedFlowPlanResponse> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.readFlowPlan,
           request
         )
       } catch (error) {

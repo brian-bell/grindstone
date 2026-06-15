@@ -3,6 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import type {
+  LinkedFlowPlanResponse
+} from '@shared/artifacts'
+import type {
   CommonConfigUpdateInput,
   ConfigUpdateResponse,
   EditableConfigState
@@ -129,7 +132,7 @@ const selectedCatalogState: InitialWorkspaceState = {
           {
             id: 'phase-render',
             title: 'Render list',
-            status: 'done',
+            status: 'completed',
             order: 1,
             summary: 'Rows are visible'
           },
@@ -284,7 +287,13 @@ const setWorkspaceApi = (
   } satisfies ConfigUpdateResponse),
   createRepository = vi.fn().mockResolvedValue(catalogState),
   retryRepositoryRemote = vi.fn().mockResolvedValue(catalogState),
-  createFlow = vi.fn().mockResolvedValue(selectedCatalogState)
+  createFlow = vi.fn().mockResolvedValue(selectedCatalogState),
+  readFlowPlan = vi.fn().mockResolvedValue({
+    status: 'missing',
+    flowId: 'artifact-backed-flow',
+    planId: 'plan-flow-list',
+    message: 'Linked plan missing'
+  } satisfies LinkedFlowPlanResponse)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -292,6 +301,7 @@ const setWorkspaceApi = (
       workspace: {
         getInitialState,
         selectRepository,
+        readFlowPlan,
         createFlow,
         createRepository,
         retryRepositoryRemote
@@ -436,7 +446,7 @@ describe('App shell', () => {
     )
     expect(detailsButton).toHaveAttribute(
       'title',
-      expect.stringContaining('Phase: Render list - done - Rows are visible')
+      expect.stringContaining('Phase: Render list - completed - Rows are visible')
     )
 
     await user.click(detailsButton)
@@ -444,6 +454,51 @@ describe('App shell', () => {
     expect(detailsButton).toHaveAttribute('aria-expanded', 'true')
     expect(await within(flowTable).findByRole('region', { name: /artifact backed flow details/i }))
       .toHaveTextContent('Phase: Launch workspace - active')
+  })
+
+  it('opens a linked plan from selected Flow context', async () => {
+    const user = userEvent.setup()
+    const readFlowPlan = vi.fn().mockResolvedValue({
+      status: 'ready',
+      metadata: {
+        schema_version: 1,
+        plan_id: 'plan-flow-list',
+        title: 'Linked Plan',
+        status: 'approved',
+        plan_path: '/artifacts/plans/plan-flow-list/plan.md',
+        created_at: '2026-06-15T10:00:00.000Z',
+        updated_at: '2026-06-15T10:00:00.000Z'
+      },
+      body: '# Linked Plan\n\nShip the CLI.\n'
+    } satisfies LinkedFlowPlanResponse)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: selectedCatalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      readFlowPlan
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', {
+      name: /open plan plan-flow-list for artifact backed flow/i
+    }))
+
+    expect(readFlowPlan).toHaveBeenCalledWith({ flowId: 'artifact-backed-flow' })
+    const planPanel = await within(flowPane).findByRole('region', {
+      name: /artifact backed flow linked plan/i
+    })
+    expect(planPanel).toHaveTextContent('Plan: Linked Plan')
+    expect(planPanel).toHaveTextContent('Ship the CLI.')
   })
 
   it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {

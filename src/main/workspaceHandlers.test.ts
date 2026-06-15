@@ -9,12 +9,14 @@ import {
   createRepositoryInWorkspace,
   getCurrentEditableConfig,
   loadInitialWorkspaceState,
+  readLinkedFlowPlan,
   registerWorkspaceHandlers,
   retryRepositoryRemoteInWorkspace,
   selectRepository,
   updateCommonConfig
 } from './workspaceHandlers'
 import type { FlowStore } from './flowStore'
+import { createPlanStore } from './planStore'
 import type { FlowCommandRunner } from './flowCreation'
 import { CommandRunError, type CommandRunner } from './repositoryCreation'
 
@@ -192,6 +194,47 @@ describe('workspace main handlers', () => {
           }
         ]
       }
+    })
+  })
+
+  it('reads a CLI-linked plan only through the selected Flow context', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-plan')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await createPlanStore({ artifactRoot }).savePlan({
+      planId: 'plan-one',
+      title: 'Plan One',
+      status: 'approved',
+      body: '# Linked Plan\n',
+      now: '2026-06-15T10:00:00.000Z'
+    })
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-one',
+      flowMeta('flow-one', repoPath, {
+        plan_id: 'plan-one',
+        plan_path: join(artifactRoot, 'plans', 'plan-one', 'plan.md')
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(readLinkedFlowPlan({ flowId: 'flow-one' })).resolves.toMatchObject({
+      status: 'ready',
+      metadata: {
+        plan_id: 'plan-one',
+        title: 'Plan One'
+      },
+      body: '# Linked Plan\n'
+    })
+    await expect(readLinkedFlowPlan({ flowId: 'missing-flow' })).resolves.toMatchObject({
+      status: 'missing',
+      flowId: 'missing-flow'
     })
   })
 
@@ -1020,6 +1063,10 @@ describe('workspace main handlers', () => {
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(
       ipcChannels.workspace.selectRepository,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.readFlowPlan,
       expect.any(Function)
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(

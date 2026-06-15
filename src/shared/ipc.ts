@@ -4,6 +4,9 @@ import type {
   EditableConfigState
 } from './config'
 import type {
+  LinkedFlowPlanResponse
+} from './artifacts'
+import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
@@ -14,6 +17,7 @@ export const ipcChannels = {
   workspace: {
     getInitialState: 'workspace:getInitialState',
     selectRepository: 'workspace:selectRepository',
+    readFlowPlan: 'workspace:readFlowPlan',
     createFlow: 'workspace:createFlow',
     createRepository: 'workspace:createRepository',
     retryRepositoryRemote: 'workspace:retryRepositoryRemote'
@@ -33,6 +37,9 @@ export type IpcRequestMap = {
   'workspace:selectRepository': {
     repositoryId: string
   }
+  'workspace:readFlowPlan': {
+    flowId: string
+  }
   'workspace:createFlow': CreateFlowRequest
   'workspace:createRepository': CreateRepositoryRequest
   'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
@@ -43,6 +50,7 @@ export type IpcRequestMap = {
 export type IpcResponseMap = {
   'workspace:getInitialState': InitialWorkspaceState
   'workspace:selectRepository': InitialWorkspaceState
+  'workspace:readFlowPlan': LinkedFlowPlanResponse
   'workspace:createFlow': InitialWorkspaceState
   'workspace:createRepository': InitialWorkspaceState
   'workspace:retryRepositoryRemote': InitialWorkspaceState

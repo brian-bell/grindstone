@@ -1,0 +1,2 @@
+{"provider":"claude","session_id":"claude-fixture-session","flow_id":"flow-fixture","phase_id":"implementation","source_ordinal":0,"timestamp":"2026-06-15T10:02:00.000Z","type":"message","role":"user","text":"Review the implementation."}
+{"provider":"claude","session_id":"claude-fixture-session","flow_id":"flow-fixture","phase_id":"implementation","source_ordinal":1,"timestamp":"2026-06-15T10:03:00.000Z","type":"message","role":"assistant","text":"Review completed."}

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ipcChannels, type NormalizedIpcError } from '@shared/ipc'
+import type { LinkedFlowPlanResponse } from '@shared/artifacts'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
 import {
   defaultInitialWorkspaceState,
@@ -13,6 +14,7 @@ type PreloadApi = {
   workspace: {
     getInitialState: () => Promise<InitialWorkspaceState>
     selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
+    readFlowPlan: (request: { flowId: string }) => Promise<LinkedFlowPlanResponse>
     createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
     createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
     retryRepositoryRemote: (
@@ -71,6 +73,7 @@ describe('preload bridge', () => {
     expect(Object.keys(api.workspace)).toEqual([
       'getInitialState',
       'selectRepository',
+      'readFlowPlan',
       'createFlow',
       'createRepository',
       'retryRepositoryRemote'
@@ -97,6 +100,29 @@ describe('preload bridge', () => {
     ).resolves.toEqual(defaultInitialWorkspaceState)
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.selectRepository, {
       repositoryId: '/repos/example'
+    })
+  })
+
+  it('invokes linked Flow plan reads through the shared channel', async () => {
+    const { invoke, api } = await loadPreload()
+    const response: LinkedFlowPlanResponse = {
+      status: 'ready',
+      metadata: {
+        schema_version: 1,
+        plan_id: 'plan-one',
+        title: 'Plan One',
+        status: 'approved',
+        plan_path: '/artifacts/plans/plan-one/plan.md',
+        created_at: '2026-06-15T10:00:00.000Z',
+        updated_at: '2026-06-15T10:00:00.000Z'
+      },
+      body: '# Plan\n'
+    }
+    invoke.mockResolvedValue(response)
+
+    await expect(api.workspace.readFlowPlan({ flowId: 'flow-one' })).resolves.toEqual(response)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.readFlowPlan, {
+      flowId: 'flow-one'
     })
   })
 

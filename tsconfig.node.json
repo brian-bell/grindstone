@@ -16,8 +16,11 @@
   },
   "include": [
     "electron.vite.config.ts",
+    "vite.cli.config.ts",
     "eslint.config.mjs",
     "vitest.config.ts",
+    "scripts/**/*.mjs",
+    "src/cli/**/*.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts"

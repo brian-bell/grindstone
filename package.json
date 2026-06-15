@@ -4,9 +4,13 @@
   "private": true,
   "description": "Electron Flow workspace shell for Grindstone.",
   "main": "./out/main/index.js",
+  "bin": {
+    "grindstone": "./out/cli/index.js"
+  },
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run typecheck && npm run build:cli && electron-vite build",
+    "build:cli": "vite build --config vite.cli.config.ts && node scripts/fix-cli-executable.mjs",
     "test": "vitest",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "lint": "eslint . --max-warnings=0"

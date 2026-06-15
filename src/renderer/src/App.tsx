@@ -27,10 +27,14 @@ import type {
   EditableConfigState
 } from '@shared/config'
 import type {
+  LinkedFlowPlanResponse
+} from '@shared/artifacts'
+import type {
   CatalogDiagnostic,
   CreateFlowRequest,
   FlowListRow,
   FlowPaneState,
+  FlowPhaseSummary,
   GitHubVisibility,
   InitialWorkspaceState,
   RepositoryCreateState,
@@ -1321,6 +1325,45 @@ function FlowRecordTable({
   repositoryName: string
 }): ReactElement {
   const [expandedFlowId, setExpandedFlowId] = useState<string | null>(null)
+  const [planViews, setPlanViews] = useState<Record<string, FlowPlanViewState>>({})
+
+  async function handlePlanOpen(flow: FlowListRow): Promise<void> {
+    if (flow.planId === undefined) {
+      return
+    }
+
+    const current = planViews[flow.id]
+    if (current?.status === 'ready' || current?.status === 'missing' || current?.status === 'corrupt') {
+      setPlanViews((views) => {
+        const nextViews = { ...views }
+        delete nextViews[flow.id]
+        return nextViews
+      })
+      return
+    }
+
+    setPlanViews((views) => ({
+      ...views,
+      [flow.id]: { status: 'loading', planId: flow.planId ?? '' }
+    }))
+
+    try {
+      const response = await window.grindstone.workspace.readFlowPlan({ flowId: flow.id })
+      setPlanViews((views) => ({
+        ...views,
+        [flow.id]: toFlowPlanViewState(flow.planId ?? '', response)
+      }))
+    } catch (error: unknown) {
+      setPlanViews((views) => ({
+        ...views,
+        [flow.id]: {
+          status: 'missing',
+          planId: flow.planId ?? '',
+          message: getErrorMessage(error)
+        }
+      }))
+    }
+  }
 
   return (
     <div className="flow-table-wrap">
@@ -1340,7 +1383,9 @@ function FlowRecordTable({
           {flows.map((flow) => {
             const details = formatFlowTooltip(flow)
             const detailsId = `flow-details-${flow.id}`
+            const planDetailsId = `flow-plan-${flow.id}`
             const isExpanded = expandedFlowId === flow.id
+            const planView = planViews[flow.id]
 
             return (
               <Fragment key={flow.id}>
@@ -1361,7 +1406,18 @@ function FlowRecordTable({
                     {flow.branch === undefined ? '-' : flow.branch}
                   </td>
                   <td>
-                    {flow.planId ?? '-'}
+                    {flow.planId === undefined ? '-' : (
+                      <button
+                        aria-controls={planDetailsId}
+                        aria-expanded={planView !== undefined}
+                        aria-label={`Open plan ${flow.planId} for ${flow.title}`}
+                        className="flow-plan-button"
+                        onClick={() => void handlePlanOpen(flow)}
+                        type="button"
+                      >
+                        {flow.planId}
+                      </button>
+                    )}
                   </td>
                   <td>
                     {formatPhaseSummary(flow)}
@@ -1396,6 +1452,17 @@ function FlowRecordTable({
                     </td>
                   </tr>
                 ) : null}
+                {planView === undefined ? null : (
+                  <tr className="flow-detail-row">
+                    <td colSpan={7}>
+                      <FlowPlanPanel
+                        flow={flow}
+                        id={planDetailsId}
+                        view={planView}
+                      />
+                    </td>
+                  </tr>
+                )}
               </Fragment>
             )
           })}
@@ -1403,6 +1470,62 @@ function FlowRecordTable({
       </table>
     </div>
   )
+}
+
+type FlowPlanViewState =
+  | { status: 'loading'; planId: string }
+  | { status: 'ready'; planId: string; title: string; body: string }
+  | { status: 'missing' | 'corrupt'; planId: string; message: string }
+
+function FlowPlanPanel({
+  flow,
+  id,
+  view
+}: {
+  flow: FlowListRow
+  id: string
+  view: FlowPlanViewState
+}): ReactElement {
+  switch (view.status) {
+    case 'loading':
+      return (
+        <div className="flow-detail-panel" id={id} role="status" aria-label={`${flow.title} linked plan`}>
+          <span>Loading linked plan {view.planId}</span>
+        </div>
+      )
+    case 'missing':
+    case 'corrupt':
+      return (
+        <div className="flow-detail-panel" id={id} role="alert" aria-label={`${flow.title} linked plan`}>
+          <span>{view.status === 'missing' ? 'Linked plan missing' : 'Linked plan corrupt'}</span>
+          <span>{view.message}</span>
+        </div>
+      )
+    case 'ready':
+      return (
+        <div className="flow-detail-panel flow-plan-panel" id={id} role="region" aria-label={`${flow.title} linked plan`}>
+          <span>Plan: {view.title}</span>
+          <pre>{view.body}</pre>
+        </div>
+      )
+  }
+}
+
+function toFlowPlanViewState(planId: string, response: LinkedFlowPlanResponse): FlowPlanViewState {
+  if (response.status === 'ready') {
+    return {
+      status: 'ready',
+      planId,
+      title: response.metadata.title,
+      body: response.body
+    }
+  }
+
+  return {
+    status: response.status,
+    planId,
+    message: response.message
+  }
 }
 
 function formatFlowTooltip(flow: FlowListRow): string {
@@ -1437,9 +1560,9 @@ function formatPhaseSummary(flow: FlowListRow): string {
     return '-'
   }
 
-  const doneCount = flow.phases.filter((phase) => phase.status === 'done').length
+  const doneCount = flow.phases.filter(isDonePhase).length
   const nonDoneCounts = flow.phases
-    .filter((phase) => phase.status !== 'done')
+    .filter((phase) => !isDonePhase(phase))
     .reduce<Record<string, number>>((counts, phase) => {
       counts[phase.status] = (counts[phase.status] ?? 0) + 1
       return counts
@@ -1452,6 +1575,10 @@ function formatPhaseSummary(flow: FlowListRow): string {
   return nonDoneSummary === ''
     ? `${doneCount}/${flow.phases.length} done`
     : `${doneCount}/${flow.phases.length} done, ${nonDoneSummary}`
+}
+
+function isDonePhase(phase: FlowPhaseSummary): boolean {
+  return phase.status === 'done' || phase.status === 'completed'
 }
 
 function truncateText(value: string, maxLength: number): string {
