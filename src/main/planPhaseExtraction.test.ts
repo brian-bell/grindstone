@@ -27,4 +27,30 @@ describe('plan phase extraction', () => {
       }
     ])
   })
+
+  it('prefers specific implementation headings over earlier generic phases sections', () => {
+    expect(extractImplementationPhaseDrafts([
+      '# Plan',
+      '',
+      '## Phases',
+      '',
+      '- Discovery',
+      '',
+      '## Implementation Phases',
+      '',
+      '- Build API',
+      '- Render UI'
+    ].join('\n'))).toEqual([
+      {
+        idBase: 'build-api',
+        title: 'Build API',
+        order: 1
+      },
+      {
+        idBase: 'render-ui',
+        title: 'Render UI',
+        order: 2
+      }
+    ])
+  })
 })

@@ -13,15 +13,14 @@ type Heading = {
   text: string
 }
 
-const PREFERRED_SECTION_TITLES = new Set(['implementation phases', 'implementation slices', 'phases'])
+const IMPLEMENTATION_SECTION_TITLES = new Set(['implementation phases', 'implementation slices'])
+const GENERIC_SECTION_TITLE = 'phases'
 const LIST_ITEM_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/
 
 export function extractImplementationPhaseDrafts(markdown: string): ImplementationPhaseDraft[] {
   const lines = maskFencedCode(markdown.split(/\r?\n/))
   const headings = findHeadings(lines)
-  const preferred = headings.find((heading) =>
-    PREFERRED_SECTION_TITLES.has(normalizeHeading(heading.text))
-  )
+  const preferred = findPreferredImplementationSection(headings)
 
   const drafts = preferred === undefined
     ? []
@@ -39,6 +38,14 @@ export function extractImplementationPhaseDrafts(markdown: string): Implementati
   }
 
   return assignStableIds(fallbackDrafts)
+}
+
+function findPreferredImplementationSection(headings: Heading[]): Heading | undefined {
+  return headings.find((heading) =>
+    IMPLEMENTATION_SECTION_TITLES.has(normalizeHeading(heading.text))
+  ) ?? headings.find((heading) =>
+    normalizeHeading(heading.text) === GENERIC_SECTION_TITLE
+  )
 }
 
 function extractListDrafts(
