@@ -46,7 +46,15 @@ export type FlowOperations = {
   linkPlan: (input: { flowId: string; planId: string; now?: string }) => Promise<PersistedFlowMetadata>
 }
 
-const AGENT_PHASE_STATUSES = new Set(['running', 'needs_attention', 'completed', 'blocked', 'skipped'])
+const PERSISTED_PHASE_STATUSES = new Set([
+  'running',
+  'needs_attention',
+  'completed',
+  'blocked',
+  'skipped',
+  'done',
+  'active'
+])
 const PLAN_REVIEW_OUTCOMES = new Set([
   'approved',
   'approved_with_concerns',
@@ -139,7 +147,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       }
 
       const nextStatus = input.status ?? existing?.status
-      if (typeof nextStatus !== 'string' || !AGENT_PHASE_STATUSES.has(nextStatus)) {
+      if (typeof nextStatus !== 'string' || !PERSISTED_PHASE_STATUSES.has(nextStatus)) {
         throw new ArtifactStoreError('validation_error', `Invalid phase status: ${String(nextStatus)}`)
       }
 

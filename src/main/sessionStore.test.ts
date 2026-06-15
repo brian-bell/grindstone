@@ -111,6 +111,71 @@ describe('session-hook transcript ingestion', () => {
     })
   })
 
+  it.each(['done', 'active'] as const)(
+    'attaches sessions to existing legacy %s Flow phases',
+    async (status) => {
+      const root = await makeTempDir()
+      const flows = createFlowOperations({ artifactRoot: root })
+      await flows.createFlow({
+        id: `flow-legacy-${status}`,
+        title: 'Legacy Flow',
+        repoPath: '/repo',
+        now: '2026-06-15T09:00:00.000Z'
+      })
+      await writeFile(join(root, 'flows', `flow-legacy-${status}`, 'meta.json'), JSON.stringify({
+        schema_version: 1,
+        flow_id: `flow-legacy-${status}`,
+        title: 'Legacy Flow',
+        status: 'active',
+        repo_path: '/repo',
+        phases: [
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            status,
+            order: 1,
+            created_at: '2026-06-15T09:00:00.000Z',
+            updated_at: '2026-06-15T09:00:00.000Z'
+          }
+        ],
+        created_at: '2026-06-15T09:00:00.000Z',
+        updated_at: '2026-06-15T09:00:00.000Z'
+      }))
+
+      await expect(ingestSessionHook({ artifactRoot: root }, {
+        provider: 'codex',
+        flowId: `flow-legacy-${status}`,
+        phaseId: 'implementation',
+        payload: `${JSON.stringify({
+          id: `event-${status}`,
+          session_id: `codex-${status}-session`,
+          type: 'message',
+          content: `attached to ${status}`
+        })}\n`,
+        now: '2026-06-15T10:01:00.000Z'
+      })).resolves.toMatchObject({
+        metadata: {
+          attachment_status: 'attached',
+          phase_id: 'implementation'
+        }
+      })
+      await expect(flows.readFlow(`flow-legacy-${status}`)).resolves.toMatchObject({
+        phases: [
+          expect.objectContaining({
+            phase_id: 'implementation',
+            status,
+            sessions: [
+              expect.objectContaining({
+                session_id: `codex-${status}-session`,
+                attachment_status: 'attached'
+              })
+            ]
+          })
+        ]
+      })
+    }
+  )
+
   it('extracts text from structured Codex and Claude content without storing raw payloads', async () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
