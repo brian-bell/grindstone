@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, readFile, readdir, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { runCli } from './index'
@@ -54,6 +55,43 @@ describe('grindstone CLI', () => {
     const badIo = io()
     await expect(runCli(['unknown'], badIo)).resolves.toBe(1)
     expect(badIo.stderr.value).toContain('Unknown command')
+  })
+
+  it('runs through the built package bin path', async () => {
+    const build = spawnSync('npm', ['run', 'build:cli'], {
+      cwd: process.cwd(),
+      encoding: 'utf8'
+    })
+    expect(build.status, build.stderr || build.stdout).toBe(0)
+
+    const binDir = await makeTempDir()
+    const grindstoneBin = join(binDir, 'grindstone')
+    await symlink(resolve('out/cli/index.js'), grindstoneBin)
+
+    const result = spawnSync(grindstoneBin, ['--help'], {
+      cwd: process.cwd(),
+      encoding: 'utf8'
+    })
+    expect(result.status, result.stderr || result.stdout).toBe(0)
+    expect(result.stdout).toContain('grindstone flow create')
+  })
+
+  it('reports unsupported session-hook providers as typed validation errors', async () => {
+    const unsupportedIo = io('', { GRINDSTONE_STATE_ROOT: await makeTempDir() } as NodeJS.ProcessEnv)
+
+    await expect(runCli([
+      'session-hook',
+      'ingest',
+      '--provider',
+      'unknown'
+    ], unsupportedIo)).resolves.toBe(1)
+
+    expect(JSON.parse(unsupportedIo.stderr.value)).toMatchObject({
+      error: {
+        code: 'validation_error',
+        message: 'Unsupported provider: unknown'
+      }
+    })
   })
 
   it('saves, links, and reads plans through the CLI contract', async () => {

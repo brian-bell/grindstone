@@ -88,6 +88,20 @@ describe('plan artifact store and Flow linkage', () => {
         flow_path: expect.stringContaining('meta.json')
       }
     })
+    await expect(plans.savePlan({
+      planId: 'plan-one',
+      title: 'Replacement',
+      body: 'replacement',
+      now: '2026-06-15T10:05:00.000Z'
+    })).rejects.toThrow(/already exists/)
+    await expect(plans.readPlan('plan-one')).resolves.toMatchObject({
+      metadata: {
+        title: 'Plan One',
+        flow_id: 'flow-one',
+        linked_at: '2026-06-15T10:03:00.000Z'
+      },
+      body: 'body'
+    })
     await expect(flows.linkPlan({ flowId: 'flow-one', planId: 'plan-two' }))
       .rejects.toThrow(/already links plan/)
   })
@@ -111,6 +125,55 @@ describe('plan artifact store and Flow linkage', () => {
       outcome: 'approved_with_concerns',
       order: 1
     })).rejects.toThrow(/requires notes/)
+
+    await expect(flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: '../plan-review',
+      title: 'Plan Review',
+      status: 'running',
+      order: 1
+    })).rejects.toThrow(/Unsafe phase id/)
+
+    await expect(flows.completePhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      order: 2
+    })).rejects.toThrow(/Unknown phase/)
+
+    await expect(flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'blocked',
+      order: 2
+    })).rejects.toThrow(/blocked requires notes/)
+
+    await expect(flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'needs_attention',
+      order: 2
+    })).rejects.toThrow(/needs_attention requires notes/)
+
+    await expect(flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'completed',
+      outcome: 'unsafe outcome',
+      order: 2
+    })).rejects.toThrow(/Invalid phase outcome/)
+
+    await expect(flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'completed',
+      outcome: 'x'.repeat(65),
+      order: 2
+    })).rejects.toThrow(/Invalid phase outcome/)
 
     await expect(flows.setPhase({
       flowId: 'flow-one',
@@ -144,6 +207,17 @@ describe('plan artifact store and Flow linkage', () => {
       .resolves.toMatchObject({
         phases: [
           expect.objectContaining({ status: 'running' })
+        ]
+      })
+
+    await expect(flows.completePhase({ flowId: 'flow-one', phaseId: 'plan-review' }))
+      .resolves.toMatchObject({
+        phases: [
+          expect.objectContaining({
+            status: 'completed',
+            outcome: 'approved_with_concerns',
+            notes: 'Phase restarted for rerun.'
+          })
         ]
       })
   })

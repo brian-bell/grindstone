@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from 'node:process'
-import { resolveArtifactRoot, typedErrorPayload, getErrorMessage } from '../main/artifactStore'
+import { ArtifactStoreError, resolveArtifactRoot, typedErrorPayload, getErrorMessage } from '../main/artifactStore'
 import { createFlowOperations } from '../main/flowOperations'
 import { createPlanStore, validatePlanStatus } from '../main/planStore'
 import { ingestSessionHook } from '../main/sessionStore'
@@ -164,7 +164,7 @@ export async function runCli(
     if (group === 'session-hook' && command === 'ingest') {
       const provider = requiredFlag(parsed, 'provider')
       if (provider !== 'codex' && provider !== 'claude') {
-        throw new Error(`Unsupported provider: ${provider}`)
+        throw new ArtifactStoreError('validation_error', `Unsupported provider: ${provider}`)
       }
       const result = await ingestSessionHook({ artifactRoot }, {
         provider,
@@ -307,7 +307,7 @@ Global flags:
 `
 }
 
-if (process.argv[1]?.endsWith('/index.js') || process.argv[1]?.endsWith('\\index.js')) {
+if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
   runCli(process.argv.slice(2)).then((code) => {
     process.exitCode = code
   })

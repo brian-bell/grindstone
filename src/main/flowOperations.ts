@@ -58,6 +58,8 @@ const PLAN_REVIEW_NOTES_REQUIRED = new Set([
   'changes_requested',
   'blocked'
 ])
+const PHASE_STATUSES_REQUIRING_NOTES = new Set(['blocked', 'needs_attention', 'skipped'])
+const SAFE_PHASE_OUTCOME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 export function createFlowOperations(options: { artifactRoot: string }): FlowOperations {
   const flowsRoot = join(options.artifactRoot, 'flows')
@@ -117,6 +119,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
     readFlow,
 
     async setPhase(input) {
+      assertSafeArtifactId('phase', input.phaseId)
       const flow = await readFlow(input.flowId)
       const now = input.now ?? new Date().toISOString()
       const phases = [...(flow.phases ?? [])]
@@ -145,7 +148,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         kind: nextKind,
         status: nextStatus,
         outcome: input.outcome ?? existing?.outcome,
-        notes: input.notes
+        notes: input.notes ?? existing?.notes
       })
       const nextTitle = input.title ?? existing?.title
       const nextOrder = input.order ?? existing?.order
@@ -192,10 +195,12 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
     },
 
     async completePhase(input) {
+      await assertPhaseExists(readFlow, input.flowId, input.phaseId)
       return this.setPhase({ ...input, status: 'completed' })
     },
 
     async blockPhase(input) {
+      await assertPhaseExists(readFlow, input.flowId, input.phaseId)
       if (input.notes === undefined || input.notes.trim() === '') {
         throw new ArtifactStoreError('validation_error', 'Blocking a phase requires notes.')
       }
@@ -203,6 +208,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
     },
 
     async needsAttentionPhase(input) {
+      await assertPhaseExists(readFlow, input.flowId, input.phaseId)
       if (input.notes === undefined || input.notes.trim() === '') {
         throw new ArtifactStoreError('validation_error', 'Marking a phase needs_attention requires notes.')
       }
@@ -210,10 +216,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
     },
 
     async restartPhase(input) {
-      const flow = await readFlow(input.flowId)
-      if (!flow.phases?.some((phase) => phase.phase_id === input.phaseId)) {
-        throw new ArtifactStoreError('validation_error', `Unknown phase: ${input.phaseId}`)
-      }
+      await assertPhaseExists(readFlow, input.flowId, input.phaseId)
       return this.setPhase({
         ...input,
         status: 'running',
@@ -262,8 +265,12 @@ export function validatePhaseNotes({
   outcome?: string
   notes?: string
 }): void {
-  if (status === 'skipped' && (notes === undefined || notes.trim() === '')) {
-    throw new ArtifactStoreError('validation_error', 'Skipping a phase requires notes.')
+  if (PHASE_STATUSES_REQUIRING_NOTES.has(status) && (notes === undefined || notes.trim() === '')) {
+    throw new ArtifactStoreError('validation_error', `Phase status ${status} requires notes.`)
+  }
+
+  if (outcome === undefined) {
+    return
   }
 
   if (kind === 'plan_review') {
@@ -277,6 +284,23 @@ export function validatePhaseNotes({
     ) {
       throw new ArtifactStoreError('validation_error', `Plan Review outcome ${outcome} requires notes.`)
     }
+    return
+  }
+
+  if (!SAFE_PHASE_OUTCOME.test(outcome)) {
+    throw new ArtifactStoreError('validation_error', `Invalid phase outcome: ${outcome}`)
+  }
+}
+
+async function assertPhaseExists(
+  readFlow: (flowId: string) => Promise<PersistedFlowMetadata>,
+  flowId: string,
+  phaseId: string
+): Promise<void> {
+  assertSafeArtifactId('phase', phaseId)
+  const flow = await readFlow(flowId)
+  if (!flow.phases?.some((phase) => phase.phase_id === phaseId)) {
+    throw new ArtifactStoreError('validation_error', `Unknown phase: ${phaseId}`, phaseId)
   }
 }
 

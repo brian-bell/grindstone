@@ -6,6 +6,7 @@ import {
   assertSafeArtifactId,
   ensurePrivateDirectory,
   listSafeDirectories,
+  pathExists,
   readJsonArtifact,
   readTextArtifact,
   writeJsonAtomically,
@@ -46,6 +47,9 @@ export function createPlanStore(options: { artifactRoot: string }): PlanStore {
       const status = input.status ?? 'draft'
       validatePlanStatus(status)
       const planDir = join(plansRoot, planId)
+      if (await pathExists(join(planDir, 'meta.json'))) {
+        throw new ArtifactStoreError('validation_error', `Plan already exists: ${planId}`, planId)
+      }
       await ensurePrivateDirectory(planDir)
       const metadata: SavedPlanMetadata = withoutUndefined({
         schema_version: 1,

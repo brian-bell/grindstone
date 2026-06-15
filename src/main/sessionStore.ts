@@ -66,19 +66,16 @@ export async function ingestSessionHook(
   await ensurePrivateDirectory(sessionDir)
   const metadataPath = join(sessionDir, 'meta.json')
   const transcriptPath = join(sessionDir, 'transcript.jsonl')
-  const existing = await readExistingSession(metadataPath, transcriptPath, sessionId)
+  const existing = await readExistingSession(metadataPath, transcriptPath, input.provider, sessionId)
   if (
     existing !== undefined &&
     (existing.metadata.flow_id !== flowId || existing.metadata.phase_id !== phaseId)
   ) {
-    await writePendingMetadata(options, {
-      input,
-      flowId,
-      phaseId,
-      sessionId,
-      now,
-      transcriptPath,
-      error: 'Session is already attached to a different Flow phase.'
+    await writeJsonAtomically(metadataPath, {
+      ...existing.metadata,
+      attachment_status: 'pending',
+      last_attachment_error: 'Session is already attached to a different Flow phase.',
+      updated_at: now
     })
     throw new ArtifactStoreError(
       'validation_error',
@@ -201,51 +198,13 @@ async function attachSessionReference(
   }
 }
 
-async function writePendingMetadata(
-  options: { artifactRoot: string },
-  input: {
-    input: SessionIngestInput
-    flowId: string
-    phaseId: string
-    sessionId: string
-    now: string
-    transcriptPath: string
-    error: string
-  }
-): Promise<void> {
-  const metadata: NormalizedSessionMetadata = withoutUndefined({
-    schema_version: 1,
-    provider: input.input.provider,
-    session_id: input.sessionId,
-    flow_id: input.flowId,
-    phase_id: input.phaseId,
-    launch_id: input.input.launchId,
-    status: 'unknown',
-    attachment_status: 'pending',
-    last_attachment_error: input.error,
-    transcript_path: input.transcriptPath,
-    source_summary: {
-      provider: input.input.provider,
-      input_format: 'unknown',
-      event_count: 0,
-      warnings: [input.error]
-    },
-    created_at: input.now,
-    updated_at: input.now
-  })
-  await writeJsonAtomically(
-    join(options.artifactRoot, 'sessions', input.input.provider, input.sessionId, 'meta.json'),
-    metadata
-  )
-}
-
 function normalizeCodex(
   input: SessionIngestInput,
   flowId: string,
   phaseId: string
 ): { sessionId: string; events: NormalizedTranscriptEvent[]; inputFormat: string; warnings: string[] } {
   const rows = parseJsonLines(input.payload, 'codex')
-  const sessionId = findSessionId(rows) ?? deterministicSessionId(input.provider, input.launchId, input.sourcePath)
+  const sessionId = resolveSessionId(input.provider, input.launchId, input.sourcePath, rows)
   const events = rows.map((row, index) => normalizeEvent({
     provider: 'codex',
     row,
@@ -268,8 +227,10 @@ async function normalizeClaude(
   const messages = transcriptPath === undefined
     ? Array.isArray(hook.messages) ? hook.messages : [hook]
     : parseJsonLines(await readClaudeTranscript(input, transcriptPath), 'claude transcript')
-  const sessionId = findSessionId([hook, ...messages]) ??
-    deterministicSessionId(input.provider, input.launchId, transcriptPath ?? input.sourcePath)
+  const sessionId = resolveSessionId(input.provider, input.launchId, transcriptPath ?? input.sourcePath, [
+    hook,
+    ...messages
+  ])
   const events = messages.map((row, index) => normalizeEvent({
     provider: 'claude',
     row,
@@ -319,7 +280,7 @@ function normalizeEvent({
   if (!isRecord(row)) {
     throw new ArtifactStoreError('validation_error', 'Transcript events must be JSON objects.')
   }
-  const textValue = firstString(row.content, row.message, row.text)
+  const textValue = firstText(row.content, row.message, row.text)
   const { text, truncated, originalBytes } = truncateUtf8(textValue ?? '')
   const timestamp = firstString(row.timestamp, row.created_at, row.time)
   const type = firstString(row.type, row.event, row.kind) ?? 'message'
@@ -378,16 +339,25 @@ function parseJsonObject(payload: string, label: string): Record<string, unknown
   }
 }
 
-function findSessionId(rows: unknown[]): string | undefined {
+function resolveSessionId(
+  provider: SessionProvider,
+  launchId: string | undefined,
+  source: string | undefined,
+  rows: unknown[]
+): string {
+  const sessionIds = new Set<string>()
   for (const row of rows) {
     if (isRecord(row)) {
       const sessionId = firstString(row.session_id, row.sessionId)
       if (sessionId !== undefined) {
-        return sessionId
+        sessionIds.add(sessionId)
       }
     }
   }
-  return undefined
+  if (sessionIds.size > 1) {
+    throw new ArtifactStoreError('validation_error', 'Conflicting session ids in transcript payload.')
+  }
+  return [...sessionIds][0] ?? deterministicSessionId(provider, launchId, source)
 }
 
 function deterministicSessionId(provider: string, launchId: string | undefined, source: string | undefined): string {
@@ -458,20 +428,34 @@ function mergeEvents(
 async function readExistingSession(
   metadataPath: string,
   transcriptPath: string,
+  provider: SessionProvider,
   sessionId: string
 ): Promise<SessionIngestResult | undefined> {
+  let metadata: NormalizedSessionMetadata
   try {
-    const metadata = await readJsonArtifact(
+    metadata = await readJsonArtifact(
       metadataPath,
       sessionId,
       isNormalizedSessionMetadata
     )
-    const events = parseJsonLines(await readTextArtifact(transcriptPath, sessionId), 'stored transcript')
-      .filter(isNormalizedTranscriptEvent)
-    return { metadata, events }
-  } catch {
-    return undefined
+  } catch (error) {
+    if (error instanceof ArtifactStoreError && error.code === 'not_found') {
+      return undefined
+    }
+    throw error
   }
+
+  if (metadata.provider !== provider || metadata.session_id !== sessionId) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'Stored session metadata does not match its provider/session path.',
+      sessionId
+    )
+  }
+
+  const events = parseJsonLines(await readTextArtifact(transcriptPath, sessionId), 'stored transcript')
+    .filter(isNormalizedTranscriptEvent)
+  return { metadata, events }
 }
 
 async function readLaunchMetadata(
@@ -512,6 +496,35 @@ async function readLaunchMetadata(
 
 function firstString(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === 'string' && value !== '')
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const text = extractText(value)
+    if (text !== undefined && text !== '') {
+      return text
+    }
+  }
+  return undefined
+}
+
+function extractText(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => extractText(item))
+      .filter((text): text is string => text !== undefined && text !== '')
+    return parts.length === 0 ? undefined : parts.join('\n')
+  }
+
+  if (isRecord(value)) {
+    return firstText(value.text, value.content, value.message)
+  }
+
+  return undefined
 }
 
 function isNormalizedSessionMetadata(value: unknown): value is NormalizedSessionMetadata {
