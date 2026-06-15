@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App } from './App'
+import { App, getTerminalOutputAppend } from './App'
 import type {
   CommonConfigUpdateInput,
   ConfigUpdateResponse,
@@ -604,6 +604,15 @@ describe('App shell', () => {
 
     expect(terminalOutput.textContent).toHaveLength(RECENT_TERMINAL_OUTPUT_LIMIT)
     expect(terminalOutput.textContent?.startsWith('seed')).toBe(false)
+  })
+
+  it('computes xterm append chunks when the recent-output buffer rolls forward', () => {
+    const previousOutput = 'x'.repeat(RECENT_TERMINAL_OUTPUT_LIMIT)
+    const rolledOutput = `${'x'.repeat(RECENT_TERMINAL_OUTPUT_LIMIT - 1)}y`
+
+    expect(getTerminalOutputAppend(previousOutput, rolledOutput)).toBe('y')
+    expect(getTerminalOutputAppend('abc', 'abcdef')).toBe('def')
+    expect(getTerminalOutputAppend('abc', 'xyz')).toBe('xyz')
   })
 
   it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {

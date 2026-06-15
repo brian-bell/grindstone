@@ -312,7 +312,7 @@ export class TerminalSessionManager {
     const signal = event.signal === undefined ? undefined : String(event.signal)
     managed.terminal = {
       ...managed.terminal,
-      status: signal === 'SIGTERM' || signal === 'SIGKILL'
+      status: isTerminationSignal(signal)
         ? 'terminated'
         : event.exitCode === 0
           ? 'exited'
@@ -475,6 +475,10 @@ function trimRecentOutput(output: string): string {
   return output.length <= RECENT_TERMINAL_OUTPUT_LIMIT
     ? output
     : output.slice(output.length - RECENT_TERMINAL_OUTPUT_LIMIT)
+}
+
+function isTerminationSignal(signal: string | undefined): boolean {
+  return signal === 'SIGTERM' || signal === 'SIGKILL' || signal === '15' || signal === '9'
 }
 
 function toRawTerminal(terminal: FlowTerminalSummary): Record<string, unknown> {

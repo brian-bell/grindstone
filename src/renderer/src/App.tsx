@@ -365,6 +365,42 @@ function trimRecentTerminalOutput(output: string): string {
     : output.slice(output.length - RECENT_TERMINAL_OUTPUT_LIMIT)
 }
 
+export function getTerminalOutputAppend(previousOutput: string, output: string): string {
+  if (previousOutput === '' || output.startsWith(previousOutput)) {
+    return output.slice(previousOutput.length)
+  }
+  if (output === '') {
+    return ''
+  }
+
+  const prefixTable = Array<number>(output.length).fill(0)
+  for (let index = 1; index < output.length; index += 1) {
+    let candidateLength = prefixTable[index - 1] ?? 0
+    while (candidateLength > 0 && output[index] !== output[candidateLength]) {
+      candidateLength = prefixTable[candidateLength - 1] ?? 0
+    }
+    if (output[index] === output[candidateLength]) {
+      candidateLength += 1
+    }
+    prefixTable[index] = candidateLength
+  }
+
+  let overlapLength = 0
+  for (let index = 0; index < previousOutput.length; index += 1) {
+    while (overlapLength > 0 && previousOutput[index] !== output[overlapLength]) {
+      overlapLength = prefixTable[overlapLength - 1] ?? 0
+    }
+    if (previousOutput[index] === output[overlapLength]) {
+      overlapLength += 1
+    }
+    if (overlapLength === output.length && index < previousOutput.length - 1) {
+      overlapLength = prefixTable[overlapLength - 1] ?? 0
+    }
+  }
+
+  return output.slice(overlapLength)
+}
+
 function RepositoryCatalogView({
   isLoading,
   repository,
@@ -1529,7 +1565,7 @@ function TerminalOutput({
     terminalId: string
     write: (data: string) => void
   } | null>(null)
-  const writtenOutputLengthRef = useRef(0)
+  const writtenOutputRef = useRef('')
   const output = terminal.recentOutput ?? ''
 
   useEffect(() => {
@@ -1583,7 +1619,7 @@ function TerminalOutput({
           write: (data) => xterm.write(data)
         }
         xterm.write(output)
-        writtenOutputLengthRef.current = output.length
+        writtenOutputRef.current = output
         const publishSize = () => {
           fit.fit()
           const dimensions = fit.proposeDimensions()
@@ -1610,7 +1646,7 @@ function TerminalOutput({
           if (xtermRef.current?.terminalId === terminal.terminalId) {
             xtermRef.current = null
           }
-          writtenOutputLengthRef.current = 0
+          writtenOutputRef.current = ''
           xterm.dispose()
         }
       } catch {
@@ -1639,17 +1675,11 @@ function TerminalOutput({
       return
     }
 
-    if (output.length < writtenOutputLengthRef.current) {
-      xterm.write(output)
-      writtenOutputLengthRef.current = output.length
-      return
-    }
-
-    const nextChunk = output.slice(writtenOutputLengthRef.current)
+    const nextChunk = getTerminalOutputAppend(writtenOutputRef.current, output)
     if (nextChunk !== '') {
       xterm.write(nextChunk)
-      writtenOutputLengthRef.current = output.length
     }
+    writtenOutputRef.current = output
   }, [output, terminal.terminalId])
 
   return (

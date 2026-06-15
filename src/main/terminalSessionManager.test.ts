@@ -70,14 +70,14 @@ class FakePtyProcess implements PtyProcess {
   readonly resizes: Array<{ columns: number; rows: number }> = []
   readonly kills: string[] = []
   private dataHandlers: Array<(data: string) => void> = []
-  private exitHandlers: Array<(event: { exitCode: number; signal?: string }) => void> = []
+  private exitHandlers: Array<(event: { exitCode: number; signal?: string | number }) => void> = []
 
   onData(handler: (data: string) => void): { dispose: () => void } {
     this.dataHandlers.push(handler)
     return { dispose: () => undefined }
   }
 
-  onExit(handler: (event: { exitCode: number; signal?: string }) => void): { dispose: () => void } {
+  onExit(handler: (event: { exitCode: number; signal?: string | number }) => void): { dispose: () => void } {
     this.exitHandlers.push(handler)
     return { dispose: () => undefined }
   }
@@ -98,7 +98,7 @@ class FakePtyProcess implements PtyProcess {
     this.dataHandlers.forEach((handler) => handler(data))
   }
 
-  emitExit(event: { exitCode: number; signal?: string }): void {
+  emitExit(event: { exitCode: number; signal?: string | number }): void {
     this.exitHandlers.forEach((handler) => handler(event))
   }
 }
@@ -355,6 +355,70 @@ describe('terminal session manager', () => {
         expect.objectContaining({ terminalId: 'terminal-a' }),
         expect.objectContaining({ terminalId: 'terminal-b' })
       ])
+    })
+  })
+
+  it('records numeric Unix termination signals as terminated terminals', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const repositoryId = await realpath(repo.path)
+    const storedFlow = await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const fakeProcess = new FakePtyProcess()
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty: {
+        spawn() {
+          return fakeProcess
+        }
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn()
+        .mockReturnValueOnce('terminal-123')
+        .mockReturnValueOnce('launch-123')
+    })
+
+    await manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'interactive',
+      phaseId: 'plan',
+      prompt: 'Implement the approved plan.'
+    })
+    await manager.terminate({
+      repositoryId,
+      flowId: 'launch-terminal',
+      terminalId: 'terminal-123'
+    })
+    fakeProcess.emitExit({ exitCode: 1, signal: 15 })
+
+    await waitForExpectation(async () => {
+      await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+        terminals: [
+          {
+            terminalId: 'terminal-123',
+            status: 'terminated',
+            signal: '15'
+          }
+        ]
+      })
     })
   })
 
