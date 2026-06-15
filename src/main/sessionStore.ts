@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { lstat, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   FlowPhaseSessionReference,
@@ -260,7 +260,11 @@ async function readClaudeTranscript(input: SessionIngestInput, transcriptPath: s
   if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
     throw new ArtifactStoreError('validation_error', 'Claude transcript_path must stay inside the hook directory.')
   }
-  if ((await stat(resolvedPath)).size > MAX_TRANSCRIPT_TEXT_BYTES) {
+  const transcriptStat = await lstat(resolvedPath)
+  if (transcriptStat.isSymbolicLink()) {
+    throw new ArtifactStoreError('validation_error', 'Claude transcript_path must not be a symlink.')
+  }
+  if (transcriptStat.size > MAX_TRANSCRIPT_TEXT_BYTES) {
     throw new ArtifactStoreError(
       'validation_error',
       `Transcript exceeds maximum size of ${MAX_TRANSCRIPT_TEXT_BYTES} bytes.`

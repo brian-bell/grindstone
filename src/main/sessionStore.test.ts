@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, mkdir, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -384,6 +384,19 @@ describe('session-hook transcript ingestion', () => {
         })
       })).rejects.toThrow(/transcript_path must/)
     }
+
+    await writeFile(join(root, 'outside.jsonl'), `${JSON.stringify({ text: 'outside' })}\n`)
+    await symlink(join(root, 'outside.jsonl'), join(hookDir, 'link.jsonl'))
+    await expect(ingestSessionHook({ artifactRoot: root }, {
+      provider: 'claude',
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      sourcePath: join(hookDir, 'hook.json'),
+      payload: JSON.stringify({
+        session_id: 'claude-session',
+        transcript_path: 'link.jsonl'
+      })
+    })).rejects.toThrow(/must not be a symlink/)
   })
 
   it('preserves original session metadata when reattachment targets another Flow phase', async () => {
