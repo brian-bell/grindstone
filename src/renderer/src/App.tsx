@@ -30,6 +30,7 @@ import type {
   EditableConfigState
 } from '@shared/config'
 import type {
+  FlowHumanReviewOutcome,
   FlowPullRequestStatus,
   LinkedFlowPlanResponse
 } from '@shared/artifacts'
@@ -41,6 +42,8 @@ import type {
   FlowPhaseSummary,
   GitHubVisibility,
   InitialWorkspaceState,
+  RecordFlowHumanReviewRequest,
+  RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
   RepositoryCreateState,
   RepositoryRemoteRetryRecord,
@@ -1604,13 +1607,20 @@ function FlowPhaseRow({
   const [notes, setNotes] = useState(phase.notes ?? '')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [pendingAction, setPendingAction] = useState<'launch' | 'skip' | 'complete' | null>(null)
+  const [pendingAction, setPendingAction] = useState<
+    'launch' | 'skip' | 'complete' | 'human-review' | 'merge' | null
+  >(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [isSkipOpen, setIsSkipOpen] = useState(false)
   const [skipNotes, setSkipNotes] = useState('')
   const [skipError, setSkipError] = useState<string | null>(null)
   const [prDraft, setPrDraft] = useState<PullRequestDraft>(() => createPullRequestDraft(flow))
   const [prError, setPrError] = useState<string | null>(null)
+  const [humanReviewNotes, setHumanReviewNotes] = useState(flow.humanReview?.notes ?? '')
+  const [humanReviewError, setHumanReviewError] = useState<string | null>(null)
+  const [mergeCommit, setMergeCommit] = useState(flow.merge.status === 'merged' ? flow.merge.commit : '')
+  const [mergeNotes, setMergeNotes] = useState(flow.merge.status === 'blocked' ? flow.merge.notes : '')
+  const [mergeError, setMergeError] = useState<string | null>(null)
   const canEdit = phase.generated === true &&
     phase.editable === true &&
     (phase.status === 'pending' || phase.status === 'ready')
@@ -1624,6 +1634,13 @@ function FlowPhaseRow({
     (phase.status === 'pending' || phase.status === 'ready' || phase.status === 'running')
   const canRecordPr = isPrCreationPhase(phase) &&
     (phase.status === 'ready' || phase.status === 'running')
+  const canRecordHumanReview = isHumanReviewPhase(phase) &&
+    flow.pr !== undefined &&
+    flow.merge.status !== 'merged' &&
+    isHumanReviewPhaseActionable(phase)
+  const showHumanReviewPanel = isHumanReviewPhase(phase) && flow.pr !== undefined
+  const showMergePanel = showHumanReviewPanel && flow.humanReview?.outcome === 'approved'
+  const canRecordMerge = showMergePanel && flow.merge.status !== 'merged'
 
   useEffect(() => {
     if (!isEditing) {
@@ -1638,12 +1655,17 @@ function FlowPhaseRow({
     setActionError(null)
     setSkipError(null)
     setPrError(null)
+    setHumanReviewError(null)
+    setMergeError(null)
     setIsSkipOpen(false)
     setSkipNotes('')
   }, [phase.id, phase.status])
 
   useEffect(() => {
     setPrDraft(createPullRequestDraft(flow))
+    setHumanReviewNotes(flow.humanReview?.notes ?? '')
+    setMergeCommit(flow.merge.status === 'merged' ? flow.merge.commit : '')
+    setMergeNotes(flow.merge.status === 'blocked' ? flow.merge.notes : '')
   }, [flow])
 
   async function handleSave(): Promise<void> {
@@ -1746,6 +1768,49 @@ function FlowPhaseRow({
     setActionError(null)
     try {
       const workspace = await window.grindstone.workspace.recordFlowPullRequest(request.request)
+      onWorkspaceUpdate(workspace)
+    } catch (recordError: unknown) {
+      setActionError(getErrorMessage(recordError))
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function handleRecordHumanReview(outcome: FlowHumanReviewOutcome): Promise<void> {
+    const request = createRecordHumanReviewRequest(flow.id, outcome, humanReviewNotes)
+    if (!request.ok) {
+      setHumanReviewError(request.message)
+      return
+    }
+
+    setPendingAction('human-review')
+    setHumanReviewError(null)
+    setActionError(null)
+    try {
+      const workspace = await window.grindstone.workspace.recordFlowHumanReview(request.request)
+      onWorkspaceUpdate(workspace)
+    } catch (recordError: unknown) {
+      setActionError(getErrorMessage(recordError))
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function handleRecordMerge(status: 'merged' | 'blocked'): Promise<void> {
+    const request = createRecordMergeRequest(flow.id, status, {
+      commit: mergeCommit,
+      notes: mergeNotes
+    })
+    if (!request.ok) {
+      setMergeError(request.message)
+      return
+    }
+
+    setPendingAction('merge')
+    setMergeError(null)
+    setActionError(null)
+    try {
+      const workspace = await window.grindstone.workspace.recordFlowMerge(request.request)
       onWorkspaceUpdate(workspace)
     } catch (recordError: unknown) {
       setActionError(getErrorMessage(recordError))
@@ -2015,6 +2080,148 @@ function FlowPhaseRow({
           </div>
         </form>
       ) : null}
+      {showHumanReviewPanel ? (
+        <div
+          aria-label={`Human Review for ${flow.title}`}
+          className="phase-human-review-panel"
+          role="region"
+          style={{ marginLeft: `${level * 18}px` }}
+        >
+          <div className="phase-review-summary">
+            <span>GitHub PR #{flow.pr?.number}</span>
+            <a href={flow.pr?.url} rel="noreferrer" target="_blank">
+              {flow.pr?.head} to {flow.pr?.base}
+            </a>
+            <span>{flow.pr?.status}</span>
+          </div>
+          {flow.humanReview === undefined ? null : (
+            <div className="phase-review-summary">
+              <span>Review {formatHumanReviewOutcome(flow.humanReview.outcome)}</span>
+              <span>{flow.humanReview.reviewed_at}</span>
+              {flow.humanReview.notes === undefined ? null : <span>{flow.humanReview.notes}</span>}
+            </div>
+          )}
+          {canRecordHumanReview ? (
+            <>
+              <label className="phase-edit-field phase-notes-field">
+                <span>Review notes</span>
+                <textarea
+                  aria-label="Review notes"
+                  disabled={pendingAction === 'human-review'}
+                  onChange={(event) => setHumanReviewNotes(event.currentTarget.value)}
+                  value={humanReviewNotes}
+                />
+              </label>
+              {humanReviewError === null ? null : (
+                <div className="phase-edit-error" role="alert">
+                  {humanReviewError}
+                </div>
+              )}
+              <div className="phase-edit-actions">
+                <button
+                  className="primary-button"
+                  disabled={pendingAction === 'human-review'}
+                  onClick={() => void handleRecordHumanReview('approved')}
+                  type="button"
+                >
+                  <Check aria-hidden="true" size={15} />
+                  <span>Approve</span>
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={pendingAction === 'human-review'}
+                  onClick={() => void handleRecordHumanReview('changes_requested')}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={15} />
+                  <span>Request changes</span>
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={pendingAction === 'human-review'}
+                  onClick={() => void handleRecordHumanReview('blocked')}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={15} />
+                  <span>Block</span>
+                </button>
+              </div>
+            </>
+          ) : null}
+          {showMergePanel ? (
+            <div
+              className="phase-merge-panel"
+              aria-label={`Merge metadata for ${flow.title}`}
+              role="region"
+            >
+              {flow.merge.status === 'merged' ? (
+                <div className="phase-review-summary">
+                  <span>Merged</span>
+                  <span>{flow.merge.commit}</span>
+                  <span>{flow.merge.merged_at}</span>
+                </div>
+              ) : (
+                <>
+                  {flow.merge.status === 'blocked' ? (
+                    <div className="phase-review-summary">
+                      <span>Merge blocked</span>
+                      <span>{flow.merge.notes}</span>
+                      <span>{flow.merge.updated_at}</span>
+                    </div>
+                  ) : null}
+                  {canRecordMerge ? (
+                    <>
+                      <label className="phase-edit-field">
+                        <span>Merge commit</span>
+                        <input
+                          aria-label="Merge commit"
+                          disabled={pendingAction === 'merge'}
+                          onChange={(event) => setMergeCommit(event.currentTarget.value)}
+                          value={mergeCommit}
+                        />
+                      </label>
+                      <label className="phase-edit-field phase-notes-field">
+                        <span>Merge block notes</span>
+                        <textarea
+                          aria-label="Merge block notes"
+                          disabled={pendingAction === 'merge'}
+                          onChange={(event) => setMergeNotes(event.currentTarget.value)}
+                          value={mergeNotes}
+                        />
+                      </label>
+                      {mergeError === null ? null : (
+                        <div className="phase-edit-error" role="alert">
+                          {mergeError}
+                        </div>
+                      )}
+                      <div className="phase-edit-actions">
+                        <button
+                          className="primary-button"
+                          disabled={pendingAction === 'merge'}
+                          onClick={() => void handleRecordMerge('merged')}
+                          type="button"
+                        >
+                          <Check aria-hidden="true" size={15} />
+                          <span>Record merge</span>
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={pendingAction === 'merge'}
+                          onClick={() => void handleRecordMerge('blocked')}
+                          type="button"
+                        >
+                          <X aria-hidden="true" size={15} />
+                          <span>Block merge</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {actionError === null ? null : (
         <div
           className="phase-edit-error phase-action-error"
@@ -2045,6 +2252,18 @@ function isExecutableWorkspacePhase(phase: FlowPhaseSummary): boolean {
 
 function isPrCreationPhase(phase: FlowPhaseSummary): boolean {
   return phase.id === 'pr-creation'
+}
+
+function isHumanReviewPhase(phase: FlowPhaseSummary): boolean {
+  return phase.id === 'human-review'
+}
+
+function isHumanReviewPhaseActionable(phase: FlowPhaseSummary): boolean {
+  return phase.status === 'ready' ||
+    phase.status === 'running' ||
+    phase.status === 'needs_attention' ||
+    phase.status === 'blocked' ||
+    phase.status === 'completed'
 }
 
 function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
@@ -2101,12 +2320,73 @@ function createRecordPullRequestRequest(
   }
 }
 
+function createRecordHumanReviewRequest(
+  flowId: string,
+  outcome: FlowHumanReviewOutcome,
+  notes: string
+): { ok: true; request: RecordFlowHumanReviewRequest } | { ok: false; message: string } {
+  const trimmedNotes = notes.trim()
+  if ((outcome === 'changes_requested' || outcome === 'blocked') && trimmedNotes === '') {
+    return { ok: false, message: 'Review notes are required.' }
+  }
+
+  return {
+    ok: true,
+    request: {
+      flowId,
+      outcome,
+      notes: trimmedNotes === '' ? undefined : trimmedNotes
+    }
+  }
+}
+
+function createRecordMergeRequest(
+  flowId: string,
+  status: 'merged' | 'blocked',
+  draft: { commit: string; notes: string }
+): { ok: true; request: RecordFlowMergeRequest } | { ok: false; message: string } {
+  if (status === 'blocked') {
+    const notes = draft.notes.trim()
+    if (notes === '') {
+      return { ok: false, message: 'Merge block notes are required.' }
+    }
+    return {
+      ok: true,
+      request: {
+        flowId,
+        status: 'blocked',
+        notes
+      }
+    }
+  }
+
+  const commit = draft.commit.trim().toLowerCase()
+  if (!/^[0-9a-f]{40}$/.test(commit)) {
+    return { ok: false, message: 'Merge commit must be a full 40-character hex object id.' }
+  }
+  return {
+    ok: true,
+    request: {
+      flowId,
+      status: 'merged',
+      commit
+    }
+  }
+}
+
 function isHttpsUrl(value: string): boolean {
   try {
     return new URL(value).protocol === 'https:'
   } catch {
     return false
   }
+}
+
+function formatHumanReviewOutcome(outcome: FlowHumanReviewOutcome): string {
+  if (outcome === 'changes_requested') {
+    return 'changes requested'
+  }
+  return outcome
 }
 
 type FlowPlanViewState =

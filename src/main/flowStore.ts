@@ -1,7 +1,12 @@
 import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { validateFlowPullRequestMetadata, type PersistedFlowPhase } from '@shared/artifacts'
+import {
+  normalizeFlowHumanReviewMetadata,
+  normalizeFlowMergeMetadata,
+  validateFlowPullRequestMetadata,
+  type PersistedFlowPhase
+} from '@shared/artifacts'
 import type {
   FlowFailureSummary,
   FlowListRow,
@@ -214,7 +219,11 @@ async function mapFlowMetadata(
 
   const prResult = validateFlowPullRequestMetadata(metadata.pr)
   const pr = prResult.ok ? prResult.pr : undefined
-  const shouldGatePrDependentPhases = !prResult.ok && hasOwnProperty(metadata, 'pr')
+  const shouldGatePrDependentPhases = pr === undefined
+  const humanReview = pr === undefined
+    ? undefined
+    : normalizeFlowHumanReviewMetadata(metadata.human_review)
+  const merge = normalizeFlowMergeMetadata(metadata.merge)
 
   return {
     id: directoryFlowId,
@@ -232,6 +241,8 @@ async function mapFlowMetadata(
     planId: optionalString(metadata.plan_id),
     planPath: optionalString(metadata.plan_path),
     pr,
+    humanReview,
+    merge,
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
     phases: mapPhases(metadata.phases, shouldGatePrDependentPhases)
@@ -513,10 +524,15 @@ function applyMetadataUpdate(
 ): RawFlowMetadata {
   const prResult = validateFlowPullRequestMetadata(metadata.pr)
   const pr = prResult.ok ? prResult.pr : undefined
-  const shouldGatePrDependentPhases = !prResult.ok && hasOwnProperty(metadata, 'pr')
+  const shouldGatePrDependentPhases = pr === undefined && (
+    hasOwnProperty(metadata, 'pr') ||
+    hasOwnProperty(metadata, 'human_review')
+  )
   return withoutUndefined({
     ...metadata,
     pr,
+    human_review: pr === undefined ? undefined : normalizeFlowHumanReviewMetadata(metadata.human_review),
+    merge: normalizeFlowMergeMetadata(metadata.merge),
     phases: shouldGatePrDependentPhases
       ? gatePrDependentRawPhases(metadata.phases)
       : metadata.phases,

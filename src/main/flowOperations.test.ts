@@ -847,6 +847,192 @@ describe('Flow operations', () => {
     })
   })
 
+  it('records Human Review only after valid PR metadata and projects outcome onto the phase graph', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'human-review-gate',
+      title: 'Human Review gate',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'human-review-gate', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'pr-creation',
+          title: 'PR Creation',
+          kind: 'pr_creation',
+          status: 'ready',
+          order: 6
+        },
+        {
+          phase_id: 'human-review',
+          title: 'Human Review',
+          kind: 'human_review',
+          status: 'pending',
+          order: 7
+        }
+      ]
+    }))
+
+    await expect(flows.recordHumanReview({
+      flowId: 'human-review-gate',
+      outcome: 'approved',
+      now: '2026-06-15T12:01:00.000Z'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Human Review requires valid pull request metadata.'
+    })
+
+    await flows.completePrCreation({
+      flowId: 'human-review-gate',
+      pr: {
+        provider: 'github',
+        number: 13,
+        url: 'https://github.com/acme/grindstone/pull/13',
+        head: 'flow/human-review',
+        base: 'main',
+        status: 'open'
+      },
+      now: '2026-06-15T12:02:00.000Z'
+    })
+
+    await expect(flows.recordHumanReview({
+      flowId: 'human-review-gate',
+      outcome: 'approved',
+      notes: 'Ship it.',
+      now: '2026-06-15T12:03:00.000Z'
+    })).resolves.toMatchObject({
+      status: 'active',
+      human_review: {
+        outcome: 'approved',
+        reviewed_at: '2026-06-15T12:03:00.000Z',
+        notes: 'Ship it.'
+      },
+      merge: { status: 'pending' },
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'human-review',
+          status: 'completed',
+          outcome: 'approved',
+          notes: 'Ship it.'
+        })
+      ])
+    })
+  })
+
+  it('requires notes for Human Review changes requested and blocked outcomes', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await createPrReadyFlow(flows, root, 'human-review-notes')
+
+    await expect(flows.recordHumanReview({
+      flowId: 'human-review-notes',
+      outcome: 'changes_requested'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Human Review outcome changes_requested requires notes.'
+    })
+    await expect(flows.recordHumanReview({
+      flowId: 'human-review-notes',
+      outcome: 'blocked',
+      notes: '   '
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Human Review outcome blocked requires notes.'
+    })
+
+    await expect(flows.recordHumanReview({
+      flowId: 'human-review-notes',
+      outcome: 'changes_requested',
+      notes: 'Update the tests.',
+      now: '2026-06-15T12:03:00.000Z'
+    })).resolves.toMatchObject({
+      status: 'needs_attention',
+      human_review: {
+        outcome: 'changes_requested',
+        reviewed_at: '2026-06-15T12:03:00.000Z',
+        notes: 'Update the tests.'
+      },
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'human-review',
+          status: 'needs_attention',
+          outcome: 'changes_requested',
+          notes: 'Update the tests.'
+        })
+      ])
+    })
+  })
+
+  it('records merge metadata only after Human Review approval and derives terminal status', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await createPrReadyFlow(flows, root, 'merge-after-review')
+
+    await expect(flows.recordMerge({
+      flowId: 'merge-after-review',
+      status: 'merged',
+      commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      now: '2026-06-15T12:03:00.000Z'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Merge metadata can only be recorded after Human Review is approved.'
+    })
+
+    await flows.recordHumanReview({
+      flowId: 'merge-after-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:03:00.000Z'
+    })
+
+    await expect(flows.recordMerge({
+      flowId: 'merge-after-review',
+      status: 'blocked',
+      notes: 'Waiting on branch protection.',
+      now: '2026-06-15T12:04:00.000Z'
+    })).resolves.toMatchObject({
+      status: 'blocked',
+      merge: {
+        status: 'blocked',
+        notes: 'Waiting on branch protection.',
+        updated_at: '2026-06-15T12:04:00.000Z'
+      }
+    })
+
+    await expect(flows.recordMerge({
+      flowId: 'merge-after-review',
+      status: 'merged',
+      commit: 'ABCDEF1234567890ABCDEF1234567890ABCDEF12',
+      now: '2026-06-15T12:05:00.000Z'
+    })).resolves.toMatchObject({
+      status: 'merged',
+      merge: {
+        status: 'merged',
+        commit: 'abcdef1234567890abcdef1234567890abcdef12',
+        merged_at: '2026-06-15T12:05:00.000Z'
+      }
+    })
+
+    await expect(flows.recordHumanReview({
+      flowId: 'merge-after-review',
+      outcome: 'blocked',
+      notes: 'Too late.'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Merged Flows cannot be changed by Human Review or merge metadata.'
+    })
+    await expect(flows.recordMerge({
+      flowId: 'merge-after-review',
+      status: 'blocked',
+      notes: 'Too late.'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Merged Flows cannot be changed by Human Review or merge metadata.'
+    })
+  })
+
   it('does not promote review loop from settled children before Implementation starts', async () => {
     const root = await makeTempDir()
     const plans = createPlanStore({ artifactRoot: root })
@@ -1215,4 +1401,48 @@ async function rewriteFlow(
 
 function isRawPhase(value: unknown): value is { phase_id?: unknown } {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+async function createPrReadyFlow(
+  flows: ReturnType<typeof createFlowOperations>,
+  root: string,
+  flowId: string
+): Promise<void> {
+  await flows.createFlow({
+    id: flowId,
+    title: flowId,
+    repoPath: '/repo',
+    now: '2026-06-15T12:00:00.000Z'
+  })
+  await rewriteFlow(root, flowId, (flow) => ({
+    ...flow,
+    phases: [
+      {
+        phase_id: 'pr-creation',
+        title: 'PR Creation',
+        kind: 'pr_creation',
+        status: 'ready',
+        order: 6
+      },
+      {
+        phase_id: 'human-review',
+        title: 'Human Review',
+        kind: 'human_review',
+        status: 'pending',
+        order: 7
+      }
+    ]
+  }))
+  await flows.completePrCreation({
+    flowId,
+    pr: {
+      provider: 'github',
+      number: 13,
+      url: 'https://github.com/acme/grindstone/pull/13',
+      head: 'flow/human-review',
+      base: 'main',
+      status: 'open'
+    },
+    now: '2026-06-15T12:02:00.000Z'
+  })
 }

@@ -314,6 +314,16 @@ describe('Flow artifact store', () => {
           head: 'flow/with-pr',
           base: 'main',
           status: 'open'
+        },
+        human_review: {
+          outcome: 'approved',
+          reviewed_at: '2026-06-10T10:02:00.000Z',
+          notes: 'Approved by reviewer.'
+        },
+        merge: {
+          status: 'blocked',
+          notes: 'Waiting on required checks.',
+          updated_at: '2026-06-10T10:03:00.000Z'
         }
       })
     )
@@ -360,14 +370,11 @@ describe('Flow artifact store', () => {
         phases: expect.arrayContaining([
           expect.objectContaining({
             id: 'pr-creation',
-            status: 'completed',
-            outcome: 'pr_recorded',
-            summary: 'Opened PR before metadata existed.'
+            status: 'ready'
           }),
           expect.objectContaining({
             id: 'human-review',
-            status: 'completed',
-            outcome: 'approved'
+            status: 'pending'
           })
         ])
       }),
@@ -394,6 +401,16 @@ describe('Flow artifact store', () => {
           head: 'flow/with-pr',
           base: 'main',
           status: 'open'
+        },
+        humanReview: {
+          outcome: 'approved',
+          reviewed_at: '2026-06-10T10:02:00.000Z',
+          notes: 'Approved by reviewer.'
+        },
+        merge: {
+          status: 'blocked',
+          notes: 'Waiting on required checks.',
+          updated_at: '2026-06-10T10:03:00.000Z'
         }
       })
     ])

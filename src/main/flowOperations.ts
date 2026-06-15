@@ -1,7 +1,11 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  normalizeFlowMergeMetadata,
+  validateFlowHumanReviewMetadata,
+  validateFlowMergeMetadata,
   validateFlowPullRequestMetadata,
+  type FlowHumanReviewOutcome,
   type FlowPullRequestMetadata,
   type PersistedFlowMetadata,
   type PersistedFlowPhase
@@ -51,6 +55,17 @@ export type CompletePrCreationInput = {
   now?: string
 }
 
+export type RecordHumanReviewInput = {
+  flowId: string
+  outcome: FlowHumanReviewOutcome
+  notes?: string
+  now?: string
+}
+
+export type RecordMergeInput =
+  | { flowId: string; status: 'merged'; commit: string; now?: string }
+  | { flowId: string; status: 'blocked'; notes: string; now?: string }
+
 export type FlowOperations = {
   createFlow: (input: CreateFlowInput) => Promise<PersistedFlowMetadata>
   listFlows: (filter?: { repoPath?: string }) => Promise<PersistedFlowMetadata[]>
@@ -58,6 +73,8 @@ export type FlowOperations = {
   setPhase: (input: PhaseSetInput) => Promise<PersistedFlowMetadata>
   completePhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   completePrCreation: (input: CompletePrCreationInput) => Promise<PersistedFlowMetadata>
+  recordHumanReview: (input: RecordHumanReviewInput) => Promise<PersistedFlowMetadata>
+  recordMerge: (input: RecordMergeInput) => Promise<PersistedFlowMetadata>
   blockPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   needsAttentionPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   restartPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
@@ -359,6 +376,82 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       )
     },
 
+    async recordHumanReview(input) {
+      const flow = await readFlow(input.flowId)
+      const now = input.now ?? new Date().toISOString()
+      assertMutableBeforeMerge(flow)
+      const prResult = validateFlowPullRequestMetadata(flow.pr)
+      if (!prResult.ok) {
+        throw new ArtifactStoreError('validation_error', 'Human Review requires valid pull request metadata.')
+      }
+      const reviewResult = validateFlowHumanReviewMetadata({
+        outcome: input.outcome,
+        reviewed_at: now,
+        notes: input.notes
+      })
+      if (!reviewResult.ok) {
+        throw new ArtifactStoreError('validation_error', reviewResult.message)
+      }
+      const phases = [...(flow.phases ?? [])]
+      const index = phases.findIndex((phase) => phase.phase_id === 'human-review')
+      const existing = index === -1 ? undefined : phases[index]
+      if (existing === undefined) {
+        throw new ArtifactStoreError('validation_error', 'Unknown phase: human-review', 'human-review')
+      }
+      const phaseStatus = humanReviewPhaseStatus(input.outcome)
+      const phase = withoutUndefined({
+        ...existing,
+        status: phaseStatus,
+        outcome: input.outcome,
+        notes: reviewResult.humanReview.notes,
+        updated_at: now
+      })
+      phases[index] = phase
+
+      return writeFlow(withoutUndefined({
+        ...flow,
+        status: humanReviewFlowStatus(input.outcome),
+        human_review: reviewResult.humanReview,
+        merge: normalizeFlowMergeMetadata(flow.merge),
+        phases: sortPersistedPhases(phases),
+        updated_at: now
+      }))
+    },
+
+    async recordMerge(input) {
+      const flow = await readFlow(input.flowId)
+      const now = input.now ?? new Date().toISOString()
+      assertMutableBeforeMerge(flow)
+      if (flow.human_review?.outcome !== 'approved') {
+        throw new ArtifactStoreError(
+          'validation_error',
+          'Merge metadata can only be recorded after Human Review is approved.'
+        )
+      }
+
+      const mergeResult = validateFlowMergeMetadata(input.status === 'merged'
+        ? {
+            status: 'merged',
+            commit: input.commit,
+            merged_at: now
+          }
+        : {
+            status: 'blocked',
+            notes: input.notes,
+            updated_at: now
+          })
+      if (!mergeResult.ok) {
+        throw new ArtifactStoreError('validation_error', mergeResult.message)
+      }
+
+      return writeFlow({
+        ...flow,
+        status: mergeResult.merge.status === 'merged' ? 'merged' : 'blocked',
+        merge: mergeResult.merge,
+        updated_at: now
+      })
+    },
+
     async blockPhase(input) {
       await assertPhaseExists(readFlow, input.flowId, input.phaseId)
       if (input.notes === undefined || input.notes.trim() === '') {
@@ -591,10 +684,40 @@ function normalizePersistedFlowPrState(flow: PersistedFlowMetadata): PersistedFl
   return withoutUndefined({
     ...flow,
     pr,
+    merge: normalizeFlowMergeMetadata(flow.merge),
     phases: shouldGatePrDependentPhases && flow.phases !== undefined
       ? gatePrDependentPersistedPhases(flow.phases)
       : flow.phases
   })
+}
+
+function assertMutableBeforeMerge(flow: PersistedFlowMetadata): void {
+  if (normalizeFlowMergeMetadata(flow.merge).status === 'merged') {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'Merged Flows cannot be changed by Human Review or merge metadata.'
+    )
+  }
+}
+
+function humanReviewPhaseStatus(outcome: FlowHumanReviewOutcome): PersistedFlowPhase['status'] {
+  if (outcome === 'approved') {
+    return 'completed'
+  }
+  if (outcome === 'changes_requested') {
+    return 'needs_attention'
+  }
+  return 'blocked'
+}
+
+function humanReviewFlowStatus(outcome: FlowHumanReviewOutcome): string {
+  if (outcome === 'changes_requested') {
+    return 'needs_attention'
+  }
+  if (outcome === 'blocked') {
+    return 'blocked'
+  }
+  return 'active'
 }
 
 function hasOwnProperty(value: object, key: string): boolean {

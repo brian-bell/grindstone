@@ -509,6 +509,38 @@ textarea {
   grid-template-columns: repeat(2, minmax(120px, 1fr));
 }
 
+.phase-human-review-panel,
+.phase-merge-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #c8d0cd;
+  border-radius: 6px;
+  background: #fffdf8;
+}
+
+.phase-merge-panel {
+  grid-column: 1 / -1;
+  background: #f8fbf9;
+}
+
+.phase-review-summary {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  color: #3f4946;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.phase-review-summary > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .phase-edit-field {
   display: grid;
   gap: 4px;

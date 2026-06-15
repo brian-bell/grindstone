@@ -12,6 +12,8 @@ import type {
   CompleteFlowPhaseRequest,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  RecordFlowHumanReviewRequest,
+  RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
   RetryRepositoryRemoteRequest,
   SkipFlowPhaseRequest,
@@ -29,6 +31,8 @@ export const ipcChannels = {
     skipFlowPhase: 'workspace:skipFlowPhase',
     completeFlowPhase: 'workspace:completeFlowPhase',
     recordFlowPullRequest: 'workspace:recordFlowPullRequest',
+    recordFlowHumanReview: 'workspace:recordFlowHumanReview',
+    recordFlowMerge: 'workspace:recordFlowMerge',
     createRepository: 'workspace:createRepository',
     retryRepositoryRemote: 'workspace:retryRepositoryRemote'
   },
@@ -56,6 +60,8 @@ export type IpcRequestMap = {
   'workspace:skipFlowPhase': SkipFlowPhaseRequest
   'workspace:completeFlowPhase': CompleteFlowPhaseRequest
   'workspace:recordFlowPullRequest': RecordFlowPullRequestRequest
+  'workspace:recordFlowHumanReview': RecordFlowHumanReviewRequest
+  'workspace:recordFlowMerge': RecordFlowMergeRequest
   'workspace:createRepository': CreateRepositoryRequest
   'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
   'config:getEditableConfig': undefined
@@ -72,6 +78,8 @@ export type IpcResponseMap = {
   'workspace:skipFlowPhase': InitialWorkspaceState
   'workspace:completeFlowPhase': InitialWorkspaceState
   'workspace:recordFlowPullRequest': InitialWorkspaceState
+  'workspace:recordFlowHumanReview': InitialWorkspaceState
+  'workspace:recordFlowMerge': InitialWorkspaceState
   'workspace:createRepository': InitialWorkspaceState
   'workspace:retryRepositoryRemote': InitialWorkspaceState
   'config:getEditableConfig': EditableConfigState
