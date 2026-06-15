@@ -615,7 +615,9 @@ describe('workspace main handlers', () => {
     )
     const configPath = join(root, 'grindstone.toml')
     await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
-    const runPhase = vi.fn<FlowPhaseRunner>().mockRejectedValue(new Error('agent launch failed'))
+    const runPhase = vi.fn<FlowPhaseRunner>()
+      .mockRejectedValueOnce(new Error('agent launch failed'))
+      .mockResolvedValueOnce(undefined)
 
     const state = await loadInitialWorkspaceState({ configPath })
     const repositoryId = state.repository.repositories[0]?.id ?? ''
@@ -636,6 +638,29 @@ describe('workspace main handlers', () => {
                 status: 'needs_attention',
                 notes: 'Phase launch failed: agent launch failed',
                 launchIds: [expect.stringMatching(/^phase-launch-/)]
+              })
+            ])
+          })
+        ]
+      }
+    })
+    await expect(launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-failure',
+      phaseId: 'implementation'
+    }, { runPhase })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          expect.objectContaining({
+            id: 'flow-launch-failure',
+            phases: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'implementation',
+                status: 'running',
+                launchIds: [
+                  expect.stringMatching(/^phase-launch-/),
+                  expect.stringMatching(/^phase-launch-/)
+                ]
               })
             ])
           })

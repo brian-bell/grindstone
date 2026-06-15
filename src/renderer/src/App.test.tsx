@@ -629,6 +629,16 @@ describe('App shell', () => {
           kind: 'implementation_child',
           generated: true,
           editable: true
+        },
+        {
+          id: 'implementation-repair-api',
+          title: 'Repair API',
+          status: 'needs_attention',
+          order: 2,
+          parentPhaseId: 'implementation',
+          kind: 'implementation_child',
+          generated: true,
+          editable: true
         }
       ]
     }
@@ -717,6 +727,8 @@ describe('App shell', () => {
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
     await user.click(within(flowPane).getByRole('button', { name: /launchable flow details/i }))
+    expect(within(flowPane).getByRole('button', { name: /launch repair api/i }))
+      .toBeInTheDocument()
     await user.click(within(flowPane).getByRole('button', { name: /launch implementation/i }))
 
     expect(launchFlowPhase).toHaveBeenCalledWith({

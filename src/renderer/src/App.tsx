@@ -1603,7 +1603,8 @@ function FlowPhaseRow({
     phase.editable === true &&
     (phase.status === 'pending' || phase.status === 'ready')
   const isImplementationPhase = phase.id === 'implementation' || isImplementationChildPhase(phase)
-  const canLaunch = isImplementationPhase && phase.status === 'ready'
+  const canLaunch = isImplementationPhase &&
+    (phase.status === 'ready' || phase.status === 'needs_attention')
   const canComplete = isImplementationPhase &&
     phase.status === 'running' &&
     (phase.id !== 'implementation' || implementationChildrenCanComplete(flow.phases ?? []))

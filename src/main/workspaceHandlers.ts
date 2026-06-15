@@ -420,7 +420,7 @@ export async function launchFlowPhaseInWorkspace(
   if (!isLaunchableImplementationPhase(phase)) {
     throw new Error(`Phase cannot be launched from this workspace: ${phase.id}`)
   }
-  if (phase.status !== 'ready') {
+  if (phase.status !== 'ready' && phase.status !== 'needs_attention') {
     throw new Error(`Phase is not ready to launch: ${phase.id}`)
   }
 
@@ -438,6 +438,7 @@ export async function launchFlowPhaseInWorkspace(
     flowId: request.flowId,
     phaseId: request.phaseId,
     status: 'running',
+    notes: phase.status === 'needs_attention' ? 'Retrying phase launch.' : undefined,
     launchId: launchContext.launchId
   })
 
