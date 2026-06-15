@@ -99,7 +99,11 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
 
   async function readFlow(flowId: string): Promise<PersistedFlowMetadata> {
     assertSafeArtifactId('Flow', flowId)
-    return readJsonArtifact(join(flowsRoot, flowId, 'meta.json'), flowId, isPersistedFlowMetadata)
+    const flow = await readJsonArtifact(join(flowsRoot, flowId, 'meta.json'), flowId, isPersistedFlowMetadata)
+    if (flow.flow_id !== flowId) {
+      throw new ArtifactStoreError('corrupt_artifact', `Flow id mismatch: ${flowId}`, flowId)
+    }
+    return flow
   }
 
   return {

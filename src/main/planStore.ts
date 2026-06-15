@@ -84,6 +84,9 @@ export function createPlanStore(options: { artifactRoot: string }): PlanStore {
         planId,
         isSavedPlanMetadata
       )
+      if (metadata.plan_id !== planId) {
+        throw new ArtifactStoreError('corrupt_artifact', `Plan id mismatch: ${planId}`, planId)
+      }
       const planPath = join(planDir, 'plan.md')
       const body = await readTextArtifact(planPath, planId)
       return {

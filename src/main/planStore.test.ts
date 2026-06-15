@@ -130,6 +130,51 @@ describe('plan artifact store and Flow linkage', () => {
     })
   })
 
+  it('rejects mismatched artifact ids before returning Flow or plan records', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'flow-one',
+      title: 'Flow One',
+      repoPath: '/repo',
+      now: '2026-06-15T10:00:00.000Z'
+    })
+    await writeFile(join(root, 'flows', 'flow-one', 'meta.json'), JSON.stringify({
+      schema_version: 1,
+      flow_id: 'flow-two',
+      title: 'Wrong Flow',
+      status: 'active',
+      repo_path: '/repo',
+      created_at: '2026-06-15T10:00:00.000Z',
+      updated_at: '2026-06-15T10:00:00.000Z'
+    }))
+    await plans.savePlan({
+      planId: 'plan-one',
+      title: 'Plan One',
+      body: 'body',
+      now: '2026-06-15T10:01:00.000Z'
+    })
+    await writeFile(join(root, 'plans', 'plan-one', 'meta.json'), JSON.stringify({
+      schema_version: 1,
+      plan_id: 'plan-two',
+      title: 'Wrong Plan',
+      status: 'approved',
+      created_at: '2026-06-15T10:01:00.000Z',
+      updated_at: '2026-06-15T10:01:00.000Z'
+    }))
+
+    await expect(flows.readFlow('flow-one')).rejects.toThrow(/Flow id mismatch/)
+    await expect(flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'running',
+      order: 1
+    })).rejects.toThrow(/Flow id mismatch/)
+    await expect(plans.readPlan('plan-one')).rejects.toThrow(/Plan id mismatch/)
+  })
+
   it('rejects duplicate Flow ids without overwriting the existing artifact', async () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
