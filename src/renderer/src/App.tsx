@@ -30,6 +30,7 @@ import type {
   EditableConfigState
 } from '@shared/config'
 import type {
+  FlowPullRequestStatus,
   LinkedFlowPlanResponse
 } from '@shared/artifacts'
 import type {
@@ -40,6 +41,7 @@ import type {
   FlowPhaseSummary,
   GitHubVisibility,
   InitialWorkspaceState,
+  RecordFlowPullRequestRequest,
   RepositoryCreateState,
   RepositoryRemoteRetryRecord,
   RepositoryPaneState,
@@ -79,6 +81,14 @@ type BootstrapHookDraft = {
   command: string
   cwd: string
   env: string
+}
+
+type PullRequestDraft = {
+  number: string
+  url: string
+  head: string
+  base: string
+  status: FlowPullRequestStatus
 }
 
 export function App(): ReactElement {
@@ -1599,17 +1609,21 @@ function FlowPhaseRow({
   const [isSkipOpen, setIsSkipOpen] = useState(false)
   const [skipNotes, setSkipNotes] = useState('')
   const [skipError, setSkipError] = useState<string | null>(null)
+  const [prDraft, setPrDraft] = useState<PullRequestDraft>(() => createPullRequestDraft(flow))
+  const [prError, setPrError] = useState<string | null>(null)
   const canEdit = phase.generated === true &&
     phase.editable === true &&
     (phase.status === 'pending' || phase.status === 'ready')
-  const isImplementationPhase = phase.id === 'implementation' || isImplementationChildPhase(phase)
-  const canLaunch = isImplementationPhase &&
+  const isExecutablePhase = isExecutableWorkspacePhase(phase)
+  const canLaunch = isExecutablePhase &&
     (phase.status === 'ready' || phase.status === 'needs_attention')
-  const canComplete = isImplementationPhase &&
+  const canComplete = isExecutablePhase &&
     phase.status === 'running' &&
     (phase.id !== 'implementation' || implementationChildrenCanComplete(flow.phases ?? []))
   const canSkip = isImplementationChildPhase(phase) &&
     (phase.status === 'pending' || phase.status === 'ready' || phase.status === 'running')
+  const canRecordPr = isPrCreationPhase(phase) &&
+    (phase.status === 'ready' || phase.status === 'running')
 
   useEffect(() => {
     if (!isEditing) {
@@ -1623,9 +1637,14 @@ function FlowPhaseRow({
   useEffect(() => {
     setActionError(null)
     setSkipError(null)
+    setPrError(null)
     setIsSkipOpen(false)
     setSkipNotes('')
   }, [phase.id, phase.status])
+
+  useEffect(() => {
+    setPrDraft(createPullRequestDraft(flow))
+  }, [flow])
 
   async function handleSave(): Promise<void> {
     const parsedOrder = Number(order)
@@ -1710,6 +1729,26 @@ function FlowPhaseRow({
       setSkipNotes('')
     } catch (skipActionError: unknown) {
       setActionError(getErrorMessage(skipActionError))
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function handleRecordPullRequest(): Promise<void> {
+    const request = createRecordPullRequestRequest(flow.id, prDraft)
+    if (!request.ok) {
+      setPrError(request.message)
+      return
+    }
+
+    setPendingAction('complete')
+    setPrError(null)
+    setActionError(null)
+    try {
+      const workspace = await window.grindstone.workspace.recordFlowPullRequest(request.request)
+      onWorkspaceUpdate(workspace)
+    } catch (recordError: unknown) {
+      setActionError(getErrorMessage(recordError))
     } finally {
       setPendingAction(null)
     }
@@ -1895,6 +1934,87 @@ function FlowPhaseRow({
           </div>
         </form>
       ) : null}
+      {canRecordPr ? (
+        <form
+          aria-label={`Record PR for ${flow.title}`}
+          className="phase-pr-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handleRecordPullRequest()
+          }}
+          style={{ marginLeft: `${level * 18}px` }}
+        >
+          <label className="phase-edit-field">
+            <span>PR number</span>
+            <input
+              aria-label="PR number"
+              disabled={pendingAction === 'complete'}
+              onChange={(event) => setPrDraft({ ...prDraft, number: event.currentTarget.value })}
+              value={prDraft.number}
+            />
+          </label>
+          <label className="phase-edit-field">
+            <span>PR URL</span>
+            <input
+              aria-label="PR URL"
+              disabled={pendingAction === 'complete'}
+              onChange={(event) => setPrDraft({ ...prDraft, url: event.currentTarget.value })}
+              value={prDraft.url}
+            />
+          </label>
+          <label className="phase-edit-field">
+            <span>Head branch</span>
+            <input
+              aria-label="Head branch"
+              disabled={pendingAction === 'complete'}
+              onChange={(event) => setPrDraft({ ...prDraft, head: event.currentTarget.value })}
+              value={prDraft.head}
+            />
+          </label>
+          <label className="phase-edit-field">
+            <span>Base branch</span>
+            <input
+              aria-label="Base branch"
+              disabled={pendingAction === 'complete'}
+              onChange={(event) => setPrDraft({ ...prDraft, base: event.currentTarget.value })}
+              value={prDraft.base}
+            />
+          </label>
+          <label className="phase-edit-field">
+            <span>Status</span>
+            <select
+              aria-label="Status"
+              disabled={pendingAction === 'complete'}
+              onChange={(event) =>
+                setPrDraft({
+                  ...prDraft,
+                  status: event.currentTarget.value as FlowPullRequestStatus
+                })
+              }
+              value={prDraft.status}
+            >
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+              <option value="merged">Merged</option>
+            </select>
+          </label>
+          {prError === null ? null : (
+            <div className="phase-edit-error" role="alert">
+              {prError}
+            </div>
+          )}
+          <div className="phase-edit-actions">
+            <button
+              className="primary-button"
+              disabled={pendingAction === 'complete'}
+              type="submit"
+            >
+              <Check aria-hidden="true" size={15} />
+              <span>{pendingAction === 'complete' ? 'Recording' : 'Record PR'}</span>
+            </button>
+          </div>
+        </form>
+      ) : null}
       {actionError === null ? null : (
         <div
           className="phase-edit-error phase-action-error"
@@ -1917,9 +2037,76 @@ function implementationChildrenCanComplete(phases: FlowPhaseSummary[]): boolean 
     )
 }
 
+function isExecutableWorkspacePhase(phase: FlowPhaseSummary): boolean {
+  return phase.id === 'implementation' ||
+    isImplementationChildPhase(phase) ||
+    phase.kind === 'review_loop'
+}
+
+function isPrCreationPhase(phase: FlowPhaseSummary): boolean {
+  return phase.id === 'pr-creation'
+}
+
 function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
   return phase.parentPhaseId === 'implementation' &&
     (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
+}
+
+function createPullRequestDraft(flow: FlowListRow): PullRequestDraft {
+  return {
+    number: flow.pr?.number === undefined ? '' : String(flow.pr.number),
+    url: flow.pr?.url ?? '',
+    head: flow.pr?.head ?? flow.branch ?? '',
+    base: flow.pr?.base ?? flow.baseRef ?? 'main',
+    status: flow.pr?.status ?? 'open'
+  }
+}
+
+function createRecordPullRequestRequest(
+  flowId: string,
+  draft: PullRequestDraft
+): { ok: true; request: RecordFlowPullRequestRequest } | { ok: false; message: string } {
+  const number = Number(draft.number)
+  const url = draft.url.trim()
+  const head = draft.head.trim()
+  const base = draft.base.trim()
+
+  if (draft.number.trim() === '' || !Number.isInteger(number) || number <= 0) {
+    return { ok: false, message: 'PR number must be a positive integer.' }
+  }
+  if (!isHttpsUrl(url)) {
+    return { ok: false, message: 'PR URL must be a valid HTTPS URL.' }
+  }
+  if (head === '') {
+    return { ok: false, message: 'Head branch is required.' }
+  }
+  if (base === '') {
+    return { ok: false, message: 'Base branch is required.' }
+  }
+
+  return {
+    ok: true,
+    request: {
+      flowId,
+      pr: {
+        provider: 'github',
+        number,
+        url,
+        head,
+        base,
+        status: draft.status
+      },
+      summary: `Recorded GitHub PR #${number}.`
+    }
+  }
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 type FlowPlanViewState =
@@ -1987,6 +2174,7 @@ function formatFlowTooltip(flow: FlowListRow): string {
     flow.commit === undefined ? null : `Commit: ${flow.commit}`,
     flow.planId === undefined ? null : `Plan: ${flow.planId}`,
     flow.planPath === undefined ? null : `Plan path: ${flow.planPath}`,
+    flow.pr === undefined ? null : `PR: github#${flow.pr.number} - ${flow.pr.status} - ${flow.pr.url}`,
     flow.failure === undefined ? null : `Failure: ${flow.failure.stage} - ${flow.failure.message}`,
     flow.failure?.command === undefined ? null : `Command: ${flow.failure.command}`,
     flow.failure?.output === undefined ? null : `Output: ${flow.failure.output}`,

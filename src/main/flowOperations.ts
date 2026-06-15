@@ -1,6 +1,11 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { PersistedFlowMetadata, PersistedFlowPhase } from '@shared/artifacts'
+import {
+  validateFlowPullRequestMetadata,
+  type FlowPullRequestMetadata,
+  type PersistedFlowMetadata,
+  type PersistedFlowPhase
+} from '@shared/artifacts'
 import { createDefaultFlowPhases } from '@shared/flowGraph'
 import {
   ArtifactStoreError,
@@ -39,12 +44,20 @@ export type PhaseSetInput = {
   now?: string
 }
 
+export type CompletePrCreationInput = {
+  flowId: string
+  pr: FlowPullRequestMetadata
+  summary?: string
+  now?: string
+}
+
 export type FlowOperations = {
   createFlow: (input: CreateFlowInput) => Promise<PersistedFlowMetadata>
   listFlows: (filter?: { repoPath?: string }) => Promise<PersistedFlowMetadata[]>
   readFlow: (flowId: string) => Promise<PersistedFlowMetadata>
   setPhase: (input: PhaseSetInput) => Promise<PersistedFlowMetadata>
   completePhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
+  completePrCreation: (input: CompletePrCreationInput) => Promise<PersistedFlowMetadata>
   blockPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   needsAttentionPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   restartPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
@@ -121,7 +134,151 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
     if (flow.flow_id !== flowId) {
       throw new ArtifactStoreError('corrupt_artifact', `Flow id mismatch: ${flowId}`, flowId)
     }
-    return flow
+    return normalizePersistedFlowPrState(flow)
+  }
+
+  async function setPhaseInternal(
+    input: PhaseSetInput,
+    options: { pr?: FlowPullRequestMetadata } = {}
+  ): Promise<PersistedFlowMetadata> {
+    assertSafeArtifactId('phase', input.phaseId)
+    const flow = await readFlow(input.flowId)
+    const now = input.now ?? new Date().toISOString()
+    const phases = [...(flow.phases ?? [])]
+    const index = phases.findIndex((phase) => phase.phase_id === input.phaseId)
+    const existing = index === -1 ? undefined : phases[index]
+
+    if (existing === undefined && (
+      input.title === undefined ||
+      input.status === undefined ||
+      input.order === undefined
+    )) {
+      throw new ArtifactStoreError(
+        'validation_error',
+        `Unknown phase requires --title, --status, and --order: ${input.phaseId}`,
+        input.phaseId
+      )
+    }
+
+    const nextStatus = input.status ?? existing?.status
+    if (typeof nextStatus !== 'string' || !PERSISTED_PHASE_STATUSES.has(nextStatus)) {
+      throw new ArtifactStoreError('validation_error', `Invalid phase status: ${String(nextStatus)}`)
+    }
+    if (input.launchId !== undefined && input.status === 'running' && existing?.status === 'running') {
+      throw new ArtifactStoreError(
+        'validation_error',
+        `Phase is already running: ${input.phaseId}`,
+        input.phaseId
+      )
+    }
+    validateAgentPhaseStatus(input.status)
+    validatePlanReviewGate({
+      phases,
+      phase: existing,
+      phaseId: input.phaseId,
+      nextStatus
+    })
+    const nextKind = input.kind ?? existing?.kind
+    validatePrCreationCompletion({
+      phaseId: input.phaseId,
+      phaseKind: nextKind,
+      nextStatus,
+      pr: options.pr
+    })
+    validateImplementationCompletion({
+      phases,
+      phaseId: input.phaseId,
+      nextStatus
+    })
+    validatePhaseTransition({
+      currentStatus: existing?.status,
+      nextStatus,
+      notes: input.notes
+    })
+
+    validatePhaseNotes({
+      kind: nextKind,
+      status: nextStatus,
+      outcome: input.outcome ?? existing?.outcome,
+      notes: input.notes ?? existing?.notes
+    })
+    const nextTitle = input.title ?? existing?.title
+    const nextOrder = input.order ?? existing?.order
+    if (nextTitle === undefined || nextOrder === undefined) {
+      throw new ArtifactStoreError(
+        'validation_error',
+        `Phase requires title and order: ${input.phaseId}`,
+        input.phaseId
+      )
+    }
+
+    const previousNotes = existing?.note_history ?? []
+    const note_history = input.notes === undefined
+      ? previousNotes
+      : [...previousNotes, { created_at: now, note: input.notes, source: 'cli' }]
+
+    const phase: PersistedFlowPhase = withoutUndefined({
+      ...(existing ?? {}),
+      phase_id: input.phaseId,
+      title: nextTitle,
+      kind: nextKind,
+      status: nextStatus,
+      order: nextOrder,
+      outcome: input.outcome ?? existing?.outcome,
+      summary: input.summary ?? existing?.summary,
+      notes: input.notes ?? existing?.notes,
+      launch_ids: appendUniqueString(existing?.launch_ids, input.launchId),
+      note_history: note_history.length === 0 ? undefined : note_history,
+      sessions: existing?.sessions,
+      created_at: existing?.created_at ?? now,
+      updated_at: now
+    })
+
+    if (index === -1) {
+      phases.push(phase)
+    } else {
+      phases[index] = phase
+    }
+
+    let nextPhases = phases
+    if (input.phaseId === 'plan' && nextStatus === 'completed' && flow.plan_id !== undefined) {
+      nextPhases = promotePhase(nextPhases, 'plan-review', 'ready', now)
+    }
+    if (isPlanReviewApproval(phase)) {
+      const drafts = await readLinkedImplementationDrafts(flow, planStore.readPlan)
+      nextPhases = mergeGeneratedImplementationChildren(
+        promotePhase(nextPhases, 'implementation', 'ready', now),
+        flow.plan_id as string,
+        drafts,
+        now
+      )
+    }
+    if (input.phaseId === 'implementation' && nextStatus === 'running') {
+      nextPhases = nextPhases.map((candidate) =>
+        isImplementationChildPhase(candidate) && candidate.status === 'pending'
+          ? { ...candidate, kind: 'implementation_child', status: 'ready', updated_at: now }
+          : candidate
+      )
+    }
+    if (nextStatus === 'completed') {
+      const nextDefaultPhaseId = DEFAULT_PHASE_COMPLETION_PROMOTIONS.get(input.phaseId)
+      if (nextDefaultPhaseId !== undefined) {
+        nextPhases = promotePhase(nextPhases, nextDefaultPhaseId, 'ready', now)
+      }
+    }
+    if (input.phaseId === 'implementation' && nextStatus === 'completed') {
+      nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
+    }
+    if (implementationChildrenCanPromoteReview(nextPhases)) {
+      nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
+    }
+
+    return writeFlow(withoutUndefined({
+      ...flow,
+      pr: options.pr ?? flow.pr,
+      phases: sortPersistedPhases(nextPhases),
+      updated_at: now
+    }))
   }
 
   return {
@@ -175,142 +332,31 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
     readFlow,
 
     async setPhase(input) {
-      assertSafeArtifactId('phase', input.phaseId)
-      const flow = await readFlow(input.flowId)
-      const now = input.now ?? new Date().toISOString()
-      const phases = [...(flow.phases ?? [])]
-      const index = phases.findIndex((phase) => phase.phase_id === input.phaseId)
-      const existing = index === -1 ? undefined : phases[index]
-
-      if (existing === undefined && (
-        input.title === undefined ||
-        input.status === undefined ||
-        input.order === undefined
-      )) {
-        throw new ArtifactStoreError(
-          'validation_error',
-          `Unknown phase requires --title, --status, and --order: ${input.phaseId}`,
-          input.phaseId
-        )
-      }
-
-      const nextStatus = input.status ?? existing?.status
-      if (typeof nextStatus !== 'string' || !PERSISTED_PHASE_STATUSES.has(nextStatus)) {
-        throw new ArtifactStoreError('validation_error', `Invalid phase status: ${String(nextStatus)}`)
-      }
-      if (input.launchId !== undefined && input.status === 'running' && existing?.status === 'running') {
-        throw new ArtifactStoreError(
-          'validation_error',
-          `Phase is already running: ${input.phaseId}`,
-          input.phaseId
-        )
-      }
-      validateAgentPhaseStatus(input.status)
-      validatePlanReviewGate({
-        phases,
-        phase: existing,
-        phaseId: input.phaseId,
-        nextStatus
-      })
-      validateImplementationCompletion({
-        phases,
-        phaseId: input.phaseId,
-        nextStatus
-      })
-      validatePhaseTransition({
-        currentStatus: existing?.status,
-        nextStatus,
-        notes: input.notes
-      })
-
-      const nextKind = input.kind ?? existing?.kind
-      validatePhaseNotes({
-        kind: nextKind,
-        status: nextStatus,
-        outcome: input.outcome ?? existing?.outcome,
-        notes: input.notes ?? existing?.notes
-      })
-      const nextTitle = input.title ?? existing?.title
-      const nextOrder = input.order ?? existing?.order
-      if (nextTitle === undefined || nextOrder === undefined) {
-        throw new ArtifactStoreError(
-          'validation_error',
-          `Phase requires title and order: ${input.phaseId}`,
-          input.phaseId
-        )
-      }
-
-      const previousNotes = existing?.note_history ?? []
-      const note_history = input.notes === undefined
-        ? previousNotes
-        : [...previousNotes, { created_at: now, note: input.notes, source: 'cli' }]
-
-      const phase: PersistedFlowPhase = withoutUndefined({
-        ...(existing ?? {}),
-        phase_id: input.phaseId,
-        title: nextTitle,
-        kind: nextKind,
-        status: nextStatus,
-        order: nextOrder,
-        outcome: input.outcome ?? existing?.outcome,
-        summary: input.summary ?? existing?.summary,
-        notes: input.notes ?? existing?.notes,
-        launch_ids: appendUniqueString(existing?.launch_ids, input.launchId),
-        note_history: note_history.length === 0 ? undefined : note_history,
-        sessions: existing?.sessions,
-        created_at: existing?.created_at ?? now,
-        updated_at: now
-      })
-
-      if (index === -1) {
-        phases.push(phase)
-      } else {
-        phases[index] = phase
-      }
-
-      let nextPhases = phases
-      if (input.phaseId === 'plan' && nextStatus === 'completed' && flow.plan_id !== undefined) {
-        nextPhases = promotePhase(nextPhases, 'plan-review', 'ready', now)
-      }
-      if (isPlanReviewApproval(phase)) {
-        const drafts = await readLinkedImplementationDrafts(flow, planStore.readPlan)
-        nextPhases = mergeGeneratedImplementationChildren(
-          promotePhase(nextPhases, 'implementation', 'ready', now),
-          flow.plan_id as string,
-          drafts,
-          now
-        )
-      }
-      if (input.phaseId === 'implementation' && nextStatus === 'running') {
-        nextPhases = nextPhases.map((candidate) =>
-          isImplementationChildPhase(candidate) && candidate.status === 'pending'
-            ? { ...candidate, kind: 'implementation_child', status: 'ready', updated_at: now }
-            : candidate
-        )
-      }
-      if (nextStatus === 'completed') {
-        const nextDefaultPhaseId = DEFAULT_PHASE_COMPLETION_PROMOTIONS.get(input.phaseId)
-        if (nextDefaultPhaseId !== undefined) {
-          nextPhases = promotePhase(nextPhases, nextDefaultPhaseId, 'ready', now)
-        }
-      }
-      if (input.phaseId === 'implementation' && nextStatus === 'completed') {
-        nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
-      }
-      if (implementationChildrenCanPromoteReview(nextPhases)) {
-        nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
-      }
-
-      return writeFlow({
-        ...flow,
-        phases: sortPersistedPhases(nextPhases),
-        updated_at: now
-      })
+      return setPhaseInternal(input)
     },
 
     async completePhase(input) {
       await assertPhaseExists(readFlow, input.flowId, input.phaseId)
-      return this.setPhase({ ...input, status: 'completed' })
+      return setPhaseInternal({ ...input, status: 'completed' })
+    },
+
+    async completePrCreation(input) {
+      const result = validateFlowPullRequestMetadata(input.pr)
+      if (!result.ok) {
+        throw new ArtifactStoreError('validation_error', result.message)
+      }
+      await assertPhaseExists(readFlow, input.flowId, 'pr-creation')
+      return setPhaseInternal(
+        {
+          flowId: input.flowId,
+          phaseId: 'pr-creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: input.summary,
+          now: input.now
+        },
+        { pr: result.pr }
+      )
     },
 
     async blockPhase(input) {
@@ -318,7 +364,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       if (input.notes === undefined || input.notes.trim() === '') {
         throw new ArtifactStoreError('validation_error', 'Blocking a phase requires notes.')
       }
-      return this.setPhase({ ...input, status: 'blocked' })
+      return setPhaseInternal({ ...input, status: 'blocked' })
     },
 
     async needsAttentionPhase(input) {
@@ -326,12 +372,12 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       if (input.notes === undefined || input.notes.trim() === '') {
         throw new ArtifactStoreError('validation_error', 'Marking a phase needs_attention requires notes.')
       }
-      return this.setPhase({ ...input, status: 'needs_attention' })
+      return setPhaseInternal({ ...input, status: 'needs_attention' })
     },
 
     async restartPhase(input) {
       await assertPhaseExists(readFlow, input.flowId, input.phaseId)
-      return this.setPhase({
+      return setPhaseInternal({
         ...input,
         status: 'running',
         notes: input.notes ?? 'Phase restarted for rerun.'
@@ -513,6 +559,84 @@ function validateImplementationCompletion({
       'Implementation cannot complete until all generated implementation children are completed or skipped with notes.'
     )
   }
+}
+
+function validatePrCreationCompletion({
+  phaseId,
+  phaseKind,
+  nextStatus,
+  pr
+}: {
+  phaseId: string
+  phaseKind?: string
+  nextStatus: string
+  pr?: FlowPullRequestMetadata
+}): void {
+  const isPrCreationPhase = phaseId === 'pr-creation' || phaseKind === 'pr_creation'
+  if (!isPrCreationPhase || nextStatus !== 'completed') {
+    return
+  }
+  if (pr === undefined) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'PR Creation can only complete with valid pull request metadata.'
+    )
+  }
+}
+
+function normalizePersistedFlowPrState(flow: PersistedFlowMetadata): PersistedFlowMetadata {
+  const prResult = validateFlowPullRequestMetadata(flow.pr)
+  const pr = prResult.ok ? prResult.pr : undefined
+  const shouldGatePrDependentPhases = !prResult.ok && hasOwnProperty(flow, 'pr')
+  return withoutUndefined({
+    ...flow,
+    pr,
+    phases: shouldGatePrDependentPhases && flow.phases !== undefined
+      ? gatePrDependentPersistedPhases(flow.phases)
+      : flow.phases
+  })
+}
+
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function gatePrDependentPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[] {
+  return phases.map((phase) => {
+    if (
+      phase.phase_id === 'pr-creation' &&
+      phase.status === 'completed' &&
+      phase.outcome === 'pr_recorded'
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'ready',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+
+    if (
+      phase.phase_id === 'human-review' &&
+      (
+        phase.status === 'ready' ||
+        phase.status === 'running' ||
+        phase.status === 'needs_attention' ||
+        phase.status === 'completed' ||
+        phase.status === 'active' ||
+        phase.status === 'done'
+      )
+    ) {
+      return withoutUndefined({
+        ...phase,
+        status: 'pending',
+        outcome: undefined,
+        summary: undefined
+      })
+    }
+
+    return phase
+  })
 }
 
 function promotePhase(

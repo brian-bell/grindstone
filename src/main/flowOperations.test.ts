@@ -373,7 +373,7 @@ describe('Flow operations', () => {
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'review-loop-1',
-      outcome: 'completed',
+      outcome: 'review_completed',
       now: '2026-06-15T12:09:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
@@ -390,7 +390,7 @@ describe('Flow operations', () => {
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'review-loop-2',
-      outcome: 'completed',
+      outcome: 'review_completed',
       now: '2026-06-15T12:11:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
@@ -407,13 +407,381 @@ describe('Flow operations', () => {
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'pr-creation',
-      outcome: 'pr_open',
+      now: '2026-06-15T12:13:00.000Z'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'PR Creation can only complete with valid pull request metadata.'
+    })
+    await expect(flows.completePrCreation({
+      flowId: 'downstream-flow',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/downstream',
+        base: 'main',
+        status: 'open'
+      },
+      summary: 'Opened PR #12.',
       now: '2026-06-15T12:13:00.000Z'
     })).resolves.toMatchObject({
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/downstream',
+        base: 'main',
+        status: 'open'
+      },
       phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'pr-creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened PR #12.'
+        }),
         expect.objectContaining({ phase_id: 'human-review', status: 'ready' })
       ])
     })
+  })
+
+  it('rejects direct PR Creation completion and leaves Human Review pending', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'guard-pr-creation',
+      title: 'Guard PR Creation',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'guard-pr-creation', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'pr-creation',
+          title: 'PR Creation',
+          kind: 'pr_creation',
+          status: 'running',
+          order: 6
+        },
+        {
+          phase_id: 'human-review',
+          title: 'Human Review',
+          kind: 'human_review',
+          status: 'pending',
+          order: 7
+        }
+      ]
+    }))
+
+    await expect(flows.completePhase({
+      flowId: 'guard-pr-creation',
+      phaseId: 'pr-creation'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'PR Creation can only complete with valid pull request metadata.'
+    })
+    await expect(flows.setPhase({
+      flowId: 'guard-pr-creation',
+      phaseId: 'pr-creation',
+      status: 'completed'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'PR Creation can only complete with valid pull request metadata.'
+    })
+    await rewriteFlow(root, 'guard-pr-creation', (flow) => ({
+      ...flow,
+      phases: [
+        ...(Array.isArray(flow.phases) ? flow.phases : []),
+        {
+          phase_id: 'custom-pr-gate',
+          title: 'Custom PR Gate',
+          status: 'ready',
+          order: 8
+        }
+      ]
+    }))
+    await expect(flows.setPhase({
+      flowId: 'guard-pr-creation',
+      phaseId: 'custom-pr-gate',
+      kind: 'pr_creation',
+      status: 'completed'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'PR Creation can only complete with valid pull request metadata.'
+    })
+    await expect(flows.setPhase({
+      flowId: 'guard-pr-creation',
+      phaseId: 'new-pr-gate',
+      title: 'New PR Gate',
+      order: 9,
+      kind: 'pr_creation',
+      status: 'completed'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'PR Creation can only complete with valid pull request metadata.'
+    })
+    const guardedFlow = await flows.readFlow('guard-pr-creation')
+    expect(guardedFlow.pr).toBeUndefined()
+    expect(guardedFlow).toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'pr-creation', status: 'running' }),
+        expect.objectContaining({ phase_id: 'human-review', status: 'pending' }),
+        expect.objectContaining({ phase_id: 'custom-pr-gate', status: 'ready' })
+      ])
+    })
+  })
+
+  it('validates structured PR metadata before completing PR Creation', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'validate-pr-metadata',
+      title: 'Validate PR metadata',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'validate-pr-metadata', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'pr-creation',
+          title: 'PR Creation',
+          kind: 'pr_creation',
+          status: 'ready',
+          order: 6
+        },
+        {
+          phase_id: 'human-review',
+          title: 'Human Review',
+          kind: 'human_review',
+          status: 'pending',
+          order: 7
+        }
+      ]
+    }))
+
+    await expect(flows.completePrCreation({
+      flowId: 'validate-pr-metadata',
+      pr: {
+        provider: 'github',
+        number: 0,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/pr',
+        base: 'main',
+        status: 'open'
+      }
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Pull request number must be a positive integer.'
+    })
+    await expect(flows.completePrCreation({
+      flowId: 'validate-pr-metadata',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'http://github.com/acme/grindstone/pull/12',
+        head: 'flow/pr',
+        base: 'main',
+        status: 'open'
+      }
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Pull request URL must be a valid HTTPS URL.'
+    })
+    await expect(flows.completePrCreation({
+      flowId: 'validate-pr-metadata',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: '',
+        base: 'main',
+        status: 'open'
+      }
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Pull request head branch is required.'
+    })
+    await expect(flows.completePrCreation({
+      flowId: 'validate-pr-metadata',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/pr',
+        base: '',
+        status: 'open'
+      }
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Pull request base branch is required.'
+    })
+    await expect(flows.completePrCreation({
+      flowId: 'validate-pr-metadata',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/pr',
+        base: 'main',
+        status: 'draft' as never
+      }
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Pull request status must be open, closed, or merged.'
+    })
+
+    const unchangedFlow = await flows.readFlow('validate-pr-metadata')
+    expect(unchangedFlow.pr).toBeUndefined()
+    expect(unchangedFlow).toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+        expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+      ])
+    })
+  })
+
+  it('locks legacy PR-dependent phases when persisted PR metadata is malformed', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'malformed-pr-gate',
+      title: 'Malformed PR gate',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'malformed-pr-gate', (flow) => ({
+      ...flow,
+      pr: {
+        provider: 'github',
+        number: '12',
+        url: 'http://github.com/acme/grindstone/pull/12',
+        head: '',
+        base: 'main',
+        status: 'open'
+      },
+      phases: [
+        {
+          phase_id: 'review-loop-2',
+          title: 'Review Loop 2',
+          kind: 'review_loop',
+          status: 'ready',
+          order: 5
+        },
+        {
+          phase_id: 'pr-creation',
+          title: 'PR Creation',
+          kind: 'pr_creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened malformed PR.',
+          order: 6
+        },
+        {
+          phase_id: 'human-review',
+          title: 'Human Review',
+          kind: 'human_review',
+          status: 'active',
+          order: 7
+        }
+      ]
+    }))
+
+    const lockedFlow = await flows.readFlow('malformed-pr-gate')
+    expect(lockedFlow.pr).toBeUndefined()
+    expect(lockedFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+    ]))
+    expect(lockedFlow.phases?.find((phase) => phase.phase_id === 'pr-creation')?.outcome)
+      .toBeUndefined()
+    expect(lockedFlow.phases?.find((phase) => phase.phase_id === 'pr-creation')?.summary)
+      .toBeUndefined()
+
+    await flows.setPhase({
+      flowId: 'malformed-pr-gate',
+      phaseId: 'review-loop-2',
+      status: 'running'
+    })
+    const rawFlow = JSON.parse(
+      await readFile(join(root, 'flows', 'malformed-pr-gate', 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(rawFlow.pr).toBeUndefined()
+    expect(rawFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+    ]))
+  })
+
+  it('preserves completed legacy PR-dependent phases when PR metadata is absent', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'legacy-no-pr',
+      title: 'Legacy no PR',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'legacy-no-pr', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'pr-creation',
+          title: 'PR Creation',
+          kind: 'pr_creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened PR before metadata existed.',
+          order: 6
+        },
+        {
+          phase_id: 'human-review',
+          title: 'Human Review',
+          kind: 'human_review',
+          status: 'completed',
+          outcome: 'approved',
+          order: 7
+        }
+      ]
+    }))
+
+    const legacyFlow = await flows.readFlow('legacy-no-pr')
+    expect(legacyFlow.pr).toBeUndefined()
+    expect(legacyFlow).toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'pr-creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened PR before metadata existed.'
+        }),
+        expect.objectContaining({
+          phase_id: 'human-review',
+          status: 'completed',
+          outcome: 'approved'
+        })
+      ])
+    })
+
+    await flows.setPhase({
+      flowId: 'legacy-no-pr',
+      phaseId: 'human-review',
+      status: 'running',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    const rawFlow = JSON.parse(
+      await readFile(join(root, 'flows', 'legacy-no-pr', 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(rawFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase_id: 'pr-creation',
+        status: 'completed',
+        outcome: 'pr_recorded',
+        summary: 'Opened PR before metadata existed.'
+      }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'running' })
+    ]))
   })
 
   it('only promotes implementation-child rows when Implementation starts', async () => {

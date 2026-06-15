@@ -1,4 +1,4 @@
-import { mkdir, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { mkdtemp, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -271,6 +271,164 @@ describe('Flow artifact store', () => {
     await expect(store.flowArtifactExists('missing-meta')).resolves.toBe(true)
     await expect(store.flowArtifactExists('missing-flow')).resolves.toBe(false)
     await expect(store.flowArtifactExists('../unsafe')).resolves.toBe(false)
+  })
+
+  it('exposes valid PR metadata and omits malformed legacy PR metadata', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-pr-metadata')
+    await writeFlowMeta(
+      artifactRoot,
+      'without-pr',
+      flowMeta('without-pr', repository.path, {
+        updated_at: '2026-06-10T10:02:00.000Z',
+        phases: [
+          {
+            phase_id: 'pr-creation',
+            title: 'PR Creation',
+            kind: 'pr_creation',
+            status: 'completed',
+            outcome: 'pr_recorded',
+            summary: 'Opened PR before metadata existed.',
+            order: 6
+          },
+          {
+            phase_id: 'human-review',
+            title: 'Human Review',
+            kind: 'human_review',
+            status: 'completed',
+            outcome: 'approved',
+            order: 7
+          }
+        ]
+      })
+    )
+    await writeFlowMeta(
+      artifactRoot,
+      'with-pr',
+      flowMeta('with-pr', repository.path, {
+        pr: {
+          provider: 'github',
+          number: 42,
+          url: 'https://github.com/acme/grindstone/pull/42',
+          head: 'flow/with-pr',
+          base: 'main',
+          status: 'open'
+        }
+      })
+    )
+    await writeFlowMeta(
+      artifactRoot,
+      'malformed-pr',
+      flowMeta('malformed-pr', repository.path, {
+        updated_at: '2026-06-10T10:01:00.000Z',
+        pr: {
+          provider: 'github',
+          number: '42',
+          url: 'http://github.com/acme/grindstone/pull/42',
+          head: '',
+          base: 'main',
+          status: 'open'
+        },
+        phases: [
+          {
+            phase_id: 'pr-creation',
+            title: 'PR Creation',
+            kind: 'pr_creation',
+            status: 'completed',
+            outcome: 'pr_recorded',
+            summary: 'Opened PR with malformed metadata.',
+            order: 6
+          },
+          {
+            phase_id: 'human-review',
+            title: 'Human Review',
+            kind: 'human_review',
+            status: 'done',
+            order: 7
+          }
+        ]
+      })
+    )
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.listFlowsForRepository(repository)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'without-pr',
+        pr: undefined,
+        phases: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'pr-creation',
+            status: 'completed',
+            outcome: 'pr_recorded',
+            summary: 'Opened PR before metadata existed.'
+          }),
+          expect.objectContaining({
+            id: 'human-review',
+            status: 'completed',
+            outcome: 'approved'
+          })
+        ])
+      }),
+      expect.objectContaining({
+        id: 'malformed-pr',
+        pr: undefined,
+        phases: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'pr-creation',
+            status: 'ready'
+          }),
+          expect.objectContaining({
+            id: 'human-review',
+            status: 'pending'
+          })
+        ])
+      }),
+      expect.objectContaining({
+        id: 'with-pr',
+        pr: {
+          provider: 'github',
+          number: 42,
+          url: 'https://github.com/acme/grindstone/pull/42',
+          head: 'flow/with-pr',
+          base: 'main',
+          status: 'open'
+        }
+      })
+    ])
+
+    await store.updateFlowRecord('malformed-pr', {
+      updatedAt: '2026-06-10T10:02:00.000Z'
+    })
+    const rawFlow = JSON.parse(
+      await readFile(join(artifactRoot, 'flows', 'malformed-pr', 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(rawFlow.pr).toBeUndefined()
+    expect(rawFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
+    ]))
+
+    await store.updateFlowRecord('without-pr', {
+      updatedAt: '2026-06-10T10:03:00.000Z'
+    })
+    const rawLegacyFlow = JSON.parse(
+      await readFile(join(artifactRoot, 'flows', 'without-pr', 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(rawLegacyFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase_id: 'pr-creation',
+        status: 'completed',
+        outcome: 'pr_recorded',
+        summary: 'Opened PR before metadata existed.'
+      }),
+      expect.objectContaining({
+        phase_id: 'human-review',
+        status: 'completed',
+        outcome: 'approved'
+      })
+    ]))
   })
 
   it('creates and updates Flow records under the artifact root', async () => {

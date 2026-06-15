@@ -1,3 +1,5 @@
+import type { FlowPullRequestMetadata } from './artifacts'
+
 export type RepositorySource = 'scan_root' | 'explicit'
 
 export type CatalogDiagnosticCode =
@@ -73,6 +75,12 @@ export type SkipFlowPhaseRequest = {
 export type CompleteFlowPhaseRequest = {
   flowId: string
   phaseId: string
+  summary?: string
+}
+
+export type RecordFlowPullRequestRequest = {
+  flowId: string
+  pr: FlowPullRequestMetadata
   summary?: string
 }
 
@@ -188,6 +196,7 @@ export type FlowListRow = {
   failure?: FlowFailureSummary
   planId?: string
   planPath?: string
+  pr?: FlowPullRequestMetadata
   createdAt: string
   updatedAt: string
   phases?: FlowPhaseSummary[]

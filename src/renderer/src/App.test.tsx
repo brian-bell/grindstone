@@ -16,6 +16,7 @@ import type {
   FlowListRow,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  RecordFlowPullRequestRequest,
   SkipFlowPhaseRequest,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
@@ -305,7 +306,8 @@ const setWorkspaceApi = (
   updateFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
   launchFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
   skipFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
-  completeFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState)
+  completeFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
+  recordFlowPullRequest = vi.fn().mockResolvedValue(selectedCatalogState)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -319,6 +321,7 @@ const setWorkspaceApi = (
         launchFlowPhase,
         skipFlowPhase,
         completeFlowPhase,
+        recordFlowPullRequest,
         createRepository,
         retryRepositoryRemote
       },
@@ -747,6 +750,350 @@ describe('App shell', () => {
     })
     expect(await within(flowPane).findByText('Phase: Build API - running'))
       .toBeInTheDocument()
+  })
+
+  it('launches and completes Review Loop 2 before showing PR Creation metadata controls', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'review-two-flow',
+      title: 'Review Two Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      branch: 'flow/review-two',
+      baseRef: 'main',
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'review-loop-1',
+          title: 'Review Loop 1',
+          status: 'completed',
+          kind: 'review_loop',
+          order: 4
+        },
+        {
+          id: 'review-loop-2',
+          title: 'Review Loop 2',
+          status: 'ready',
+          kind: 'review_loop',
+          order: 5
+        },
+        {
+          id: 'pr-creation',
+          title: 'PR Creation',
+          status: 'pending',
+          kind: 'pr_creation',
+          order: 6
+        }
+      ]
+    }
+    const state: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [flow]
+      }
+    }
+    const launchedState: InitialWorkspaceState = {
+      ...state,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...flow,
+            phases: flow.phases?.map((phase) =>
+              phase.id === 'review-loop-2' ? { ...phase, status: 'running' } : phase
+            )
+          }
+        ]
+      }
+    }
+    const completedState: InitialWorkspaceState = {
+      ...state,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...flow,
+            phases: flow.phases?.map((phase) =>
+              phase.id === 'review-loop-2'
+                ? { ...phase, status: 'completed', outcome: 'review_completed' }
+                : phase.id === 'pr-creation'
+                  ? { ...phase, status: 'ready' }
+                  : phase
+            )
+          }
+        ]
+      }
+    }
+    const launchFlowPhase = vi.fn<(
+      request: LaunchFlowPhaseRequest
+    ) => Promise<InitialWorkspaceState>>().mockResolvedValue(launchedState)
+    const completeFlowPhase = vi.fn().mockResolvedValue(completedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: state,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(state),
+      undefined,
+      vi.fn().mockResolvedValue(state),
+      launchFlowPhase,
+      vi.fn().mockResolvedValue(state),
+      completeFlowPhase
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /review two flow details/i }))
+    expect(within(flowPane).getByRole('button', { name: /launch review loop 2/i }))
+      .toBeInTheDocument()
+    expect(within(flowPane).queryByRole('form', { name: /record pr for review two flow/i }))
+      .not.toBeInTheDocument()
+
+    await user.click(within(flowPane).getByRole('button', { name: /launch review loop 2/i }))
+    expect(launchFlowPhase).toHaveBeenCalledWith({
+      flowId: 'review-two-flow',
+      phaseId: 'review-loop-2'
+    })
+    await user.click(await within(flowPane).findByRole('button', { name: /complete review loop 2/i }))
+    expect(completeFlowPhase).toHaveBeenCalledWith({
+      flowId: 'review-two-flow',
+      phaseId: 'review-loop-2'
+    })
+    expect(await within(flowPane).findByRole('form', { name: /record pr for review two flow/i }))
+      .toBeInTheDocument()
+  })
+
+  it('validates and records PR metadata from ready PR Creation', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'pr-ready-flow',
+      title: 'PR Ready Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      branch: 'flow/pr-ready',
+      baseRef: 'main',
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'pr-creation',
+          title: 'PR Creation',
+          status: 'ready',
+          kind: 'pr_creation',
+          order: 6
+        },
+        {
+          id: 'human-review',
+          title: 'Human Review',
+          status: 'pending',
+          kind: 'human_review',
+          order: 7
+        }
+      ]
+    }
+    const state: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [flow]
+      }
+    }
+    const recordedState: InitialWorkspaceState = {
+      ...state,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...flow,
+            pr: {
+              provider: 'github',
+              number: 12,
+              url: 'https://github.com/acme/grindstone/pull/12',
+              head: 'flow/pr-ready',
+              base: 'main',
+              status: 'open'
+            },
+            phases: flow.phases?.map((phase) =>
+              phase.id === 'pr-creation'
+                ? { ...phase, status: 'completed', outcome: 'pr_recorded' }
+                : phase.id === 'human-review'
+                  ? { ...phase, status: 'ready' }
+                  : phase
+            )
+          }
+        ]
+      }
+    }
+    const recordFlowPullRequest = vi.fn<(
+      request: RecordFlowPullRequestRequest
+    ) => Promise<InitialWorkspaceState>>().mockResolvedValue(recordedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: state,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(state),
+      undefined,
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      recordFlowPullRequest
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /pr ready flow details/i }))
+    const form = within(flowPane).getByRole('form', { name: /record pr for pr ready flow/i })
+    expect(within(form).getByLabelText(/head branch/i)).toHaveValue('flow/pr-ready')
+    expect(within(form).getByLabelText(/base branch/i)).toHaveValue('main')
+
+    await user.click(within(form).getByRole('button', { name: /record pr/i }))
+    expect(await within(form).findByRole('alert')).toHaveTextContent(
+      'PR number must be a positive integer.'
+    )
+    expect(recordFlowPullRequest).not.toHaveBeenCalled()
+
+    await user.type(within(form).getByLabelText(/pr number/i), '12')
+    await user.type(within(form).getByLabelText(/pr url/i), 'http://github.com/acme/grindstone/pull/12')
+    await user.click(within(form).getByRole('button', { name: /record pr/i }))
+    expect(await within(form).findByRole('alert')).toHaveTextContent(
+      'PR URL must be a valid HTTPS URL.'
+    )
+
+    await user.clear(within(form).getByLabelText(/pr url/i))
+    await user.type(within(form).getByLabelText(/pr url/i), 'https://github.com/acme/grindstone/pull/12')
+    await user.click(within(form).getByRole('button', { name: /record pr/i }))
+    expect(recordFlowPullRequest).toHaveBeenCalledWith({
+      flowId: 'pr-ready-flow',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/pr-ready',
+        base: 'main',
+        status: 'open'
+      },
+      summary: 'Recorded GitHub PR #12.'
+    })
+    expect(await within(flowPane).findByText('Phase: Human Review - ready'))
+      .toBeInTheDocument()
+    expect(within(flowPane).getByText('PR: github#12 - open - https://github.com/acme/grindstone/pull/12'))
+      .toBeInTheDocument()
+  })
+
+  it('does not show Record PR controls for custom PR creation phases', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'custom-pr-flow',
+      title: 'Custom PR Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'custom-pr-gate',
+          title: 'Custom PR Gate',
+          status: 'ready',
+          kind: 'pr_creation',
+          order: 6
+        }
+      ]
+    }
+    const state: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [flow]
+      }
+    }
+    const recordFlowPullRequest = vi.fn<(
+      request: RecordFlowPullRequestRequest
+    ) => Promise<InitialWorkspaceState>>().mockResolvedValue(state)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: state,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(state),
+      undefined,
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      recordFlowPullRequest
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /custom pr flow details/i }))
+
+    expect(within(flowPane).queryByRole('form', { name: /record pr for custom pr flow/i }))
+      .not.toBeInTheDocument()
+    expect(recordFlowPullRequest).not.toHaveBeenCalled()
   })
 
   it('requires notes before skipping an implementation child and shows refreshed readiness', async () => {
