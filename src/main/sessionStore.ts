@@ -373,12 +373,17 @@ function resolveSessionId(
   if (sessionIds.size > 1) {
     throw new ArtifactStoreError('validation_error', 'Conflicting session ids in transcript payload.')
   }
-  return [...sessionIds][0] ?? deterministicSessionId(provider, launchId, source)
+  return [...sessionIds][0] ?? deterministicSessionId(provider, launchId, source, rows)
 }
 
-function deterministicSessionId(provider: string, launchId: string | undefined, source: string | undefined): string {
+function deterministicSessionId(
+  provider: string,
+  launchId: string | undefined,
+  source: string | undefined,
+  rows: unknown[]
+): string {
   const hash = createHash('sha256')
-    .update(`${provider}\0${launchId ?? ''}\0${source ?? 'stdin'}`)
+    .update(`${provider}\0${launchId ?? ''}\0${source ?? 'stdin'}\0${JSON.stringify(rows)}`)
     .digest('hex')
     .slice(0, 16)
   return `${provider}-${hash}`
@@ -420,7 +425,7 @@ function enforceTranscriptLimit(events: NormalizedTranscriptEvent[]): {
   let bytes = 0
   const kept: NormalizedTranscriptEvent[] = []
   for (const event of events) {
-    const nextBytes = Buffer.byteLength(event.text, 'utf8')
+    const nextBytes = Buffer.byteLength(JSON.stringify(event), 'utf8') + 1
     if (bytes + nextBytes > MAX_TRANSCRIPT_TEXT_BYTES) {
       return { events: kept, truncated: true }
     }

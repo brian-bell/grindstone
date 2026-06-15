@@ -236,6 +236,77 @@ describe('session-hook transcript ingestion', () => {
     expect(transcript).not.toContain('output_text')
   })
 
+  it('truncates transcripts by serialized event size instead of text size only', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({ id: 'flow-many-events', title: 'Many Events Flow', repoPath: '/repo' })
+    await flows.setPhase({
+      flowId: 'flow-many-events',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'running',
+      order: 1
+    })
+    const eventCount = 70_000
+    const payload = Array.from({ length: eventCount }, (_, index) => JSON.stringify({
+      id: `event-${index}`,
+      session_id: 'many-small-events',
+      type: 'message',
+      content: ''
+    })).join('\n')
+
+    const result = await ingestSessionHook({ artifactRoot: root }, {
+      provider: 'codex',
+      flowId: 'flow-many-events',
+      phaseId: 'implementation',
+      payload,
+      now: '2026-06-15T10:04:00.000Z'
+    })
+
+    expect(result.metadata.truncated).toBe(true)
+    expect(result.events.length).toBeLessThan(eventCount)
+  })
+
+  it('creates distinct fallback session ids for unrelated stdin payloads', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({ id: 'flow-fallback', title: 'Fallback Flow', repoPath: '/repo' })
+    await flows.setPhase({
+      flowId: 'flow-fallback',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'running',
+      order: 1
+    })
+
+    const first = await ingestSessionHook({ artifactRoot: root }, {
+      provider: 'codex',
+      flowId: 'flow-fallback',
+      phaseId: 'implementation',
+      payload: `${JSON.stringify({ id: 'event-one', type: 'message', content: 'first' })}\n`,
+      now: '2026-06-15T10:04:00.000Z'
+    })
+    const second = await ingestSessionHook({ artifactRoot: root }, {
+      provider: 'codex',
+      flowId: 'flow-fallback',
+      phaseId: 'implementation',
+      payload: `${JSON.stringify({ id: 'event-two', type: 'message', content: 'second' })}\n`,
+      now: '2026-06-15T10:05:00.000Z'
+    })
+
+    expect(first.metadata.session_id).not.toBe(second.metadata.session_id)
+    await expect(flows.readFlow('flow-fallback')).resolves.toMatchObject({
+      phases: [
+        expect.objectContaining({
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ session_id: first.metadata.session_id }),
+            expect.objectContaining({ session_id: second.metadata.session_id })
+          ])
+        })
+      ]
+    })
+  })
+
   it('reads Claude transcript_path relative to hook file and rejects missing Flow metadata', async () => {
     const root = await makeTempDir()
     const hookDir = join(root, 'hooks')
