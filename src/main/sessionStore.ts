@@ -166,7 +166,6 @@ async function attachSessionReference(
   await flows.setPhase({
     flowId: metadata.flow_id,
     phaseId: metadata.phase_id,
-    status: phase.status,
     title: phase.title,
     kind: phase.kind,
     order: phase.order,

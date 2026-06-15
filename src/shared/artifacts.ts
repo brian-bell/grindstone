@@ -57,7 +57,14 @@ export type PersistedFlowMetadata = {
   updated_at: string
 }
 
-export type SavedPlanStatus = 'draft' | 'approved' | 'archived'
+export type SavedPlanStatus =
+  | 'draft'
+  | 'approved'
+  | 'in_progress'
+  | 'completed'
+  | 'blocked'
+  | 'superseded'
+  | 'archived'
 
 export type SavedPlanMetadata = {
   schema_version: 1
@@ -67,7 +74,7 @@ export type SavedPlanMetadata = {
   repo_path?: string
   worktree_path?: string
   branch?: string
-  plan_path: string
+  plan_path?: string
   flow_id?: string
   flow_path?: string
   linked_at?: string

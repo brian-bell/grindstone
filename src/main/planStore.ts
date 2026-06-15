@@ -51,6 +51,7 @@ export function createPlanStore(options: { artifactRoot: string }): PlanStore {
         throw new ArtifactStoreError('validation_error', `Plan already exists: ${planId}`, planId)
       }
       await ensurePrivateDirectory(planDir)
+      const planPath = join(planDir, 'plan.md')
       const metadata: SavedPlanMetadata = withoutUndefined({
         schema_version: 1,
         plan_id: planId,
@@ -59,12 +60,12 @@ export function createPlanStore(options: { artifactRoot: string }): PlanStore {
         repo_path: input.repoPath,
         worktree_path: input.worktreePath,
         branch: input.branch,
-        plan_path: join(planDir, 'plan.md'),
+        plan_path: planPath,
         created_at: now,
         updated_at: now
       })
 
-      await writeTextAtomically(metadata.plan_path, input.body)
+      await writeTextAtomically(planPath, input.body)
       await writeJsonAtomically(join(planDir, 'meta.json'), metadata)
       return metadata
     },
@@ -77,8 +78,15 @@ export function createPlanStore(options: { artifactRoot: string }): PlanStore {
         planId,
         isSavedPlanMetadata
       )
-      const body = await readTextArtifact(join(planDir, 'plan.md'), planId)
-      return { metadata, body }
+      const planPath = metadata.plan_path ?? join(planDir, 'plan.md')
+      const body = await readTextArtifact(planPath, planId)
+      return {
+        metadata: {
+          ...metadata,
+          plan_path: planPath
+        },
+        body
+      }
     },
 
     async listPlans(filter = {}) {
@@ -127,7 +135,7 @@ export function createPlanId(title: string, salt: string): string {
 }
 
 export function validatePlanStatus(status: string): asserts status is SavedPlanStatus {
-  if (status !== 'draft' && status !== 'approved' && status !== 'archived') {
+  if (!isSavedPlanStatus(status)) {
     throw new ArtifactStoreError('validation_error', `Invalid plan status: ${status}`)
   }
 }
@@ -140,10 +148,20 @@ function isSavedPlanMetadata(value: unknown): value is SavedPlanMetadata {
   return value.schema_version === 1 &&
     typeof value.plan_id === 'string' &&
     typeof value.title === 'string' &&
-    (value.status === 'draft' || value.status === 'approved' || value.status === 'archived') &&
-    typeof value.plan_path === 'string' &&
+    isSavedPlanStatus(value.status) &&
+    (value.plan_path === undefined || typeof value.plan_path === 'string') &&
     typeof value.created_at === 'string' &&
     typeof value.updated_at === 'string'
+}
+
+function isSavedPlanStatus(status: unknown): status is SavedPlanStatus {
+  return status === 'draft' ||
+    status === 'approved' ||
+    status === 'in_progress' ||
+    status === 'completed' ||
+    status === 'blocked' ||
+    status === 'superseded' ||
+    status === 'archived'
 }
 
 function compareUpdatedAtDescending(left: SavedPlanMetadata, right: SavedPlanMetadata): number {

@@ -256,5 +256,49 @@ describe('plan artifact store and Flow linkage', () => {
           })
         ]
       })
+
+    await flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'autoreview',
+      title: 'Autoreview',
+      status: 'running',
+      order: 3
+    })
+    await flows.needsAttentionPhase({
+      flowId: 'flow-one',
+      phaseId: 'autoreview',
+      notes: 'Follow-up findings remain.'
+    })
+    await expect(flows.completePhase({
+      flowId: 'flow-one',
+      phaseId: 'autoreview',
+      outcome: 'passed'
+    })).rejects.toThrow(/invalid phase transition needs_attention -> completed/i)
+    await expect(flows.restartPhase({
+      flowId: 'flow-one',
+      phaseId: 'autoreview',
+      notes: 'Rerunning after fixes.'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'autoreview',
+          status: 'running',
+          notes: 'Rerunning after fixes.'
+        })
+      ])
+    })
+    await expect(flows.completePhase({
+      flowId: 'flow-one',
+      phaseId: 'autoreview',
+      outcome: 'passed'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'autoreview',
+          status: 'completed',
+          outcome: 'passed'
+        })
+      ])
+    })
   })
 })

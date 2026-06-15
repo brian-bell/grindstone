@@ -16,7 +16,6 @@ import {
   updateCommonConfig
 } from './workspaceHandlers'
 import type { FlowStore } from './flowStore'
-import { createPlanStore } from './planStore'
 import type { FlowCommandRunner } from './flowCreation'
 import { CommandRunError, type CommandRunner } from './repositoryCreation'
 
@@ -202,13 +201,17 @@ describe('workspace main handlers', () => {
     const repoPath = join(root, 'repo-plan')
     const artifactRoot = join(root, 'artifacts')
     await makeGitRepository(repoPath)
-    await createPlanStore({ artifactRoot }).savePlan({
-      planId: 'plan-one',
+    const planDir = join(artifactRoot, 'plans', 'plan-one')
+    await mkdir(planDir, { recursive: true })
+    await writeFile(join(planDir, 'plan.md'), '# Linked Plan\n')
+    await writeFile(join(planDir, 'meta.json'), JSON.stringify({
+      schema_version: 1,
+      plan_id: 'plan-one',
       title: 'Plan One',
-      status: 'approved',
-      body: '# Linked Plan\n',
-      now: '2026-06-15T10:00:00.000Z'
-    })
+      status: 'in_progress',
+      created_at: '2026-06-15T10:00:00.000Z',
+      updated_at: '2026-06-15T10:00:00.000Z'
+    }))
     await writeFlowMeta(
       artifactRoot,
       'flow-one',

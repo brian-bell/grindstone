@@ -49,6 +49,8 @@ export type FlowOperations = {
 }
 
 const PERSISTED_PHASE_STATUSES = new Set([
+  'pending',
+  'ready',
   'running',
   'needs_attention',
   'completed',
@@ -56,6 +58,18 @@ const PERSISTED_PHASE_STATUSES = new Set([
   'skipped',
   'done',
   'active'
+])
+const AGENT_PHASE_STATUSES = new Set(['running', 'needs_attention', 'completed', 'blocked', 'skipped'])
+const ALLOWED_PHASE_TRANSITIONS = new Map<string, Set<string>>([
+  ['pending', new Set(['skipped'])],
+  ['ready', new Set(['running', 'needs_attention', 'completed', 'blocked', 'skipped'])],
+  ['running', new Set(['needs_attention', 'completed', 'blocked', 'skipped'])],
+  ['needs_attention', new Set(['running', 'skipped'])],
+  ['blocked', new Set(['running', 'skipped'])],
+  ['completed', new Set(['running'])],
+  ['skipped', new Set(['running'])],
+  ['active', new Set(['running', 'needs_attention', 'completed', 'blocked', 'skipped'])],
+  ['done', new Set(['running'])]
 ])
 const PLAN_REVIEW_OUTCOMES = new Set([
   'approved',
@@ -162,6 +176,12 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       if (typeof nextStatus !== 'string' || !PERSISTED_PHASE_STATUSES.has(nextStatus)) {
         throw new ArtifactStoreError('validation_error', `Invalid phase status: ${String(nextStatus)}`)
       }
+      validateAgentPhaseStatus(input.status)
+      validatePhaseTransition({
+        currentStatus: existing?.status,
+        nextStatus,
+        notes: input.notes
+      })
 
       const nextKind = input.kind ?? existing?.kind
       validatePhaseNotes({
@@ -310,6 +330,57 @@ export function validatePhaseNotes({
   if (!SAFE_PHASE_OUTCOME.test(outcome)) {
     throw new ArtifactStoreError('validation_error', `Invalid phase outcome: ${outcome}`)
   }
+}
+
+function validateAgentPhaseStatus(status: string | undefined): void {
+  if (status !== undefined && !AGENT_PHASE_STATUSES.has(status)) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      `Unsupported agent-facing phase status "${status}"; valid statuses: ${[...AGENT_PHASE_STATUSES].join(', ')}`
+    )
+  }
+}
+
+function validatePhaseTransition({
+  currentStatus,
+  nextStatus,
+  notes
+}: {
+  currentStatus?: string
+  nextStatus: string
+  notes?: string
+}): void {
+  if (currentStatus === undefined || currentStatus === nextStatus) {
+    return
+  }
+
+  const allowed = ALLOWED_PHASE_TRANSITIONS.get(currentStatus)
+  if (allowed?.has(nextStatus)) {
+    if (
+      nextStatus === 'running' &&
+      (currentStatus === 'needs_attention' || currentStatus === 'blocked') &&
+      (notes === undefined || notes.trim() === '')
+    ) {
+      throw new ArtifactStoreError(
+        'validation_error',
+        `Invalid phase transition ${currentStatus} -> running; restart with --status running --notes before completing.`
+      )
+    }
+    return
+  }
+
+  const allowedStatuses = allowed === undefined ? [] : [...allowed]
+  const suffix = allowedStatuses.length === 0
+    ? 'no allowed next statuses'
+    : `allowed from ${currentStatus}: ${allowedStatuses.join(', ')}`
+  const recoveryHint = (currentStatus === 'needs_attention' || currentStatus === 'blocked') &&
+    nextStatus === 'completed'
+    ? '; restart with --status running --notes before completing'
+    : ''
+  throw new ArtifactStoreError(
+    'validation_error',
+    `Invalid phase transition ${currentStatus} -> ${nextStatus}; ${suffix}${recoveryHint}`
+  )
 }
 
 async function assertPhaseExists(
