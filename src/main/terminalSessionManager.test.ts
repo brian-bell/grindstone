@@ -358,6 +358,78 @@ describe('terminal session manager', () => {
     })
   })
 
+  it('kills and detaches the spawned PTY when initial running persistence fails', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const realStore = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const repositoryId = await realpath(repo.path)
+    const storedFlow = await realStore.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const failingStore: FlowStore = {
+      ...realStore,
+      async updateFlowRecord(flowId, update) {
+        if (update.terminals?.[0]?.status === 'running') {
+          throw new Error('running persist failed')
+        }
+
+        return realStore.updateFlowRecord(flowId, update)
+      }
+    }
+    const fakeProcess = new FakePtyProcess()
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store: failingStore,
+      pty: {
+        spawn() {
+          return fakeProcess
+        }
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn()
+        .mockReturnValueOnce('terminal-123')
+        .mockReturnValueOnce('launch-123')
+    })
+
+    await expect(manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'interactive',
+      phaseId: 'plan',
+      prompt: 'Implement the approved plan.'
+    })).rejects.toThrow('running persist failed')
+
+    expect(fakeProcess.kills).toEqual(['SIGTERM'])
+    await expect(manager.writeInput({
+      repositoryId,
+      flowId: 'launch-terminal',
+      terminalId: 'terminal-123',
+      data: 'q'
+    })).rejects.toThrow('Terminal is not attached to a running process: terminal-123')
+    await expect(realStore.readFlow('launch-terminal')).resolves.toMatchObject({
+      terminals: [
+        {
+          terminalId: 'terminal-123',
+          status: 'failed'
+        }
+      ]
+    })
+  })
+
   it('records numeric Unix termination signals as terminated terminals', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'repo'), { recursive: true })

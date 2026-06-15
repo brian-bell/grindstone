@@ -152,6 +152,8 @@ export class TerminalSessionManager {
     await this.writeTerminalMetadata(metaPath, terminal)
     await this.persistTerminal(request.flow.id, terminal)
 
+    let spawnedProcess: PtyProcess | undefined
+    let managedTerminal: ManagedTerminal | undefined
     try {
       const ptyProcess = (this.options.pty ?? nodePtyAdapter).spawn(
         launchCommand.executable,
@@ -166,6 +168,7 @@ export class TerminalSessionManager {
           rows: 30
         }
       )
+      spawnedProcess = ptyProcess
       const managed: ManagedTerminal = {
         flow: request.flow,
         process: ptyProcess,
@@ -176,6 +179,7 @@ export class TerminalSessionManager {
         terminateTimer: null,
         outputQueue: Promise.resolve()
       }
+      managedTerminal = managed
       this.sessions.set(terminalId, managed)
       ptyProcess.onData((data) => {
         managed.outputQueue = managed.outputQueue
@@ -196,6 +200,17 @@ export class TerminalSessionManager {
       await initialPersist
       return managed.terminal
     } catch (error) {
+      if (spawnedProcess !== undefined) {
+        spawnedProcess.kill('SIGTERM')
+      }
+      if (managedTerminal !== undefined) {
+        managedTerminal.process = null
+        if (managedTerminal.terminateTimer !== null) {
+          clearTimeout(managedTerminal.terminateTimer)
+          managedTerminal.terminateTimer = null
+        }
+      }
+      this.sessions.delete(terminalId)
       const failed = {
         ...terminal,
         status: 'failed' as const,
