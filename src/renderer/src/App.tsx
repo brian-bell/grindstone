@@ -1567,6 +1567,8 @@ function TerminalOutput({
   } | null>(null)
   const writtenOutputRef = useRef('')
   const output = terminal.recentOutput ?? ''
+  const latestOutputRef = useRef(output)
+  latestOutputRef.current = output
 
   useEffect(() => {
     let disposed = false
@@ -1618,8 +1620,9 @@ function TerminalOutput({
           terminalId: terminal.terminalId,
           write: (data) => xterm.write(data)
         }
-        xterm.write(output)
-        writtenOutputRef.current = output
+        const mountedOutput = latestOutputRef.current
+        xterm.write(mountedOutput)
+        writtenOutputRef.current = mountedOutput
         const publishSize = () => {
           fit.fit()
           const dimensions = fit.proposeDimensions()

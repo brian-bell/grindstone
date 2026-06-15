@@ -231,7 +231,7 @@ async function mapFlowMetadata(
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
     phases: mapPhases(metadata.phases),
-    terminals: mapTerminals(metadata.terminals)
+    terminals: mapTerminals(metadata.terminals, directoryFlowId)
   }
 }
 
@@ -323,7 +323,7 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined
 }
 
-function mapTerminals(value: unknown): FlowTerminalSummary[] | undefined {
+function mapTerminals(value: unknown, flowId: string): FlowTerminalSummary[] | undefined {
   if (!Array.isArray(value)) {
     return undefined
   }
@@ -338,6 +338,7 @@ function mapTerminals(value: unknown): FlowTerminalSummary[] | undefined {
       !isAgentLaunchMode(terminal.mode) ||
       typeof terminal.flow_id !== 'string' ||
       !isSafeFlowId(terminal.flow_id) ||
+      terminal.flow_id !== flowId ||
       typeof terminal.phase_id !== 'string' ||
       !isTerminalStatus(terminal.status) ||
       typeof terminal.command !== 'string' ||

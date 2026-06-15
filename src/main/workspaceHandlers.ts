@@ -355,46 +355,46 @@ export async function createFlowInWorkspace(
 export async function listFlowTerminals(
   request: Parameters<TerminalManagerPort['listTerminals']>[0]
 ): Promise<FlowTerminalSummary[]> {
-  const store = await currentFlowStoreFactory({
-    artifactRoot: currentArtifactRoot ?? ''
-  })
+  const store = await createConfiguredFlowStore()
   return getTerminalManager(store).listTerminals(request)
 }
 
 export async function writeTerminalInput(
   request: Parameters<TerminalManagerPort['writeInput']>[0]
 ): Promise<FlowTerminalSummary> {
-  const store = await currentFlowStoreFactory({
-    artifactRoot: currentArtifactRoot ?? ''
-  })
+  const store = await createConfiguredFlowStore()
   return getTerminalManager(store).writeInput(request)
 }
 
 export async function resizeTerminal(
   request: Parameters<TerminalManagerPort['resize']>[0]
 ): Promise<FlowTerminalSummary> {
-  const store = await currentFlowStoreFactory({
-    artifactRoot: currentArtifactRoot ?? ''
-  })
+  const store = await createConfiguredFlowStore()
   return getTerminalManager(store).resize(request)
 }
 
 export async function terminateTerminal(
   request: Parameters<TerminalManagerPort['terminate']>[0]
 ): Promise<FlowTerminalSummary> {
-  const store = await currentFlowStoreFactory({
-    artifactRoot: currentArtifactRoot ?? ''
-  })
+  const store = await createConfiguredFlowStore()
   return getTerminalManager(store).terminate(request)
 }
 
 export async function dismissTerminal(
   request: Parameters<TerminalManagerPort['dismiss']>[0]
 ): Promise<FlowTerminalSummary> {
-  const store = await currentFlowStoreFactory({
-    artifactRoot: currentArtifactRoot ?? ''
-  })
+  const store = await createConfiguredFlowStore()
   return getTerminalManager(store).dismiss(request)
+}
+
+async function createConfiguredFlowStore(): Promise<FlowStore> {
+  if (currentArtifactRoot === undefined || currentArtifactRoot.trim() === '') {
+    throw new Error('Flow artifact root is not configured.')
+  }
+
+  return currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot
+  })
 }
 
 export async function retryRepositoryRemoteInWorkspace(

@@ -400,6 +400,19 @@ describe('Flow artifact store', () => {
           started_at: '2026-06-14T10:00:00.000Z'
         },
         {
+          terminal_id: 'terminal-cross-flow',
+          launch_id: 'launch-cross-flow',
+          provider: 'codex',
+          mode: 'interactive',
+          flow_id: 'other-flow',
+          phase_id: 'plan',
+          status: 'failed',
+          command: 'codex',
+          argv: [],
+          cwd: repository.path,
+          started_at: '2026-06-14T10:00:00.000Z'
+        },
+        {
           terminal_id: 'terminal-safe',
           launch_id: 'launch-safe',
           provider: 'claude',

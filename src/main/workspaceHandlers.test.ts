@@ -9,6 +9,7 @@ import {
   createRepositoryInWorkspace,
   getCurrentEditableConfig,
   loadInitialWorkspaceState,
+  listFlowTerminals,
   registerWorkspaceHandlers,
   retryRepositoryRemoteInWorkspace,
   selectRepository,
@@ -1223,6 +1224,34 @@ describe('workspace main handlers', () => {
       ipcChannels.config.updateCommonConfig,
       expect.any(Function)
     )
+  })
+
+  it('rejects terminal IPC before a usable artifact root is configured', async () => {
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> =>
+      readOnlyFlowStore(async () => [])
+    )
+    await loadInitialWorkspaceState({
+      configLoader: async () => ({
+        ok: true,
+        configPath: undefined,
+        scanRoots: [],
+        repos: [],
+        artifactRoot: {
+          configuredPath: '',
+          resolvedPath: ''
+        },
+        defaultAgent: null,
+        bootstrapHooks: [],
+        diagnostics: []
+      }),
+      flowStoreFactory
+    })
+
+    await expect(listFlowTerminals({
+      repositoryId: '/repo',
+      flowId: 'flow'
+    })).rejects.toThrow('Flow artifact root is not configured.')
+    expect(flowStoreFactory).not.toHaveBeenCalled()
   })
 
   it('validates terminal event subscriptions against persisted Flow ownership', async () => {
