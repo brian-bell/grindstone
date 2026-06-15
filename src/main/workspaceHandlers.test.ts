@@ -13,7 +13,8 @@ import {
   registerWorkspaceHandlers,
   retryRepositoryRemoteInWorkspace,
   selectRepository,
-  updateCommonConfig
+  updateCommonConfig,
+  updateFlowPhaseInWorkspace
 } from './workspaceHandlers'
 import type { FlowStore } from './flowStore'
 import type { FlowCommandRunner } from './flowCreation'
@@ -238,6 +239,75 @@ describe('workspace main handlers', () => {
     await expect(readLinkedFlowPlan({ flowId: 'missing-flow' })).resolves.toMatchObject({
       status: 'missing',
       flowId: 'missing-flow'
+    })
+  })
+
+  it('updates generated implementation child phases through the selected Flow context', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-edit-phase')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-edit-phase',
+      flowMeta('flow-edit-phase', repoPath, {
+        phases: [
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'ready',
+            order: 3
+          },
+          {
+            phase_id: 'implementation-first-slice',
+            title: 'First slice',
+            kind: 'implementation',
+            status: 'pending',
+            order: 1,
+            parent_phase_id: 'implementation',
+            generated: true,
+            editable: true,
+            source_plan_id: 'plan-one'
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(updateFlowPhaseInWorkspace({
+      flowId: 'flow-edit-phase',
+      phaseId: 'implementation-first-slice',
+      title: 'Edited slice',
+      order: 2,
+      notes: 'Edited notes'
+    })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          expect.objectContaining({
+            id: 'flow-edit-phase',
+            phases: [
+              expect.objectContaining({ id: 'implementation' }),
+              expect.objectContaining({
+                id: 'implementation-first-slice',
+                title: 'Edited slice',
+                order: 2,
+                parentPhaseId: 'implementation',
+                generated: true,
+                editable: true,
+                notes: 'Edited notes',
+                sourcePlanId: 'plan-one'
+              })
+            ]
+          })
+        ]
+      }
     })
   })
 

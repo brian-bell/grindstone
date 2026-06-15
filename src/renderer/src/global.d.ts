@@ -6,7 +6,8 @@ import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
-  RetryRepositoryRemoteRequest
+  RetryRepositoryRemoteRequest,
+  UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
 declare global {
@@ -17,6 +18,7 @@ declare global {
         selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
         readFlowPlan: (request: { flowId: string }) => Promise<LinkedFlowPlanResponse>
         createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
+        updateFlowPhase: (request: UpdateFlowPhaseRequest) => Promise<InitialWorkspaceState>
         createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
         retryRepositoryRemote: (
           request: RetryRepositoryRemoteRequest

@@ -13,7 +13,8 @@ import {
   type InitialWorkspaceState,
   type RepositoryCreateError,
   type RepositoryPaneState,
-  type RepositoryRow
+  type RepositoryRow,
+  type UpdateFlowPhaseRequest
 } from '@shared/workspace'
 import {
   getEditableConfig,
@@ -26,6 +27,7 @@ import {
 import { createFlow, type FlowCommandRunner, type LaunchPreparer } from './flowCreation'
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { ArtifactStoreError } from './artifactStore'
+import { createFlowOperations } from './flowOperations'
 import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 import {
@@ -365,6 +367,39 @@ export async function createFlowInWorkspace(
   return currentWorkspaceState
 }
 
+export async function updateFlowPhaseInWorkspace(
+  request: UpdateFlowPhaseRequest
+): Promise<InitialWorkspaceState> {
+  if (currentArtifactRoot === undefined) {
+    throw new Error('Flow artifact root is not configured.')
+  }
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof request.flowId !== 'string' ||
+    typeof request.phaseId !== 'string'
+  ) {
+    throw new Error('Update Flow phase request is invalid.')
+  }
+
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  if (workspaceState.flow.status !== 'ready') {
+    throw new Error('Select a repository before editing a Flow phase.')
+  }
+  if (!workspaceState.flow.flows.some((flow) => flow.id === request.flowId)) {
+    throw new Error(`Flow is not selected in this workspace: ${request.flowId}`)
+  }
+
+  await createFlowOperations({ artifactRoot: currentArtifactRoot }).updatePhase(request)
+  const refreshedWorkspace = await createWorkspaceStateFromContext(
+    await getWorkspaceContext(),
+    workspaceState.flow.repositoryId,
+    null
+  )
+  currentWorkspaceState = refreshedWorkspace
+  return refreshedWorkspace
+}
+
 export async function retryRepositoryRemoteInWorkspace(
   request: { retryId: string },
   options: { runCommand?: CommandRunner } = {}
@@ -466,6 +501,9 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.createFlow, (request) =>
     createFlowInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.updateFlowPhase, (request) =>
+    updateFlowPhaseInWorkspace(request)
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.createRepository, (request) =>
     createRepositoryInWorkspace(request)

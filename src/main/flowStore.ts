@@ -1,6 +1,7 @@
 import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import type { PersistedFlowPhase } from '@shared/artifacts'
 import type {
   FlowFailureSummary,
   FlowListRow,
@@ -35,6 +36,7 @@ export type FlowRecordInput = {
   commit?: string
   start?: FlowStartMetadata
   failure?: FlowFailureSummary
+  phases?: PersistedFlowPhase[]
   createdAt: string
   updatedAt: string
 }
@@ -298,9 +300,14 @@ function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
         title: phase.title,
         status: phase.status,
         order: phase.order,
+        parentPhaseId: optionalString(phase.parent_phase_id),
         kind: optionalString(phase.kind),
         outcome: optionalString(phase.outcome),
         summary: optionalString(phase.summary),
+        notes: optionalString(phase.notes),
+        generated: optionalBoolean(phase.generated),
+        editable: optionalBoolean(phase.editable),
+        sourcePlanId: optionalString(phase.source_plan_id),
         updatedAt: optionalString(phase.updated_at)
       }
     ]
@@ -308,11 +315,49 @@ function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
 
   return phases.length === 0
     ? undefined
-    : phases.sort((left, right) => left.order - right.order)
+    : sortPhaseSummaries(phases)
 }
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function sortPhaseSummaries(phases: FlowPhaseSummary[]): FlowPhaseSummary[] {
+  const topLevel = phases
+    .filter((phase) => phase.parentPhaseId === undefined)
+    .sort((left, right) => left.order - right.order)
+  const children = new Map<string, FlowPhaseSummary[]>()
+  for (const phase of phases) {
+    if (phase.parentPhaseId === undefined) {
+      continue
+    }
+    children.set(phase.parentPhaseId, [
+      ...(children.get(phase.parentPhaseId) ?? []),
+      phase
+    ])
+  }
+
+  const sorted: FlowPhaseSummary[] = []
+  const visit = (phase: FlowPhaseSummary): void => {
+    sorted.push(phase)
+    for (const child of (children.get(phase.id) ?? []).sort((left, right) => left.order - right.order)) {
+      visit(child)
+    }
+  }
+  for (const phase of topLevel) {
+    visit(phase)
+  }
+  const emitted = new Set(sorted.map((phase) => phase.id))
+  return [
+    ...sorted,
+    ...phases
+      .filter((phase) => !emitted.has(phase.id))
+      .sort((left, right) => left.order - right.order)
+  ]
 }
 
 async function flowMatchesRepository(
@@ -373,6 +418,7 @@ function toRawMetadata(record: FlowRecordInput): RawFlowMetadata {
     commit: record.commit,
     start: record.start === undefined ? undefined : toRawStart(record.start),
     failure: record.failure === undefined ? undefined : withoutUndefined(record.failure),
+    phases: record.phases,
     created_at: record.createdAt,
     updated_at: record.updatedAt
   })

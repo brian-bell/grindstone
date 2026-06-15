@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { lstat, realpath } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { CreateFlowRequest, FlowCreateError, FlowFailureSummary, FlowListRow, RepositoryRow } from '@shared/workspace'
+import { createDefaultFlowPhases } from '@shared/flowGraph'
 import type { RuntimeBootstrapHook } from './config'
 import type { CommandResult } from './repositoryCreation'
 import type { FlowStore } from './flowStore'
@@ -108,6 +109,7 @@ export async function createFlow({
       worktreePath: allocation.worktreePath,
       baseRef,
       createdAt,
+      phases: createDefaultFlowPhases(createdAt),
       updatedAt: createdAt
     })
   } catch (error) {

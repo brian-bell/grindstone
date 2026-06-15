@@ -51,6 +51,14 @@ export type CreateFlowRequest = {
   baseRef?: string
 }
 
+export type UpdateFlowPhaseRequest = {
+  flowId: string
+  phaseId: string
+  title?: string
+  order?: number
+  notes?: string
+}
+
 export type RepositoryCreateError = {
   code:
     | 'validation_error'
@@ -136,9 +144,14 @@ export type FlowPhaseSummary = {
   title: string
   status: string
   order: number
+  parentPhaseId?: string
   kind?: string
   outcome?: string
   summary?: string
+  notes?: string
+  generated?: boolean
+  editable?: boolean
+  sourcePlanId?: string
   updatedAt?: string
 }
 

@@ -10,7 +10,13 @@ import type {
   ConfigUpdateResponse,
   EditableConfigState
 } from '@shared/config'
-import type { CreateFlowRequest, CreateRepositoryRequest, InitialWorkspaceState } from '@shared/workspace'
+import type {
+  CreateFlowRequest,
+  CreateRepositoryRequest,
+  FlowListRow,
+  InitialWorkspaceState,
+  UpdateFlowPhaseRequest
+} from '@shared/workspace'
 
 const defaultInitialState: InitialWorkspaceState = {
   repository: {
@@ -293,7 +299,8 @@ const setWorkspaceApi = (
     flowId: 'artifact-backed-flow',
     planId: 'plan-flow-list',
     message: 'Linked plan missing'
-  } satisfies LinkedFlowPlanResponse)
+  } satisfies LinkedFlowPlanResponse),
+  updateFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -303,6 +310,7 @@ const setWorkspaceApi = (
         selectRepository,
         readFlowPlan,
         createFlow,
+        updateFlowPhase,
         createRepository,
         retryRepositoryRemote
       },
@@ -454,6 +462,136 @@ describe('App shell', () => {
     expect(detailsButton).toHaveAttribute('aria-expanded', 'true')
     expect(await within(flowTable).findByRole('region', { name: /artifact backed flow details/i }))
       .toHaveTextContent('Phase: Launch workspace - active')
+  })
+
+  it('renders nested implementation phases and edits generated children through IPC responses', async () => {
+    const user = userEvent.setup()
+    const nestedFlow: FlowListRow = {
+      id: 'phase-tree-flow',
+      title: 'Phase tree Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'plan',
+          title: 'Plan',
+          status: 'completed',
+          order: 1
+        },
+        {
+          id: 'implementation',
+          title: 'Implementation',
+          status: 'ready',
+          order: 3
+        },
+        {
+          id: 'implementation-build-api',
+          title: 'Build API',
+          status: 'pending',
+          order: 1,
+          parentPhaseId: 'implementation',
+          generated: true,
+          editable: true,
+          notes: 'Wire the handler'
+        }
+      ]
+    }
+    const nestedState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [nestedFlow]
+      }
+    }
+    const editedState: InitialWorkspaceState = {
+      ...nestedState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...nestedFlow,
+            phases: nestedFlow.phases?.map((phase) =>
+              phase.id === 'implementation-build-api'
+                ? { ...phase, title: 'Build API contract', order: 2, notes: 'Saved notes' }
+                : phase
+            )
+          }
+        ]
+      }
+    }
+    const updateFlowPhase = vi.fn<(
+      request: UpdateFlowPhaseRequest
+    ) => Promise<InitialWorkspaceState>>()
+      .mockRejectedValueOnce(new Error('Duplicate sibling phase title.'))
+      .mockResolvedValueOnce(editedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(nestedState),
+      vi.fn().mockResolvedValue(nestedState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: nestedState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(nestedState),
+      undefined,
+      updateFlowPhase
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /phase tree flow details/i }))
+    const phaseTree = within(flowPane).getByRole('region', { name: /phase tree flow details/i })
+    expect(phaseTree).toHaveTextContent('Phase: Implementation - ready')
+    expect(phaseTree).toHaveTextContent('Phase: Build API - pending')
+    expect(phaseTree).toHaveTextContent('Wire the handler')
+
+    await user.click(within(phaseTree).getByRole('button', { name: /^edit$/i }))
+    const editForm = within(phaseTree).getByRole('form', { name: /edit build api/i })
+    await user.clear(within(editForm).getByLabelText('Phase title'))
+    await user.type(within(editForm).getByLabelText('Phase title'), 'Duplicate title')
+    await user.clear(within(editForm).getByLabelText('Order'))
+    await user.type(within(editForm).getByLabelText('Order'), '2')
+    await user.clear(within(editForm).getByLabelText('Notes'))
+    await user.type(within(editForm).getByLabelText('Notes'), 'Saved notes')
+    await user.click(within(editForm).getByRole('button', { name: /^save$/i }))
+
+    expect(await within(editForm).findByRole('alert')).toHaveTextContent(
+      'Duplicate sibling phase title.'
+    )
+    expect(phaseTree).not.toHaveTextContent('Phase: Duplicate title - pending')
+
+    await user.clear(within(editForm).getByLabelText('Phase title'))
+    await user.type(within(editForm).getByLabelText('Phase title'), 'Build API contract')
+    await user.click(within(editForm).getByRole('button', { name: /^save$/i }))
+
+    expect(updateFlowPhase).toHaveBeenLastCalledWith({
+      flowId: 'phase-tree-flow',
+      phaseId: 'implementation-build-api',
+      title: 'Build API contract',
+      order: 2,
+      notes: 'Saved notes'
+    })
+    expect(await within(flowPane).findByText('Phase: Build API contract - pending'))
+      .toBeInTheDocument()
   })
 
   it('opens a linked plan from selected Flow context', async () => {

@@ -10,7 +10,8 @@ import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
-  RetryRepositoryRemoteRequest
+  RetryRepositoryRemoteRequest,
+  UpdateFlowPhaseRequest
 } from './workspace'
 
 export const ipcChannels = {
@@ -19,6 +20,7 @@ export const ipcChannels = {
     selectRepository: 'workspace:selectRepository',
     readFlowPlan: 'workspace:readFlowPlan',
     createFlow: 'workspace:createFlow',
+    updateFlowPhase: 'workspace:updateFlowPhase',
     createRepository: 'workspace:createRepository',
     retryRepositoryRemote: 'workspace:retryRepositoryRemote'
   },
@@ -41,6 +43,7 @@ export type IpcRequestMap = {
     flowId: string
   }
   'workspace:createFlow': CreateFlowRequest
+  'workspace:updateFlowPhase': UpdateFlowPhaseRequest
   'workspace:createRepository': CreateRepositoryRequest
   'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
   'config:getEditableConfig': undefined
@@ -52,6 +55,7 @@ export type IpcResponseMap = {
   'workspace:selectRepository': InitialWorkspaceState
   'workspace:readFlowPlan': LinkedFlowPlanResponse
   'workspace:createFlow': InitialWorkspaceState
+  'workspace:updateFlowPhase': InitialWorkspaceState
   'workspace:createRepository': InitialWorkspaceState
   'workspace:retryRepositoryRemote': InitialWorkspaceState
   'config:getEditableConfig': EditableConfigState

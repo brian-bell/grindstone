@@ -6,7 +6,8 @@ import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
-  RetryRepositoryRemoteRequest
+  RetryRepositoryRemoteRequest,
+  UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
 const grindstoneApi = {
@@ -49,6 +50,17 @@ const grindstoneApi = {
         return await invokeTypedIpc(
           ipcRenderer.invoke.bind(ipcRenderer),
           ipcChannels.workspace.createFlow,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async updateFlowPhase(request: UpdateFlowPhaseRequest): Promise<InitialWorkspaceState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.updateFlowPhase,
           request
         )
       } catch (error) {

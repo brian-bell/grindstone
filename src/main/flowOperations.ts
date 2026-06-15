@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PersistedFlowMetadata, PersistedFlowPhase } from '@shared/artifacts'
+import { createDefaultFlowPhases } from '@shared/flowGraph'
 import {
   ArtifactStoreError,
   assertSafeArtifactId,
@@ -11,6 +12,7 @@ import {
   writeJsonAtomically
 } from './artifactStore'
 import { createPlanStore } from './planStore'
+import { extractImplementationPhaseDrafts, type ImplementationPhaseDraft } from './planPhaseExtraction'
 
 export type CreateFlowInput = {
   id?: string
@@ -46,6 +48,16 @@ export type FlowOperations = {
   needsAttentionPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   restartPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   linkPlan: (input: { flowId: string; planId: string; now?: string }) => Promise<PersistedFlowMetadata>
+  updatePhase: (input: PhaseEditInput) => Promise<PersistedFlowMetadata>
+}
+
+export type PhaseEditInput = {
+  flowId: string
+  phaseId: string
+  title?: string
+  order?: number
+  notes?: string
+  now?: string
 }
 
 const PERSISTED_PHASE_STATUSES = new Set([
@@ -133,7 +145,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         commit: input.commit,
         created_at: now,
         updated_at: now,
-        phases: []
+        phases: createDefaultFlowPhases(now)
       })
       return writeFlow(flow)
     },
@@ -181,6 +193,12 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         throw new ArtifactStoreError('validation_error', `Invalid phase status: ${String(nextStatus)}`)
       }
       validateAgentPhaseStatus(input.status)
+      validatePlanReviewGate({
+        phases,
+        phase: existing,
+        phaseId: input.phaseId,
+        nextStatus
+      })
       validatePhaseTransition({
         currentStatus: existing?.status,
         nextStatus,
@@ -231,9 +249,30 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         phases[index] = phase
       }
 
+      let nextPhases = phases
+      if (input.phaseId === 'plan' && nextStatus === 'completed' && flow.plan_id !== undefined) {
+        nextPhases = promotePhase(nextPhases, 'plan-review', 'ready', now)
+      }
+      if (isPlanReviewApproval(phase)) {
+        const drafts = await readLinkedImplementationDrafts(flow, planStore.readPlan)
+        nextPhases = mergeGeneratedImplementationChildren(
+          promotePhase(nextPhases, 'implementation', 'ready', now),
+          flow.plan_id as string,
+          drafts,
+          now
+        )
+      }
+      if (input.phaseId === 'implementation' && nextStatus === 'running') {
+        nextPhases = nextPhases.map((candidate) =>
+          candidate.parent_phase_id === 'implementation' && candidate.status === 'pending'
+            ? { ...candidate, status: 'ready', updated_at: now }
+            : candidate
+        )
+      }
+
       return writeFlow({
         ...flow,
-        phases: phases.sort((left, right) => left.order - right.order),
+        phases: sortPersistedPhases(nextPhases),
         updated_at: now
       })
     },
@@ -294,6 +333,31 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         plan_path: plan.plan_path,
         updated_at: now
       })
+    },
+
+    async updatePhase(input) {
+      assertSafeArtifactId('phase', input.phaseId)
+      const flow = await readFlow(input.flowId)
+      const now = input.now ?? new Date().toISOString()
+      const phases = [...(flow.phases ?? [])]
+      const index = phases.findIndex((phase) => phase.phase_id === input.phaseId)
+      const existing = index === -1 ? undefined : phases[index]
+      if (existing === undefined) {
+        throw new ArtifactStoreError('validation_error', `Unknown phase: ${input.phaseId}`, input.phaseId)
+      }
+      validateEditablePhaseUpdate(existing, phases, input)
+      phases[index] = withoutUndefined({
+        ...existing,
+        title: input.title ?? existing.title,
+        order: input.order ?? existing.order,
+        notes: input.notes ?? existing.notes,
+        updated_at: now
+      })
+      return writeFlow({
+        ...flow,
+        phases: sortPersistedPhases(phases),
+        updated_at: now
+      })
     }
   }
 }
@@ -334,6 +398,206 @@ export function validatePhaseNotes({
   if (!SAFE_PHASE_OUTCOME.test(outcome)) {
     throw new ArtifactStoreError('validation_error', `Invalid phase outcome: ${outcome}`)
   }
+}
+
+function validatePlanReviewGate({
+  phases,
+  phase,
+  phaseId,
+  nextStatus
+}: {
+  phases: PersistedFlowPhase[]
+  phase?: PersistedFlowPhase
+  phaseId: string
+  nextStatus: string
+}): void {
+  if (
+    (phaseId !== 'implementation' && phase?.parent_phase_id !== 'implementation') ||
+    (nextStatus !== 'running' && nextStatus !== 'completed')
+  ) {
+    return
+  }
+
+  const planReview = phases.find((candidate) => candidate.phase_id === 'plan-review')
+  if (planReview === undefined) {
+    return
+  }
+  if (isApprovingPlanReview(planReview)) {
+    if (phase?.parent_phase_id === 'implementation') {
+      const parent = phases.find((candidate) => candidate.phase_id === 'implementation')
+      if (parent?.status !== 'running' && parent?.status !== 'completed') {
+        throw new ArtifactStoreError(
+          'validation_error',
+          'Generated implementation phases cannot run before Implementation starts.'
+        )
+      }
+    }
+    return
+  }
+
+  throw new ArtifactStoreError(
+    'validation_error',
+    'Implementation requires a completed approving Plan Review.'
+  )
+}
+
+function isPlanReviewApproval(phase: PersistedFlowPhase): boolean {
+  return phase.phase_id === 'plan-review' && isApprovingPlanReview(phase)
+}
+
+function isApprovingPlanReview(phase: PersistedFlowPhase): boolean {
+  return phase.status === 'completed' &&
+    (phase.outcome === 'approved' || phase.outcome === 'approved_with_concerns')
+}
+
+function promotePhase(
+  phases: PersistedFlowPhase[],
+  phaseId: string,
+  status: 'ready',
+  now: string
+): PersistedFlowPhase[] {
+  return phases.map((phase) =>
+    phase.phase_id === phaseId && phase.status === 'pending'
+      ? { ...phase, status, updated_at: now }
+      : phase
+  )
+}
+
+async function readLinkedImplementationDrafts(
+  flow: PersistedFlowMetadata,
+  readPlan: ReturnType<typeof createPlanStore>['readPlan']
+): Promise<ImplementationPhaseDraft[]> {
+  if (flow.plan_id === undefined || flow.plan_id.trim() === '') {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'Approving Plan Review requires a linked plan.'
+    )
+  }
+  const plan = await readPlan(flow.plan_id)
+  if (
+    flow.plan_path !== undefined &&
+    plan.metadata.plan_path !== undefined &&
+    flow.plan_path !== plan.metadata.plan_path
+  ) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      `Linked plan path mismatch for ${flow.plan_id}.`
+    )
+  }
+  return extractImplementationPhaseDrafts(plan.body)
+}
+
+function mergeGeneratedImplementationChildren(
+  phases: PersistedFlowPhase[],
+  planId: string,
+  drafts: ImplementationPhaseDraft[],
+  now: string
+): PersistedFlowPhase[] {
+  const byId = new Map(phases.map((phase) => [phase.phase_id, phase]))
+  const next = phases.map((phase) => ({ ...phase }))
+  for (const draft of drafts) {
+    const phaseId = `implementation-${draft.idBase}`
+    const existing = byId.get(phaseId)
+    if (existing === undefined) {
+      next.push(withoutUndefined({
+        phase_id: phaseId,
+        title: draft.title,
+        kind: 'implementation',
+        status: 'pending',
+        order: draft.order,
+        notes: draft.notes,
+        parent_phase_id: 'implementation',
+        generated: true,
+        editable: true,
+        source_plan_id: planId,
+        created_at: now,
+        updated_at: now
+      }))
+      continue
+    }
+    const index = next.findIndex((phase) => phase.phase_id === phaseId)
+    next[index] = withoutUndefined({
+      ...existing,
+      kind: existing.kind ?? 'implementation',
+      parent_phase_id: existing.parent_phase_id ?? 'implementation',
+      generated: true,
+      editable: true,
+      source_plan_id: planId,
+      updated_at: now
+    })
+  }
+  return next
+}
+
+function validateEditablePhaseUpdate(
+  phase: PersistedFlowPhase,
+  phases: PersistedFlowPhase[],
+  input: PhaseEditInput
+): void {
+  if (phase.generated !== true || phase.editable !== true || phase.parent_phase_id !== 'implementation') {
+    throw new ArtifactStoreError('validation_error', `Phase is not editable: ${phase.phase_id}`, phase.phase_id)
+  }
+  if (phase.status !== 'pending' && phase.status !== 'ready') {
+    throw new ArtifactStoreError('validation_error', `Phase is locked: ${phase.phase_id}`, phase.phase_id)
+  }
+  if (input.title !== undefined && input.title.trim() === '') {
+    throw new ArtifactStoreError('validation_error', 'Phase title cannot be empty.')
+  }
+  if (input.order !== undefined && !Number.isInteger(input.order)) {
+    throw new ArtifactStoreError('validation_error', 'Phase order must be an integer.')
+  }
+
+  const nextTitle = input.title?.trim() ?? phase.title
+  const nextOrder = input.order ?? phase.order
+  const normalizedTitle = normalizePhaseTitle(nextTitle)
+  const conflict = phases.find((candidate) =>
+    candidate.phase_id !== phase.phase_id &&
+    candidate.parent_phase_id === phase.parent_phase_id &&
+    (candidate.order === nextOrder || normalizePhaseTitle(candidate.title) === normalizedTitle)
+  )
+  if (conflict !== undefined) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      `Phase edit conflicts with sibling phase: ${conflict.title}`,
+      phase.phase_id
+    )
+  }
+}
+
+function normalizePhaseTitle(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function sortPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[] {
+  const topLevel = phases
+    .filter((phase) => phase.parent_phase_id === undefined)
+    .sort((left, right) => left.order - right.order)
+  const children = new Map<string, PersistedFlowPhase[]>()
+  for (const phase of phases) {
+    if (phase.parent_phase_id === undefined) {
+      continue
+    }
+    children.set(phase.parent_phase_id, [
+      ...(children.get(phase.parent_phase_id) ?? []),
+      phase
+    ])
+  }
+
+  const sorted: PersistedFlowPhase[] = []
+  const visit = (phase: PersistedFlowPhase): void => {
+    sorted.push(phase)
+    for (const child of (children.get(phase.phase_id) ?? []).sort((left, right) => left.order - right.order)) {
+      visit(child)
+    }
+  }
+  for (const phase of topLevel) {
+    visit(phase)
+  }
+  const emitted = new Set(sorted.map((phase) => phase.phase_id))
+  const orphans = phases
+    .filter((phase) => !emitted.has(phase.phase_id))
+    .sort((left, right) => left.order - right.order)
+  return [...sorted, ...orphans]
 }
 
 function validateAgentPhaseStatus(status: string | undefined): void {
