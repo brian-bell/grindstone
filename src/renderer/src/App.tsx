@@ -1,11 +1,14 @@
 import {
+  Check,
   CirclePlus,
   GitBranch,
   Info,
+  Play,
   Plus,
   RotateCcw,
   Save,
   Settings,
+  SkipForward,
   Sparkles,
   Trash2,
   X
@@ -1591,9 +1594,22 @@ function FlowPhaseRow({
   const [notes, setNotes] = useState(phase.notes ?? '')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [pendingAction, setPendingAction] = useState<'launch' | 'skip' | 'complete' | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [isSkipOpen, setIsSkipOpen] = useState(false)
+  const [skipNotes, setSkipNotes] = useState('')
+  const [skipError, setSkipError] = useState<string | null>(null)
   const canEdit = phase.generated === true &&
     phase.editable === true &&
     (phase.status === 'pending' || phase.status === 'ready')
+  const isImplementationPhase = phase.id === 'implementation' || isImplementationChildPhase(phase)
+  const canLaunch = isImplementationPhase &&
+    (phase.status === 'ready' || phase.status === 'needs_attention')
+  const canComplete = isImplementationPhase &&
+    phase.status === 'running' &&
+    (phase.id !== 'implementation' || implementationChildrenCanComplete(flow.phases ?? []))
+  const canSkip = isImplementationChildPhase(phase) &&
+    (phase.status === 'pending' || phase.status === 'ready' || phase.status === 'running')
 
   useEffect(() => {
     if (!isEditing) {
@@ -1603,6 +1619,13 @@ function FlowPhaseRow({
       setError(null)
     }
   }, [isEditing, phase.notes, phase.order, phase.title])
+
+  useEffect(() => {
+    setActionError(null)
+    setSkipError(null)
+    setIsSkipOpen(false)
+    setSkipNotes('')
+  }, [phase.id, phase.status])
 
   async function handleSave(): Promise<void> {
     const parsedOrder = Number(order)
@@ -1631,6 +1654,64 @@ function FlowPhaseRow({
       setError(getErrorMessage(saveError))
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  async function handleLaunch(): Promise<void> {
+    setPendingAction('launch')
+    setActionError(null)
+    try {
+      const workspace = await window.grindstone.workspace.launchFlowPhase({
+        flowId: flow.id,
+        phaseId: phase.id
+      })
+      onWorkspaceUpdate(workspace)
+    } catch (launchError: unknown) {
+      setActionError(getErrorMessage(launchError))
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function handleComplete(): Promise<void> {
+    setPendingAction('complete')
+    setActionError(null)
+    try {
+      const workspace = await window.grindstone.workspace.completeFlowPhase({
+        flowId: flow.id,
+        phaseId: phase.id
+      })
+      onWorkspaceUpdate(workspace)
+    } catch (completeError: unknown) {
+      setActionError(getErrorMessage(completeError))
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function handleSkip(): Promise<void> {
+    const trimmedNotes = skipNotes.trim()
+    if (trimmedNotes === '') {
+      setSkipError('Skip notes are required.')
+      return
+    }
+
+    setPendingAction('skip')
+    setSkipError(null)
+    setActionError(null)
+    try {
+      const workspace = await window.grindstone.workspace.skipFlowPhase({
+        flowId: flow.id,
+        phaseId: phase.id,
+        notes: trimmedNotes
+      })
+      onWorkspaceUpdate(workspace)
+      setIsSkipOpen(false)
+      setSkipNotes('')
+    } catch (skipActionError: unknown) {
+      setActionError(getErrorMessage(skipActionError))
+    } finally {
+      setPendingAction(null)
     }
   }
 
@@ -1701,27 +1782,144 @@ function FlowPhaseRow({
   }
 
   return (
-    <div
-      className="phase-tree-row"
-      style={{ marginLeft: `${level * 18}px` }}
-    >
-      <span className="phase-tree-copy">
-        <span>{formatPhaseDetail(phase)}</span>
-        {phase.notes === undefined ? null : (
-          <span className="phase-tree-notes">{phase.notes}</span>
-        )}
-      </span>
-      {canEdit ? (
-        <button
-          className="secondary-button phase-edit-button"
-          onClick={() => setIsEditing(true)}
-          type="button"
+    <div className="phase-row-wrap">
+      <div
+        className="phase-tree-row"
+        style={{ marginLeft: `${level * 18}px` }}
+      >
+        <span className="phase-tree-copy">
+          <span>{formatPhaseDetail(phase)}</span>
+          {phase.notes === undefined ? null : (
+            <span className="phase-tree-notes">{phase.notes}</span>
+          )}
+        </span>
+        <span className="phase-tree-actions">
+          {canLaunch ? (
+            <button
+              aria-label={`Launch ${phase.title}`}
+              className="icon-button phase-action-button"
+              disabled={pendingAction !== null}
+              onClick={() => void handleLaunch()}
+              title={`Launch ${phase.title}`}
+              type="button"
+            >
+              <Play aria-hidden="true" size={14} />
+            </button>
+          ) : null}
+          {canComplete ? (
+            <button
+              aria-label={`Complete ${phase.title}`}
+              className="icon-button phase-action-button"
+              disabled={pendingAction !== null}
+              onClick={() => void handleComplete()}
+              title={`Complete ${phase.title}`}
+              type="button"
+            >
+              <Check aria-hidden="true" size={14} />
+            </button>
+          ) : null}
+          {canSkip ? (
+            <button
+              aria-label={`Skip ${phase.title}`}
+              className="icon-button phase-action-button"
+              disabled={pendingAction !== null}
+              onClick={() => {
+                setIsSkipOpen((open) => !open)
+                setSkipError(null)
+                setActionError(null)
+              }}
+              title={`Skip ${phase.title}`}
+              type="button"
+            >
+              <SkipForward aria-hidden="true" size={14} />
+            </button>
+          ) : null}
+          {canEdit ? (
+            <button
+              className="secondary-button phase-edit-button"
+              disabled={pendingAction !== null}
+              onClick={() => setIsEditing(true)}
+              type="button"
+            >
+              <span>Edit</span>
+            </button>
+          ) : null}
+        </span>
+      </div>
+      {isSkipOpen ? (
+        <form
+          aria-label={`Skip ${phase.title}`}
+          className="phase-skip-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handleSkip()
+          }}
+          style={{ marginLeft: `${level * 18}px` }}
         >
-          <span>Edit</span>
-        </button>
+          <label className="phase-edit-field phase-notes-field">
+            <span>Skip notes for {phase.title}</span>
+            <textarea
+              aria-label={`Skip notes for ${phase.title}`}
+              disabled={pendingAction === 'skip'}
+              onChange={(event) => setSkipNotes(event.currentTarget.value)}
+              value={skipNotes}
+            />
+          </label>
+          {skipError === null ? null : (
+            <div className="phase-edit-error" role="alert">
+              {skipError}
+            </div>
+          )}
+          <div className="phase-edit-actions">
+            <button
+              className="secondary-button"
+              disabled={pendingAction === 'skip'}
+              onClick={() => {
+                setIsSkipOpen(false)
+                setSkipError(null)
+                setSkipNotes('')
+              }}
+              type="button"
+            >
+              <X aria-hidden="true" size={15} />
+              <span>Cancel</span>
+            </button>
+            <button
+              className="primary-button"
+              disabled={pendingAction === 'skip'}
+              type="submit"
+            >
+              <SkipForward aria-hidden="true" size={15} />
+              <span>{pendingAction === 'skip' ? 'Skipping' : 'Skip phase'}</span>
+            </button>
+          </div>
+        </form>
       ) : null}
+      {actionError === null ? null : (
+        <div
+          className="phase-edit-error phase-action-error"
+          role="alert"
+          style={{ marginLeft: `${level * 18}px` }}
+        >
+          {actionError}
+        </div>
+      )}
     </div>
   )
+}
+
+function implementationChildrenCanComplete(phases: FlowPhaseSummary[]): boolean {
+  return phases
+    .filter(isImplementationChildPhase)
+    .every((phase) =>
+      phase.status === 'completed' ||
+        (phase.status === 'skipped' && phase.notes !== undefined && phase.notes.trim() !== '')
+    )
+}
+
+function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
+  return phase.parentPhaseId === 'implementation' &&
+    (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
 }
 
 type FlowPlanViewState =
@@ -1832,7 +2030,7 @@ function formatPhaseSummary(flow: FlowListRow): string {
 }
 
 function isDonePhase(phase: FlowPhaseSummary): boolean {
-  return phase.status === 'done' || phase.status === 'completed'
+  return phase.status === 'done' || phase.status === 'completed' || phase.status === 'skipped'
 }
 
 function truncateText(value: string, maxLength: number): string {

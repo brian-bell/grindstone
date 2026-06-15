@@ -148,6 +148,7 @@ describe('Flow operations', () => {
         expect.objectContaining({
           phase_id: 'implementation-persist-graph',
           parent_phase_id: 'implementation',
+          kind: 'implementation_child',
           status: 'pending',
           generated: true,
           editable: true,
@@ -157,6 +158,7 @@ describe('Flow operations', () => {
         expect.objectContaining({
           phase_id: 'implementation-render-graph',
           parent_phase_id: 'implementation',
+          kind: 'implementation_child',
           status: 'pending',
           generated: true,
           editable: true,
@@ -219,6 +221,76 @@ describe('Flow operations', () => {
     })
   })
 
+  it('treats legacy generated implementation rows as children when Implementation starts', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'legacy-generated-children',
+      title: 'Legacy generated children',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'legacy-generated-children', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'plan-review',
+          title: 'Plan Review',
+          kind: 'plan_review',
+          status: 'completed',
+          outcome: 'approved',
+          order: 2
+        },
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'ready',
+          order: 3
+        },
+        {
+          phase_id: 'implementation-legacy-child',
+          title: 'Legacy child',
+          kind: 'implementation',
+          status: 'pending',
+          order: 1,
+          parent_phase_id: 'implementation',
+          generated: true,
+          editable: true,
+          source_plan_id: 'legacy-plan'
+        },
+        {
+          phase_id: 'implementation-not-generated',
+          title: 'Not generated',
+          kind: 'implementation',
+          status: 'pending',
+          order: 2,
+          parent_phase_id: 'implementation'
+        }
+      ]
+    }))
+
+    await expect(flows.setPhase({
+      flowId: 'legacy-generated-children',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:01:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'implementation-legacy-child',
+          kind: 'implementation_child',
+          status: 'ready'
+        }),
+        expect.objectContaining({
+          phase_id: 'implementation-not-generated',
+          kind: 'implementation',
+          status: 'pending'
+        })
+      ])
+    })
+  })
+
   it('promotes downstream default phases as predecessors complete', async () => {
     const root = await makeTempDir()
     const plans = createPlanStore({ artifactRoot: root })
@@ -264,6 +336,28 @@ describe('Flow operations', () => {
       phaseId: 'implementation',
       outcome: 'implemented',
       now: '2026-06-15T12:05:00.000Z'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Implementation cannot complete until all generated implementation children are completed or skipped with notes.'
+    })
+
+    await flows.setPhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation-build-the-graph',
+      status: 'running',
+      now: '2026-06-15T12:05:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation-build-the-graph',
+      outcome: 'implemented',
+      now: '2026-06-15T12:06:00.000Z'
+    })
+    await expect(flows.completePhase({
+      flowId: 'downstream-flow',
+      phaseId: 'implementation',
+      outcome: 'implemented',
+      now: '2026-06-15T12:07:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'review-loop-1', status: 'ready' })
@@ -274,13 +368,13 @@ describe('Flow operations', () => {
       flowId: 'downstream-flow',
       phaseId: 'review-loop-1',
       status: 'running',
-      now: '2026-06-15T12:06:00.000Z'
+      now: '2026-06-15T12:08:00.000Z'
     })
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'review-loop-1',
       outcome: 'completed',
-      now: '2026-06-15T12:07:00.000Z'
+      now: '2026-06-15T12:09:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'review-loop-2', status: 'ready' })
@@ -291,13 +385,13 @@ describe('Flow operations', () => {
       flowId: 'downstream-flow',
       phaseId: 'review-loop-2',
       status: 'running',
-      now: '2026-06-15T12:08:00.000Z'
+      now: '2026-06-15T12:10:00.000Z'
     })
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'review-loop-2',
       outcome: 'completed',
-      now: '2026-06-15T12:09:00.000Z'
+      now: '2026-06-15T12:11:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' })
@@ -308,16 +402,210 @@ describe('Flow operations', () => {
       flowId: 'downstream-flow',
       phaseId: 'pr-creation',
       status: 'running',
-      now: '2026-06-15T12:10:00.000Z'
+      now: '2026-06-15T12:12:00.000Z'
     })
     await expect(flows.completePhase({
       flowId: 'downstream-flow',
       phaseId: 'pr-creation',
       outcome: 'pr_open',
-      now: '2026-06-15T12:11:00.000Z'
+      now: '2026-06-15T12:13:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
         expect.objectContaining({ phase_id: 'human-review', status: 'ready' })
+      ])
+    })
+  })
+
+  it('only promotes implementation-child rows when Implementation starts', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'child-promotion-plan',
+      title: 'Child Promotion Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build API\n'
+    })
+    await flows.createFlow({
+      id: 'child-promotion-flow',
+      title: 'Child promotion Flow',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await flows.linkPlan({
+      flowId: 'child-promotion-flow',
+      planId: 'child-promotion-plan',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-promotion-flow',
+      phaseId: 'plan',
+      outcome: 'plan_saved',
+      now: '2026-06-15T12:02:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-promotion-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:03:00.000Z'
+    })
+    await rewriteFlow(root, 'child-promotion-flow', (flow) => ({
+      ...flow,
+      phases: [
+        ...(Array.isArray(flow.phases) ? flow.phases : []),
+        {
+          phase_id: 'implementation-legacy',
+          title: 'Legacy row',
+          kind: 'implementation',
+          status: 'pending',
+          order: 2,
+          parent_phase_id: 'implementation',
+          created_at: '2026-06-15T12:03:00.000Z',
+          updated_at: '2026-06-15T12:03:00.000Z'
+        }
+      ]
+    }))
+
+    await expect(flows.setPhase({
+      flowId: 'child-promotion-flow',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:04:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'implementation-build-api', status: 'ready' }),
+        expect.objectContaining({ phase_id: 'implementation-legacy', status: 'pending' })
+      ])
+    })
+  })
+
+  it('does not promote review loop from settled children before Implementation starts', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'prestart-skip-plan',
+      title: 'Prestart Skip Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build API\n'
+    })
+    await flows.createFlow({
+      id: 'prestart-skip-flow',
+      title: 'Prestart skip Flow',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await flows.linkPlan({
+      flowId: 'prestart-skip-flow',
+      planId: 'prestart-skip-plan',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'plan',
+      outcome: 'plan_saved',
+      now: '2026-06-15T12:02:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:03:00.000Z'
+    })
+
+    await expect(flows.setPhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'implementation-build-api',
+      status: 'skipped',
+      notes: 'Covered elsewhere.',
+      now: '2026-06-15T12:04:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'implementation', status: 'ready' }),
+        expect.objectContaining({ phase_id: 'review-loop-1', status: 'pending' })
+      ])
+    })
+
+    await expect(flows.setPhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:05:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'review-loop-1', status: 'ready' })
+      ])
+    })
+  })
+
+  it('promotes Review Loop 1 after every implementation child is completed or skipped', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'child-readiness-plan',
+      title: 'Child Readiness Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build API\n- Render UI\n'
+    })
+    await flows.createFlow({
+      id: 'child-readiness-flow',
+      title: 'Child readiness Flow',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await flows.linkPlan({
+      flowId: 'child-readiness-flow',
+      planId: 'child-readiness-plan',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'plan',
+      outcome: 'plan_saved',
+      now: '2026-06-15T12:02:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:03:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:04:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-build-api',
+      status: 'running',
+      now: '2026-06-15T12:05:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-build-api',
+      outcome: 'implemented',
+      now: '2026-06-15T12:06:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-render-ui',
+      status: 'running',
+      now: '2026-06-15T12:07:00.000Z'
+    })
+
+    await expect(flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-render-ui',
+      status: 'skipped',
+      notes: 'Covered by the API slice.',
+      now: '2026-06-15T12:08:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'implementation', status: 'running' }),
+        expect.objectContaining({ phase_id: 'review-loop-1', status: 'ready' })
       ])
     })
   })
@@ -514,6 +802,16 @@ describe('Flow operations', () => {
       order: 7,
       notes: 'Keep my edit.'
     })
+    await rewriteFlow(root, 'idempotent-flow', (flow) => ({
+      ...flow,
+      phases: Array.isArray(flow.phases)
+        ? flow.phases.map((phase) =>
+            isRawPhase(phase) && phase.phase_id === 'implementation-first-slice'
+              ? { ...phase, kind: 'implementation' }
+              : phase
+          )
+        : flow.phases
+    }))
 
     const approvedAgain = await flows.completePhase({
       flowId: 'idempotent-flow',
@@ -528,6 +826,7 @@ describe('Flow operations', () => {
       expect.objectContaining({
         phase_id: 'implementation-first-slice',
         title: 'Edited first slice',
+        kind: 'implementation_child',
         order: 7,
         notes: 'Keep my edit.',
         source_plan_id: 'idempotent-plan'

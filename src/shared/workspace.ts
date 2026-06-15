@@ -59,6 +59,23 @@ export type UpdateFlowPhaseRequest = {
   notes?: string
 }
 
+export type LaunchFlowPhaseRequest = {
+  flowId: string
+  phaseId: string
+}
+
+export type SkipFlowPhaseRequest = {
+  flowId: string
+  phaseId: string
+  notes: string
+}
+
+export type CompleteFlowPhaseRequest = {
+  flowId: string
+  phaseId: string
+  summary?: string
+}
+
 export type RepositoryCreateError = {
   code:
     | 'validation_error'
@@ -149,6 +166,7 @@ export type FlowPhaseSummary = {
   outcome?: string
   summary?: string
   notes?: string
+  launchIds?: string[]
   generated?: boolean
   editable?: boolean
   sourcePlanId?: string

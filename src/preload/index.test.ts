@@ -4,10 +4,13 @@ import type { LinkedFlowPlanResponse } from '@shared/artifacts'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
 import {
   defaultInitialWorkspaceState,
+  type CompleteFlowPhaseRequest,
   type CreateFlowRequest,
   type CreateRepositoryRequest,
   type InitialWorkspaceState,
+  type LaunchFlowPhaseRequest,
   type RetryRepositoryRemoteRequest,
+  type SkipFlowPhaseRequest,
   type UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
@@ -18,6 +21,9 @@ type PreloadApi = {
     readFlowPlan: (request: { flowId: string }) => Promise<LinkedFlowPlanResponse>
     createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
     updateFlowPhase: (request: UpdateFlowPhaseRequest) => Promise<InitialWorkspaceState>
+    launchFlowPhase: (request: LaunchFlowPhaseRequest) => Promise<InitialWorkspaceState>
+    skipFlowPhase: (request: SkipFlowPhaseRequest) => Promise<InitialWorkspaceState>
+    completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
     createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
     retryRepositoryRemote: (
       request: RetryRepositoryRemoteRequest
@@ -78,6 +84,9 @@ describe('preload bridge', () => {
       'readFlowPlan',
       'createFlow',
       'updateFlowPhase',
+      'launchFlowPhase',
+      'skipFlowPhase',
+      'completeFlowPhase',
       'createRepository',
       'retryRepositoryRemote'
     ])
@@ -181,6 +190,42 @@ describe('preload bridge', () => {
 
     await expect(api.workspace.updateFlowPhase(request)).resolves.toEqual(defaultInitialWorkspaceState)
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.updateFlowPhase, request)
+  })
+
+  it('invokes Flow phase actions through the shared channels', async () => {
+    const { invoke, api } = await loadPreload()
+    invoke.mockResolvedValue(defaultInitialWorkspaceState)
+
+    await expect(api.workspace.launchFlowPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation'
+    })).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.launchFlowPhase, {
+      flowId: 'flow-one',
+      phaseId: 'implementation'
+    })
+
+    await expect(api.workspace.skipFlowPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation-ui',
+      notes: 'Covered elsewhere.'
+    })).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.skipFlowPhase, {
+      flowId: 'flow-one',
+      phaseId: 'implementation-ui',
+      notes: 'Covered elsewhere.'
+    })
+
+    await expect(api.workspace.completeFlowPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      summary: 'Implemented.'
+    })).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.completeFlowPhase, {
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      summary: 'Implemented.'
+    })
   })
 
   it('invokes remote retry through the shared channel', async () => {

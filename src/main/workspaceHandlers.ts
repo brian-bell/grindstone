@@ -1,19 +1,26 @@
 import type { IpcMain } from 'electron'
 import { createHash } from 'node:crypto'
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/config'
-import type { LinkedFlowPlanResponse } from '@shared/artifacts'
+import type { LinkedFlowPlanResponse, PersistedFlowPhase } from '@shared/artifacts'
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
+  type CompleteFlowPhaseRequest,
   type CreateFlowRequest,
   type CreateRepositoryRequest,
   type FlowCreateError,
+  type FlowListRow,
   type FlowPaneState,
+  type FlowPhaseSummary,
   type InitialWorkspaceState,
+  type LaunchFlowPhaseRequest,
   type RepositoryCreateError,
   type RepositoryPaneState,
   type RepositoryRow,
+  type SkipFlowPhaseRequest,
   type UpdateFlowPhaseRequest
 } from '@shared/workspace'
 import {
@@ -27,6 +34,13 @@ import {
 import { createFlow, type FlowCommandRunner, type LaunchPreparer } from './flowCreation'
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { ArtifactStoreError } from './artifactStore'
+import {
+  createFlowPhaseLaunchId,
+  createFlowPhaseLaunchRecord,
+  noopFlowPhaseRunner,
+  type FlowPhaseLaunchContext,
+  type FlowPhaseRunner
+} from './flowPhaseActions'
 import { createFlowOperations } from './flowOperations'
 import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
@@ -60,6 +74,7 @@ let currentWorkspaceState: InitialWorkspaceState | undefined
 let currentArtifactRoot: string | undefined
 let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
 let currentSelectionRequestId = 0
+const flowMutationQueue = new Map<string, Promise<void>>()
 
 export async function loadInitialWorkspaceState(
   options: LoadWorkspaceStateOptions = {}
@@ -387,7 +402,9 @@ export async function updateFlowPhaseInWorkspace(
     throw new Error(`Flow is not selected in this workspace: ${request.flowId}`)
   }
 
-  await createFlowOperations({ artifactRoot: currentArtifactRoot }).updatePhase(request)
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).updatePhase(request)
+  })
   const refreshedWorkspace = await createWorkspaceStateFromContext(
     await getWorkspaceContext(),
     workspaceState.flow.repositoryId,
@@ -395,6 +412,276 @@ export async function updateFlowPhaseInWorkspace(
   )
   currentWorkspaceState = refreshedWorkspace
   return refreshedWorkspace
+}
+
+export async function launchFlowPhaseInWorkspace(
+  request: LaunchFlowPhaseRequest,
+  options: { runPhase?: FlowPhaseRunner } = {}
+): Promise<InitialWorkspaceState> {
+  const { flow, phase, workspaceState } = await getSelectedPhaseForAction(
+    request,
+    'launch'
+  )
+  if (!isLaunchableImplementationPhase(phase)) {
+    throw new Error(`Phase cannot be launched from this workspace: ${phase.id}`)
+  }
+  if (phase.status !== 'ready' && phase.status !== 'needs_attention') {
+    throw new Error(`Phase is not ready to launch: ${phase.id}`)
+  }
+
+  const requestId = currentSelectionRequestId
+  const flowOperations = createFlowOperations({ artifactRoot: currentArtifactRoot as string })
+  const launchContext = createFlowPhaseLaunchContext({
+    artifactRoot: currentArtifactRoot as string,
+    flow,
+    phase,
+    launchId: createFlowPhaseLaunchId()
+  })
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    const currentFlow = await flowOperations.readFlow(request.flowId)
+    const currentPhase = currentFlow.phases?.find((candidate) => candidate.phase_id === request.phaseId)
+    if (currentPhase === undefined || !isLaunchablePersistedImplementationPhase(currentPhase)) {
+      throw new Error(`Phase cannot be launched from this workspace: ${request.phaseId}`)
+    }
+    if (currentPhase.status !== 'ready' && currentPhase.status !== 'needs_attention') {
+      throw new Error(`Phase is not ready to launch: ${request.phaseId}`)
+    }
+    await createFlowPhaseLaunchRecord(launchContext)
+    try {
+      await flowOperations.setPhase({
+        flowId: request.flowId,
+        phaseId: request.phaseId,
+        status: 'running',
+        notes: currentPhase.status === 'needs_attention' ? 'Retrying phase launch.' : undefined,
+        launchId: launchContext.launchId
+      })
+    } catch (error) {
+      await removeFlowPhaseLaunchRecord(launchContext)
+      throw error
+    }
+  })
+
+  try {
+    await (options.runPhase ?? noopFlowPhaseRunner)(launchContext)
+  } catch (error) {
+    try {
+      await runExclusiveFlowMutation(request.flowId, async () => {
+        await flowOperations.needsAttentionPhase({
+          flowId: request.flowId,
+          phaseId: request.phaseId,
+          notes: `Phase launch failed: ${getErrorMessage(error)}`,
+          launchId: launchContext.launchId
+        })
+      })
+    } catch (markError) {
+      await refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+      throw markError
+    }
+    return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+  }
+
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
+export async function skipFlowPhaseInWorkspace(
+  request: SkipFlowPhaseRequest
+): Promise<InitialWorkspaceState> {
+  const { phase, workspaceState } = await getSelectedPhaseForAction(request, 'skip')
+  if (!isSkippableImplementationChildPhase(phase)) {
+    throw new Error(`Phase cannot be skipped from this workspace: ${phase.id}`)
+  }
+  if (typeof request.notes !== 'string') {
+    throw new Error('Flow phase skip request is invalid.')
+  }
+  if (request.notes.trim() === '') {
+    throw new Error('Skipping a phase requires notes.')
+  }
+
+  const requestId = currentSelectionRequestId
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).setPhase({
+      flowId: request.flowId,
+      phaseId: request.phaseId,
+      status: 'skipped',
+      notes: request.notes
+    })
+  })
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
+export async function completeFlowPhaseInWorkspace(
+  request: CompleteFlowPhaseRequest
+): Promise<InitialWorkspaceState> {
+  if (!isCompleteFlowPhaseRequest(request)) {
+    throw new Error('Complete Flow phase request is invalid.')
+  }
+  const { phase, workspaceState } = await getSelectedPhaseForAction(
+    request,
+    'complete'
+  )
+  if (!isLaunchableImplementationPhase(phase)) {
+    throw new Error(`Phase cannot be completed from this workspace: ${phase.id}`)
+  }
+  if (phase.status !== 'running') {
+    throw new Error(`Phase is not running: ${phase.id}`)
+  }
+
+  const requestId = currentSelectionRequestId
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).completePhase({
+      flowId: request.flowId,
+      phaseId: request.phaseId,
+      outcome: 'implemented',
+      summary: request.summary
+    })
+  })
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
+async function getSelectedPhaseForAction(
+  request: { flowId: string; phaseId: string },
+  actionName: string
+): Promise<{
+  flow: FlowListRow
+  phase: FlowPhaseSummary
+  workspaceState: InitialWorkspaceState
+}> {
+  if (currentArtifactRoot === undefined) {
+    throw new Error('Flow artifact root is not configured.')
+  }
+  if (!isFlowPhaseActionRequest(request)) {
+    throw new Error(`Flow phase ${actionName} request is invalid.`)
+  }
+
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  if (workspaceState.flow.status !== 'ready') {
+    throw new Error(`Select a repository before ${actionName}ing a Flow phase.`)
+  }
+
+  const flow = workspaceState.flow.flows.find((candidate) => candidate.id === request.flowId)
+  if (flow === undefined) {
+    throw new Error(`Flow is not selected in this workspace: ${request.flowId}`)
+  }
+
+  const phase = flow.phases?.find((candidate) => candidate.id === request.phaseId)
+  if (phase === undefined) {
+    throw new Error(`Flow phase is not selected in this workspace: ${request.phaseId}`)
+  }
+
+  return { flow, phase, workspaceState }
+}
+
+function isFlowPhaseActionRequest(
+  request: unknown
+): request is { flowId: string; phaseId: string } {
+  return typeof request === 'object' &&
+    request !== null &&
+    typeof (request as { flowId?: unknown }).flowId === 'string' &&
+    (request as { flowId: string }).flowId.trim() !== '' &&
+    typeof (request as { phaseId?: unknown }).phaseId === 'string' &&
+    (request as { phaseId: string }).phaseId.trim() !== ''
+}
+
+function isLaunchableImplementationPhase(phase: FlowPhaseSummary): boolean {
+  return phase.id === 'implementation' || isImplementationChildPhase(phase)
+}
+
+function isSkippableImplementationChildPhase(phase: FlowPhaseSummary): boolean {
+  return isImplementationChildPhase(phase)
+}
+
+function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
+  return phase.parentPhaseId === 'implementation' &&
+    (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
+}
+
+function isLaunchablePersistedImplementationPhase(phase: PersistedFlowPhase): boolean {
+  return phase.phase_id === 'implementation' ||
+    (
+      phase.parent_phase_id === 'implementation' &&
+      (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
+    )
+}
+
+function createFlowPhaseLaunchContext({
+  artifactRoot,
+  flow,
+  phase,
+  launchId
+}: {
+  artifactRoot: string
+  flow: FlowListRow
+  phase: FlowPhaseSummary
+  launchId: string
+}): FlowPhaseLaunchContext {
+  return {
+    artifactRoot,
+    launchId,
+    flowId: flow.id,
+    phaseId: phase.id,
+    phaseTitle: phase.title,
+    phaseKind: phase.kind,
+    repositoryPath: flow.repositoryPath,
+    worktreePath: flow.worktreePath,
+    branch: flow.branch,
+    commit: flow.commit,
+    planId: flow.planId,
+    planPath: flow.planPath
+  }
+}
+
+async function removeFlowPhaseLaunchRecord(context: FlowPhaseLaunchContext): Promise<void> {
+  await rm(join(context.artifactRoot, 'launches', context.launchId), {
+    force: true,
+    recursive: true
+  })
+}
+
+async function refreshSelectedRepositoryWorkspace(
+  workspaceState: InitialWorkspaceState
+): Promise<InitialWorkspaceState> {
+  const refreshedWorkspace = await createWorkspaceStateFromContext(
+    await getWorkspaceContext(),
+    workspaceState.flow.status === 'ready'
+      ? workspaceState.flow.repositoryId
+      : workspaceState.repository.selectedRepositoryId,
+    null
+  )
+  currentWorkspaceState = refreshedWorkspace
+  return refreshedWorkspace
+}
+
+async function refreshSelectedRepositoryWorkspaceIfCurrent(
+  workspaceState: InitialWorkspaceState,
+  requestId: number
+): Promise<InitialWorkspaceState> {
+  if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
+    return currentWorkspaceState ?? workspaceState
+  }
+  return refreshSelectedRepositoryWorkspace(workspaceState)
+}
+
+async function runExclusiveFlowMutation<T>(
+  flowId: string,
+  action: () => Promise<T>
+): Promise<T> {
+  const previous = flowMutationQueue.get(flowId) ?? Promise.resolve()
+  let releaseCurrent!: () => void
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve
+  })
+  const queued = previous.then(() => current)
+  flowMutationQueue.set(flowId, queued)
+
+  await previous
+  try {
+    return await action()
+  } finally {
+    releaseCurrent()
+    if (flowMutationQueue.get(flowId) === queued) {
+      flowMutationQueue.delete(flowId)
+    }
+  }
 }
 
 function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseRequest {
@@ -405,6 +692,11 @@ function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseR
     optionalStringField((request as { title?: unknown }).title) &&
     optionalNumberField((request as { order?: unknown }).order) &&
     optionalStringField((request as { notes?: unknown }).notes)
+}
+
+function isCompleteFlowPhaseRequest(request: unknown): request is CompleteFlowPhaseRequest {
+  return isFlowPhaseActionRequest(request) &&
+    optionalStringField((request as { summary?: unknown }).summary)
 }
 
 function optionalStringField(value: unknown): boolean {
@@ -519,6 +811,15 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.updateFlowPhase, (request) =>
     updateFlowPhaseInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.launchFlowPhase, (request) =>
+    launchFlowPhaseInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.skipFlowPhase, (request) =>
+    skipFlowPhaseInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.completeFlowPhase, (request) =>
+    completeFlowPhaseInWorkspace(request)
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.createRepository, (request) =>
     createRepositoryInWorkspace(request)

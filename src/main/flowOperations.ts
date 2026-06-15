@@ -35,6 +35,7 @@ export type PhaseSetInput = {
   order?: number
   title?: string
   kind?: string
+  launchId?: string
   now?: string
 }
 
@@ -95,7 +96,6 @@ const PLAN_REVIEW_NOTES_REQUIRED = new Set([
   'blocked'
 ])
 const DEFAULT_PHASE_COMPLETION_PROMOTIONS = new Map([
-  ['implementation', 'review-loop-1'],
   ['review-loop-1', 'review-loop-2'],
   ['review-loop-2', 'pr-creation'],
   ['pr-creation', 'human-review']
@@ -198,10 +198,22 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       if (typeof nextStatus !== 'string' || !PERSISTED_PHASE_STATUSES.has(nextStatus)) {
         throw new ArtifactStoreError('validation_error', `Invalid phase status: ${String(nextStatus)}`)
       }
+      if (input.launchId !== undefined && input.status === 'running' && existing?.status === 'running') {
+        throw new ArtifactStoreError(
+          'validation_error',
+          `Phase is already running: ${input.phaseId}`,
+          input.phaseId
+        )
+      }
       validateAgentPhaseStatus(input.status)
       validatePlanReviewGate({
         phases,
         phase: existing,
+        phaseId: input.phaseId,
+        nextStatus
+      })
+      validateImplementationCompletion({
+        phases,
         phaseId: input.phaseId,
         nextStatus
       })
@@ -243,6 +255,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         outcome: input.outcome ?? existing?.outcome,
         summary: input.summary ?? existing?.summary,
         notes: input.notes ?? existing?.notes,
+        launch_ids: appendUniqueString(existing?.launch_ids, input.launchId),
         note_history: note_history.length === 0 ? undefined : note_history,
         sessions: existing?.sessions,
         created_at: existing?.created_at ?? now,
@@ -270,8 +283,8 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       }
       if (input.phaseId === 'implementation' && nextStatus === 'running') {
         nextPhases = nextPhases.map((candidate) =>
-          candidate.parent_phase_id === 'implementation' && candidate.status === 'pending'
-            ? { ...candidate, status: 'ready', updated_at: now }
+          isImplementationChildPhase(candidate) && candidate.status === 'pending'
+            ? { ...candidate, kind: 'implementation_child', status: 'ready', updated_at: now }
             : candidate
         )
       }
@@ -280,6 +293,12 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         if (nextDefaultPhaseId !== undefined) {
           nextPhases = promotePhase(nextPhases, nextDefaultPhaseId, 'ready', now)
         }
+      }
+      if (input.phaseId === 'implementation' && nextStatus === 'completed') {
+        nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
+      }
+      if (implementationChildrenCanPromoteReview(nextPhases)) {
+        nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
       }
 
       return writeFlow({
@@ -476,6 +495,26 @@ function isApprovingPlanReview(phase: PersistedFlowPhase): boolean {
     (phase.outcome === 'approved' || phase.outcome === 'approved_with_concerns')
 }
 
+function validateImplementationCompletion({
+  phases,
+  phaseId,
+  nextStatus
+}: {
+  phases: PersistedFlowPhase[]
+  phaseId: string
+  nextStatus: string
+}): void {
+  if (phaseId !== 'implementation' || nextStatus !== 'completed') {
+    return
+  }
+  if (!implementationCanComplete(phases)) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'Implementation cannot complete until all generated implementation children are completed or skipped with notes.'
+    )
+  }
+}
+
 function promotePhase(
   phases: PersistedFlowPhase[],
   phaseId: string,
@@ -486,7 +525,35 @@ function promotePhase(
     phase.phase_id === phaseId && phase.status === 'pending'
       ? { ...phase, status, updated_at: now }
       : phase
-  )
+    )
+}
+
+function implementationChildrenAreSettled(phases: PersistedFlowPhase[]): boolean {
+  const implementationChildren = phases.filter(isImplementationChildPhase)
+  return implementationChildren.length > 0 &&
+    implementationChildren.every(isSettledImplementationChild)
+}
+
+function implementationChildrenCanPromoteReview(phases: PersistedFlowPhase[]): boolean {
+  const parent = phases.find((phase) => phase.phase_id === 'implementation')
+  return (parent?.status === 'running' || parent?.status === 'completed') &&
+    implementationChildrenAreSettled(phases)
+}
+
+function implementationCanComplete(phases: PersistedFlowPhase[]): boolean {
+  return phases
+    .filter(isImplementationChildPhase)
+    .every(isSettledImplementationChild)
+}
+
+function isSettledImplementationChild(phase: PersistedFlowPhase): boolean {
+  return phase.status === 'completed' ||
+    (phase.status === 'skipped' && phase.notes !== undefined && phase.notes.trim() !== '')
+}
+
+function isImplementationChildPhase(phase: PersistedFlowPhase): boolean {
+  return phase.parent_phase_id === 'implementation' &&
+    (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
 }
 
 async function readLinkedImplementationDrafts(
@@ -528,7 +595,7 @@ function mergeGeneratedImplementationChildren(
       next.push(withoutUndefined({
         phase_id: phaseId,
         title: draft.title,
-        kind: 'implementation',
+        kind: 'implementation_child',
         status: 'pending',
         order: draft.order,
         notes: draft.notes,
@@ -551,7 +618,7 @@ function mergeGeneratedImplementationChildren(
     const index = next.findIndex((phase) => phase.phase_id === phaseId)
     next[index] = withoutUndefined({
       ...existing,
-      kind: existing.kind ?? 'implementation',
+      kind: 'implementation_child',
       parent_phase_id: existing.parent_phase_id ?? 'implementation',
       generated: true,
       editable: true,
@@ -599,6 +666,13 @@ function validateEditablePhaseUpdate(
 
 function normalizePhaseTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function appendUniqueString(values: string[] | undefined, value: string | undefined): string[] | undefined {
+  if (value === undefined) {
+    return values
+  }
+  return [...new Set([...(values ?? []), value])]
 }
 
 function sortPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[] {
