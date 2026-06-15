@@ -842,6 +842,11 @@ describe('workspace main handlers', () => {
     })).rejects.toThrow(
       'Implementation cannot complete until all generated implementation children are completed or skipped with notes.'
     )
+    await expect(completeFlowPhaseInWorkspace({
+      flowId: 'flow-complete-phase',
+      phaseId: 'implementation-ui',
+      summary: 42
+    } as never)).rejects.toThrow('Complete Flow phase request is invalid.')
     await expect(skipFlowPhaseInWorkspace({
       flowId: 'flow-complete-phase',
       phaseId: 'implementation-ui',

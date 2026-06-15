@@ -19,6 +19,8 @@ export type FlowPhaseLaunchContext = {
 
 export type FlowPhaseRunner = (context: FlowPhaseLaunchContext) => Promise<void>
 
+// The current app shell records a launch and transitions the phase to running.
+// A real terminal/session runner is injected here when that integration exists.
 export const noopFlowPhaseRunner: FlowPhaseRunner = async () => undefined
 
 export async function createFlowPhaseLaunchRecord(

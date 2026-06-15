@@ -487,6 +487,9 @@ export async function skipFlowPhaseInWorkspace(
 export async function completeFlowPhaseInWorkspace(
   request: CompleteFlowPhaseRequest
 ): Promise<InitialWorkspaceState> {
+  if (!isCompleteFlowPhaseRequest(request)) {
+    throw new Error('Complete Flow phase request is invalid.')
+  }
   const { phase, workspaceState } = await getSelectedPhaseForAction(
     request,
     'complete'
@@ -623,6 +626,11 @@ function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseR
     optionalStringField((request as { title?: unknown }).title) &&
     optionalNumberField((request as { order?: unknown }).order) &&
     optionalStringField((request as { notes?: unknown }).notes)
+}
+
+function isCompleteFlowPhaseRequest(request: unknown): request is CompleteFlowPhaseRequest {
+  return isFlowPhaseActionRequest(request) &&
+    optionalStringField((request as { summary?: unknown }).summary)
 }
 
 function optionalStringField(value: unknown): boolean {
