@@ -479,6 +479,65 @@ describe('Flow operations', () => {
     })
   })
 
+  it('does not promote review loop from settled children before Implementation starts', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'prestart-skip-plan',
+      title: 'Prestart Skip Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build API\n'
+    })
+    await flows.createFlow({
+      id: 'prestart-skip-flow',
+      title: 'Prestart skip Flow',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await flows.linkPlan({
+      flowId: 'prestart-skip-flow',
+      planId: 'prestart-skip-plan',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'plan',
+      outcome: 'plan_saved',
+      now: '2026-06-15T12:02:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:03:00.000Z'
+    })
+
+    await expect(flows.setPhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'implementation-build-api',
+      status: 'skipped',
+      notes: 'Covered elsewhere.',
+      now: '2026-06-15T12:04:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'implementation', status: 'ready' }),
+        expect.objectContaining({ phase_id: 'review-loop-1', status: 'pending' })
+      ])
+    })
+
+    await expect(flows.setPhase({
+      flowId: 'prestart-skip-flow',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:05:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'review-loop-1', status: 'ready' })
+      ])
+    })
+  })
+
   it('promotes Review Loop 1 after every implementation child is completed or skipped', async () => {
     const root = await makeTempDir()
     const plans = createPlanStore({ artifactRoot: root })

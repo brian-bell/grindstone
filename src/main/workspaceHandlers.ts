@@ -494,6 +494,9 @@ export async function completeFlowPhaseInWorkspace(
   if (!isLaunchableImplementationPhase(phase)) {
     throw new Error(`Phase cannot be completed from this workspace: ${phase.id}`)
   }
+  if (phase.status !== 'running') {
+    throw new Error(`Phase is not running: ${phase.id}`)
+  }
 
   await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).completePhase({
     flowId: request.flowId,

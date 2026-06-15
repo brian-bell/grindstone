@@ -290,7 +290,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       if (input.phaseId === 'implementation' && nextStatus === 'completed') {
         nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
       }
-      if (implementationChildrenAreSettled(nextPhases)) {
+      if (implementationChildrenCanPromoteReview(nextPhases)) {
         nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
       }
 
@@ -525,6 +525,12 @@ function implementationChildrenAreSettled(phases: PersistedFlowPhase[]): boolean
   const implementationChildren = phases.filter(isImplementationChildPhase)
   return implementationChildren.length > 0 &&
     implementationChildren.every(isSettledImplementationChild)
+}
+
+function implementationChildrenCanPromoteReview(phases: PersistedFlowPhase[]): boolean {
+  const parent = phases.find((phase) => phase.phase_id === 'implementation')
+  return (parent?.status === 'running' || parent?.status === 'completed') &&
+    implementationChildrenAreSettled(phases)
 }
 
 function implementationCanComplete(phases: PersistedFlowPhase[]): boolean {

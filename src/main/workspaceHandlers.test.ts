@@ -417,6 +417,11 @@ describe('workspace main handlers', () => {
     const repositoryId = state.repository.repositories[0]?.id ?? ''
     await selectRepository({ repositoryId })
 
+    await expect(completeFlowPhaseInWorkspace({
+      flowId: 'flow-launch-implementation',
+      phaseId: 'implementation',
+      summary: 'Do not complete before launch.'
+    })).rejects.toThrow('Phase is not running: implementation')
     await expect(launchFlowPhaseInWorkspace({
       flowId: 'flow-launch-implementation',
       phaseId: 'implementation'
@@ -738,6 +743,11 @@ describe('workspace main handlers', () => {
       phaseId: 'implementation'
     }, { runPhase })).rejects.toThrow('Phase is not ready to launch: implementation')
     expect(runPhase).not.toHaveBeenCalled()
+    await expect(completeFlowPhaseInWorkspace({
+      flowId: 'flow-launch-pending',
+      phaseId: 'implementation',
+      summary: 'Do not complete a pending phase.'
+    })).rejects.toThrow('Phase is not running: implementation')
     await expect(selectRepository({ repositoryId })).resolves.toMatchObject({
       flow: {
         status: 'ready',
