@@ -301,7 +301,7 @@ function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
         status: phase.status,
         order: phase.order,
         parentPhaseId: optionalString(phase.parent_phase_id),
-        kind: optionalString(phase.kind),
+        kind: normalizedPhaseKind(phase),
         outcome: optionalString(phase.outcome),
         summary: optionalString(phase.summary),
         notes: optionalString(phase.notes),
@@ -325,6 +325,17 @@ function optionalString(value: unknown): string | undefined {
 
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
+}
+
+function normalizedPhaseKind(phase: Record<string, unknown>): string | undefined {
+  if (
+    phase.parent_phase_id === 'implementation' &&
+    optionalBoolean(phase.generated) === true &&
+    optionalBoolean(phase.editable) === true
+  ) {
+    return 'implementation_child'
+  }
+  return optionalString(phase.kind)
 }
 
 function optionalStringArray(value: unknown): string[] | undefined {

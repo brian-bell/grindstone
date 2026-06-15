@@ -424,6 +424,8 @@ export async function launchFlowPhaseInWorkspace(
     throw new Error(`Phase is not ready to launch: ${phase.id}`)
   }
 
+  const requestId = currentSelectionRequestId + 1
+  currentSelectionRequestId = requestId
   const flowOperations = createFlowOperations({ artifactRoot: currentArtifactRoot as string })
   const launchContext = createFlowPhaseLaunchContext({
     artifactRoot: currentArtifactRoot as string,
@@ -450,13 +452,13 @@ export async function launchFlowPhaseInWorkspace(
         launchId: launchContext.launchId
       })
     } catch (markError) {
-      await refreshSelectedRepositoryWorkspace(workspaceState)
+      await refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
       throw markError
     }
-    return refreshSelectedRepositoryWorkspace(workspaceState)
+    return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
   }
 
-  return refreshSelectedRepositoryWorkspace(workspaceState)
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
 }
 
 export async function skipFlowPhaseInWorkspace(
@@ -547,12 +549,16 @@ function isFlowPhaseActionRequest(
 }
 
 function isLaunchableImplementationPhase(phase: FlowPhaseSummary): boolean {
-  return phase.id === 'implementation' ||
-    (phase.parentPhaseId === 'implementation' && phase.kind === 'implementation_child')
+  return phase.id === 'implementation' || isImplementationChildPhase(phase)
 }
 
 function isSkippableImplementationChildPhase(phase: FlowPhaseSummary): boolean {
-  return phase.parentPhaseId === 'implementation' && phase.kind === 'implementation_child'
+  return isImplementationChildPhase(phase)
+}
+
+function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
+  return phase.parentPhaseId === 'implementation' &&
+    (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
 }
 
 function createFlowPhaseLaunchContext({
@@ -594,6 +600,16 @@ async function refreshSelectedRepositoryWorkspace(
   )
   currentWorkspaceState = refreshedWorkspace
   return refreshedWorkspace
+}
+
+async function refreshSelectedRepositoryWorkspaceIfCurrent(
+  workspaceState: InitialWorkspaceState,
+  requestId: number
+): Promise<InitialWorkspaceState> {
+  if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
+    return currentWorkspaceState ?? workspaceState
+  }
+  return refreshSelectedRepositoryWorkspace(workspaceState)
 }
 
 function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseRequest {

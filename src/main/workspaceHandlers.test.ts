@@ -521,6 +521,65 @@ describe('workspace main handlers', () => {
     }))
   })
 
+  it('launches legacy generated implementation children as child phases', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-legacy-child')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-legacy-child',
+      flowMeta('flow-launch-legacy-child', repoPath, {
+        phases: [
+          {
+            phase_id: 'plan-review',
+            title: 'Plan Review',
+            kind: 'plan_review',
+            status: 'completed',
+            outcome: 'approved',
+            order: 2
+          },
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'running',
+            order: 3
+          },
+          {
+            phase_id: 'implementation-legacy-child',
+            title: 'Legacy child',
+            kind: 'implementation',
+            status: 'ready',
+            parent_phase_id: 'implementation',
+            generated: true,
+            editable: true,
+            order: 1
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    const runPhase = vi.fn<FlowPhaseRunner>().mockResolvedValue(undefined)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-legacy-child',
+      phaseId: 'implementation-legacy-child'
+    }, { runPhase })
+
+    expect(runPhase).toHaveBeenCalledWith(expect.objectContaining({
+      flowId: 'flow-launch-legacy-child',
+      phaseId: 'implementation-legacy-child',
+      phaseTitle: 'Legacy child',
+      phaseKind: 'implementation_child'
+    }))
+  })
+
   it('returns refreshed needs-attention state when a phase launch runner fails', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-launch-failure')
@@ -575,6 +634,72 @@ describe('workspace main handlers', () => {
               })
             ])
           })
+        ]
+      }
+    })
+  })
+
+  it('does not overwrite a newer repository selection after a phase launch finishes', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-stale')
+    const otherRepoPath = join(root, 'repo-launch-selected')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await makeGitRepository(otherRepoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-stale',
+      flowMeta('flow-launch-stale', repoPath, {
+        phases: [
+          {
+            phase_id: 'plan-review',
+            title: 'Plan Review',
+            kind: 'plan_review',
+            status: 'completed',
+            outcome: 'approved',
+            order: 2
+          },
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'ready',
+            order: 3
+          }
+        ]
+      })
+    )
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-other-repo',
+      flowMeta('flow-other-repo', otherRepoPath)
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(
+      configPath,
+      `repos = ["${repoPath}", "${otherRepoPath}"]\nartifact_root = "${artifactRoot}"\n`
+    )
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories.find((repo) => repo.path === repoPath)?.id ?? ''
+    const otherRepositoryId = state.repository.repositories.find((repo) => repo.path === otherRepoPath)?.id ?? ''
+    await selectRepository({ repositoryId })
+    const runPhase = vi.fn<FlowPhaseRunner>().mockImplementation(async () => {
+      await selectRepository({ repositoryId: otherRepositoryId })
+    })
+
+    await expect(launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-stale',
+      phaseId: 'implementation'
+    }, { runPhase })).resolves.toMatchObject({
+      repository: {
+        selectedRepositoryId: otherRepositoryId
+      },
+      flow: {
+        status: 'ready',
+        repositoryId: otherRepositoryId,
+        flows: [
+          expect.objectContaining({ id: 'flow-other-repo' })
         ]
       }
     })

@@ -221,6 +221,76 @@ describe('Flow operations', () => {
     })
   })
 
+  it('treats legacy generated implementation rows as children when Implementation starts', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'legacy-generated-children',
+      title: 'Legacy generated children',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'legacy-generated-children', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'plan-review',
+          title: 'Plan Review',
+          kind: 'plan_review',
+          status: 'completed',
+          outcome: 'approved',
+          order: 2
+        },
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'ready',
+          order: 3
+        },
+        {
+          phase_id: 'implementation-legacy-child',
+          title: 'Legacy child',
+          kind: 'implementation',
+          status: 'pending',
+          order: 1,
+          parent_phase_id: 'implementation',
+          generated: true,
+          editable: true,
+          source_plan_id: 'legacy-plan'
+        },
+        {
+          phase_id: 'implementation-not-generated',
+          title: 'Not generated',
+          kind: 'implementation',
+          status: 'pending',
+          order: 2,
+          parent_phase_id: 'implementation'
+        }
+      ]
+    }))
+
+    await expect(flows.setPhase({
+      flowId: 'legacy-generated-children',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:01:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'implementation-legacy-child',
+          kind: 'implementation_child',
+          status: 'ready'
+        }),
+        expect.objectContaining({
+          phase_id: 'implementation-not-generated',
+          kind: 'implementation',
+          status: 'pending'
+        })
+      ])
+    })
+  })
+
   it('promotes downstream default phases as predecessors complete', async () => {
     const root = await makeTempDir()
     const plans = createPlanStore({ artifactRoot: root })

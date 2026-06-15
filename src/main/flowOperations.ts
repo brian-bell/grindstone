@@ -272,10 +272,8 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       }
       if (input.phaseId === 'implementation' && nextStatus === 'running') {
         nextPhases = nextPhases.map((candidate) =>
-          candidate.parent_phase_id === 'implementation' &&
-            candidate.kind === 'implementation_child' &&
-            candidate.status === 'pending'
-            ? { ...candidate, status: 'ready', updated_at: now }
+          isImplementationChildPhase(candidate) && candidate.status === 'pending'
+            ? { ...candidate, kind: 'implementation_child', status: 'ready', updated_at: now }
             : candidate
         )
       }
@@ -497,14 +495,17 @@ function promotePhase(
 }
 
 function implementationChildrenAreSettled(phases: PersistedFlowPhase[]): boolean {
-  const implementationChildren = phases.filter((phase) =>
-    phase.parent_phase_id === 'implementation' && phase.kind === 'implementation_child'
-  )
+  const implementationChildren = phases.filter(isImplementationChildPhase)
   return implementationChildren.length > 0 &&
     implementationChildren.every((phase) =>
       phase.status === 'completed' ||
         (phase.status === 'skipped' && phase.notes !== undefined && phase.notes.trim() !== '')
     )
+}
+
+function isImplementationChildPhase(phase: PersistedFlowPhase): boolean {
+  return phase.parent_phase_id === 'implementation' &&
+    (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
 }
 
 async function readLinkedImplementationDrafts(
