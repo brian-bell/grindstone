@@ -198,6 +198,13 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       if (typeof nextStatus !== 'string' || !PERSISTED_PHASE_STATUSES.has(nextStatus)) {
         throw new ArtifactStoreError('validation_error', `Invalid phase status: ${String(nextStatus)}`)
       }
+      if (input.launchId !== undefined && input.status === 'running' && existing?.status === 'running') {
+        throw new ArtifactStoreError(
+          'validation_error',
+          `Phase is already running: ${input.phaseId}`,
+          input.phaseId
+        )
+      }
       validateAgentPhaseStatus(input.status)
       validatePlanReviewGate({
         phases,

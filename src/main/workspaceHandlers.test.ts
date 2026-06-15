@@ -526,6 +526,79 @@ describe('workspace main handlers', () => {
     }))
   })
 
+  it('rejects overlapping launches for the same phase after the persisted phase is running', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-overlap')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-overlap',
+      flowMeta('flow-launch-overlap', repoPath, {
+        phases: [
+          {
+            phase_id: 'plan-review',
+            title: 'Plan Review',
+            kind: 'plan_review',
+            status: 'completed',
+            outcome: 'approved',
+            order: 2
+          },
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'ready',
+            order: 3
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    let releaseRun!: () => void
+    let markStarted!: () => void
+    const runStarted = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const releaseRunPromise = new Promise<void>((resolve) => {
+      releaseRun = resolve
+    })
+    const runPhase = vi.fn<FlowPhaseRunner>().mockImplementation(async () => {
+      markStarted()
+      await releaseRunPromise
+    })
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const firstLaunch = launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-overlap',
+      phaseId: 'implementation'
+    }, { runPhase })
+    await runStarted
+
+    await expect(launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-overlap',
+      phaseId: 'implementation'
+    }, { runPhase })).rejects.toThrow('Phase is already running: implementation')
+    expect(runPhase).toHaveBeenCalledTimes(1)
+    releaseRun()
+    await expect(firstLaunch).resolves.toMatchObject({
+      flow: {
+        flows: [
+          expect.objectContaining({
+            id: 'flow-launch-overlap',
+            phases: expect.arrayContaining([
+              expect.objectContaining({ id: 'implementation', status: 'running' })
+            ])
+          })
+        ]
+      }
+    })
+  })
+
   it('launches legacy generated implementation children as child phases', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-launch-legacy-child')

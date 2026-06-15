@@ -424,8 +424,7 @@ export async function launchFlowPhaseInWorkspace(
     throw new Error(`Phase is not ready to launch: ${phase.id}`)
   }
 
-  const requestId = currentSelectionRequestId + 1
-  currentSelectionRequestId = requestId
+  const requestId = currentSelectionRequestId
   const flowOperations = createFlowOperations({ artifactRoot: currentArtifactRoot as string })
   const launchContext = createFlowPhaseLaunchContext({
     artifactRoot: currentArtifactRoot as string,
@@ -476,13 +475,14 @@ export async function skipFlowPhaseInWorkspace(
     throw new Error('Skipping a phase requires notes.')
   }
 
+  const requestId = currentSelectionRequestId
   await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).setPhase({
     flowId: request.flowId,
     phaseId: request.phaseId,
     status: 'skipped',
     notes: request.notes
   })
-  return refreshSelectedRepositoryWorkspace(workspaceState)
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
 }
 
 export async function completeFlowPhaseInWorkspace(
@@ -502,13 +502,14 @@ export async function completeFlowPhaseInWorkspace(
     throw new Error(`Phase is not running: ${phase.id}`)
   }
 
+  const requestId = currentSelectionRequestId
   await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).completePhase({
     flowId: request.flowId,
     phaseId: request.phaseId,
     outcome: 'implemented',
     summary: request.summary
   })
-  return refreshSelectedRepositoryWorkspace(workspaceState)
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
 }
 
 async function getSelectedPhaseForAction(
