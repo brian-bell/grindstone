@@ -106,6 +106,42 @@ describe('plan artifact store and Flow linkage', () => {
       .rejects.toThrow(/already links plan/)
   })
 
+  it('rejects duplicate Flow ids without overwriting the existing artifact', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'flow-one',
+      title: 'Flow One',
+      repoPath: '/repo',
+      now: '2026-06-15T10:00:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'running',
+      order: 1,
+      now: '2026-06-15T10:01:00.000Z'
+    })
+
+    await expect(flows.createFlow({
+      id: 'flow-one',
+      title: 'Replacement Flow',
+      repoPath: '/other',
+      now: '2026-06-15T10:02:00.000Z'
+    })).rejects.toThrow(/already exists/)
+    await expect(flows.readFlow('flow-one')).resolves.toMatchObject({
+      title: 'Flow One',
+      repo_path: '/repo',
+      phases: [
+        expect.objectContaining({
+          phase_id: 'implementation',
+          status: 'running'
+        })
+      ]
+    })
+  })
+
   it('validates agent-facing phase updates and counts Plan Review notes requirements', async () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })

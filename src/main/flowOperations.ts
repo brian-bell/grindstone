@@ -1,9 +1,11 @@
+import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PersistedFlowMetadata, PersistedFlowPhase } from '@shared/artifacts'
 import {
   ArtifactStoreError,
   assertSafeArtifactId,
   ensurePrivateDirectory,
+  getErrorMessage,
   listSafeDirectories,
   readJsonArtifact,
   writeJsonAtomically
@@ -91,6 +93,16 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       const now = input.now ?? new Date().toISOString()
       const flowId = input.id ?? createFlowId(input.title, now)
       assertSafeArtifactId('Flow', flowId)
+      const flowDir = join(flowsRoot, flowId)
+      await ensurePrivateDirectory(flowsRoot)
+      try {
+        await mkdir(flowDir, { mode: 0o700 })
+      } catch (error) {
+        if (isNodeErrorWithCode(error, 'EEXIST')) {
+          throw new ArtifactStoreError('validation_error', `Flow already exists: ${flowId}`, flowId)
+        }
+        throw new ArtifactStoreError('write_failed', `Flow directory create failed: ${getErrorMessage(error)}`, flowId)
+      }
       const flow: PersistedFlowMetadata = withoutUndefined({
         schema_version: 1,
         flow_id: flowId,
@@ -348,6 +360,10 @@ function hashString(value: string): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === code
 }
 
 function withoutUndefined<T extends Record<string, unknown>>(value: T): T {

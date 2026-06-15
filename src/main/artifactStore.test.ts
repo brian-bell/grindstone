@@ -49,6 +49,18 @@ describe('artifact store helpers', () => {
     await expect(resolveArtifactRoot({ configPath, env: {} })).resolves.toBe(join(root, 'from-config'))
   })
 
+  it('rejects invalid config instead of falling back to the default artifact root', async () => {
+    const root = await makeTempDir()
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, '[artifacts]\nroot = ""\n')
+
+    await expect(resolveArtifactRoot({ configPath, env: {}, homeDir: root }))
+      .rejects.toMatchObject({
+        code: 'validation_error',
+        message: expect.stringContaining('Invalid Grindstone config')
+      })
+  })
+
   it('enforces safe artifact ids and private atomic writes', async () => {
     const root = await makeTempDir()
     const directory = join(root, 'flows', 'flow-1')

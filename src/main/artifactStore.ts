@@ -51,6 +51,10 @@ export async function resolveArtifactRoot(
   }
 
   const config = await loadGrindstoneConfig(options)
+  if (!config.ok) {
+    const message = config.diagnostics[0]?.message ?? 'Unknown config validation error.'
+    throw new ArtifactStoreError('validation_error', `Invalid Grindstone config: ${message}`)
+  }
   return config.artifactRoot.resolvedPath
 }
 
