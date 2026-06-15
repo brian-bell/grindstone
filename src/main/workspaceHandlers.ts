@@ -17,6 +17,7 @@ import {
   type FlowPhaseSummary,
   type InitialWorkspaceState,
   type LaunchFlowPhaseRequest,
+  type RecordFlowPullRequestRequest,
   type RepositoryCreateError,
   type RepositoryPaneState,
   type RepositoryRow,
@@ -38,8 +39,10 @@ import {
   createFlowPhaseLaunchId,
   createFlowPhaseLaunchRecord,
   noopFlowPhaseRunner,
+  resolveFlowReviewBehavior,
   type FlowPhaseLaunchContext,
-  type FlowPhaseRunner
+  type FlowPhaseRunner,
+  type FlowReviewBehaviorRegistry
 } from './flowPhaseActions'
 import { createFlowOperations } from './flowOperations'
 import { createPlanStore } from './planStore'
@@ -416,13 +419,16 @@ export async function updateFlowPhaseInWorkspace(
 
 export async function launchFlowPhaseInWorkspace(
   request: LaunchFlowPhaseRequest,
-  options: { runPhase?: FlowPhaseRunner } = {}
+  options: {
+    runPhase?: FlowPhaseRunner
+    reviewBehaviors?: FlowReviewBehaviorRegistry
+  } = {}
 ): Promise<InitialWorkspaceState> {
   const { flow, phase, workspaceState } = await getSelectedPhaseForAction(
     request,
     'launch'
   )
-  if (!isLaunchableImplementationPhase(phase)) {
+  if (!isLaunchableWorkspacePhase(phase)) {
     throw new Error(`Phase cannot be launched from this workspace: ${phase.id}`)
   }
   if (phase.status !== 'ready' && phase.status !== 'needs_attention') {
@@ -435,12 +441,13 @@ export async function launchFlowPhaseInWorkspace(
     artifactRoot: currentArtifactRoot as string,
     flow,
     phase,
-    launchId: createFlowPhaseLaunchId()
+    launchId: createFlowPhaseLaunchId(),
+    reviewBehaviors: options.reviewBehaviors
   })
   await runExclusiveFlowMutation(request.flowId, async () => {
     const currentFlow = await flowOperations.readFlow(request.flowId)
     const currentPhase = currentFlow.phases?.find((candidate) => candidate.phase_id === request.phaseId)
-    if (currentPhase === undefined || !isLaunchablePersistedImplementationPhase(currentPhase)) {
+    if (currentPhase === undefined || !isLaunchablePersistedWorkspacePhase(currentPhase)) {
       throw new Error(`Phase cannot be launched from this workspace: ${request.phaseId}`)
     }
     if (currentPhase.status !== 'ready' && currentPhase.status !== 'needs_attention') {
@@ -519,7 +526,7 @@ export async function completeFlowPhaseInWorkspace(
     request,
     'complete'
   )
-  if (!isLaunchableImplementationPhase(phase)) {
+  if (!isCompletableWorkspacePhase(phase)) {
     throw new Error(`Phase cannot be completed from this workspace: ${phase.id}`)
   }
   if (phase.status !== 'running') {
@@ -531,7 +538,44 @@ export async function completeFlowPhaseInWorkspace(
     await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).completePhase({
       flowId: request.flowId,
       phaseId: request.phaseId,
-      outcome: 'implemented',
+      outcome: phase.kind === 'review_loop' ? 'review_completed' : 'implemented',
+      summary: request.summary
+    })
+  })
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
+export async function recordFlowPullRequestInWorkspace(
+  request: RecordFlowPullRequestRequest
+): Promise<InitialWorkspaceState> {
+  if (!isRecordFlowPullRequestRequest(request)) {
+    throw new Error('Record Flow pull request request is invalid.')
+  }
+  if (currentArtifactRoot === undefined) {
+    throw new Error('Flow artifact root is not configured.')
+  }
+
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  if (workspaceState.flow.status !== 'ready') {
+    throw new Error('Select a repository before recording a Flow pull request.')
+  }
+  const flow = workspaceState.flow.flows.find((candidate) => candidate.id === request.flowId)
+  if (flow === undefined) {
+    throw new Error(`Flow is not selected in this workspace: ${request.flowId}`)
+  }
+  const phase = flow.phases?.find((candidate) => candidate.id === 'pr-creation')
+  if (phase === undefined) {
+    throw new Error('PR Creation phase is not selected in this workspace.')
+  }
+  if (phase.status !== 'ready' && phase.status !== 'running') {
+    throw new Error('PR Creation is not ready to record pull request metadata.')
+  }
+
+  const requestId = currentSelectionRequestId
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).completePrCreation({
+      flowId: request.flowId,
+      pr: request.pr,
       summary: request.summary
     })
   })
@@ -582,8 +626,15 @@ function isFlowPhaseActionRequest(
     (request as { phaseId: string }).phaseId.trim() !== ''
 }
 
-function isLaunchableImplementationPhase(phase: FlowPhaseSummary): boolean {
+function isLaunchableWorkspacePhase(phase: FlowPhaseSummary): boolean {
   return phase.id === 'implementation' || isImplementationChildPhase(phase)
+    || phase.kind === 'review_loop'
+}
+
+function isCompletableWorkspacePhase(phase: FlowPhaseSummary): boolean {
+  return phase.id === 'implementation' ||
+    isImplementationChildPhase(phase) ||
+    phase.kind === 'review_loop'
 }
 
 function isSkippableImplementationChildPhase(phase: FlowPhaseSummary): boolean {
@@ -595,24 +646,27 @@ function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
     (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
 }
 
-function isLaunchablePersistedImplementationPhase(phase: PersistedFlowPhase): boolean {
+function isLaunchablePersistedWorkspacePhase(phase: PersistedFlowPhase): boolean {
   return phase.phase_id === 'implementation' ||
     (
       phase.parent_phase_id === 'implementation' &&
       (phase.kind === 'implementation_child' || (phase.generated === true && phase.editable === true))
-    )
+    ) ||
+    phase.kind === 'review_loop'
 }
 
 function createFlowPhaseLaunchContext({
   artifactRoot,
   flow,
   phase,
-  launchId
+  launchId,
+  reviewBehaviors
 }: {
   artifactRoot: string
   flow: FlowListRow
   phase: FlowPhaseSummary
   launchId: string
+  reviewBehaviors?: FlowReviewBehaviorRegistry
 }): FlowPhaseLaunchContext {
   return {
     artifactRoot,
@@ -626,7 +680,14 @@ function createFlowPhaseLaunchContext({
     branch: flow.branch,
     commit: flow.commit,
     planId: flow.planId,
-    planPath: flow.planPath
+    planPath: flow.planPath,
+    reviewBehavior: phase.kind === 'review_loop'
+      ? resolveFlowReviewBehavior({
+          phaseId: phase.id,
+          phaseKind: phase.kind,
+          behaviors: reviewBehaviors
+        })
+      : undefined
   }
 }
 
@@ -696,6 +757,28 @@ function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseR
 
 function isCompleteFlowPhaseRequest(request: unknown): request is CompleteFlowPhaseRequest {
   return isFlowPhaseActionRequest(request) &&
+    optionalStringField((request as { summary?: unknown }).summary)
+}
+
+function isRecordFlowPullRequestRequest(request: unknown): request is RecordFlowPullRequestRequest {
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof (request as { flowId?: unknown }).flowId !== 'string' ||
+    (request as { flowId: string }).flowId.trim() === ''
+  ) {
+    return false
+  }
+
+  const pr = (request as { pr?: unknown }).pr
+  return typeof pr === 'object' &&
+    pr !== null &&
+    typeof (pr as { provider?: unknown }).provider === 'string' &&
+    typeof (pr as { number?: unknown }).number === 'number' &&
+    typeof (pr as { url?: unknown }).url === 'string' &&
+    typeof (pr as { head?: unknown }).head === 'string' &&
+    typeof (pr as { base?: unknown }).base === 'string' &&
+    typeof (pr as { status?: unknown }).status === 'string' &&
     optionalStringField((request as { summary?: unknown }).summary)
 }
 
@@ -820,6 +903,9 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.completeFlowPhase, (request) =>
     completeFlowPhaseInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.recordFlowPullRequest, (request) =>
+    recordFlowPullRequestInWorkspace(request)
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.createRepository, (request) =>
     createRepositoryInWorkspace(request)

@@ -20,6 +20,23 @@ export type FlowPhaseSessionReference = {
   transcript_path: string
 }
 
+export type FlowReviewBehavior = {
+  id: string
+  prompt: string
+  runnerHint?: string
+}
+
+export type FlowPullRequestStatus = 'open' | 'closed' | 'merged'
+
+export type FlowPullRequestMetadata = {
+  provider: 'github'
+  number: number
+  url: string
+  head: string
+  base: string
+  status: FlowPullRequestStatus
+}
+
 export type PersistedFlowPhase = {
   phase_id: string
   title: string
@@ -59,6 +76,7 @@ export type PersistedFlowMetadata = {
   failure?: Record<string, unknown>
   plan_id?: string
   plan_path?: string
+  pr?: FlowPullRequestMetadata
   phases?: PersistedFlowPhase[]
   created_at: string
   updated_at: string
@@ -154,3 +172,77 @@ export type LinkedFlowPlanResponse =
       planId?: string
       message: string
     }
+
+export type FlowPullRequestMetadataValidationResult =
+  | { ok: true; pr: FlowPullRequestMetadata }
+  | { ok: false; message: string }
+
+export function normalizeFlowPullRequestMetadata(value: unknown): FlowPullRequestMetadata | undefined {
+  const result = validateFlowPullRequestMetadata(value)
+  return result.ok ? result.pr : undefined
+}
+
+export function validateFlowPullRequestMetadata(value: unknown): FlowPullRequestMetadataValidationResult {
+  if (!isRecord(value)) {
+    return { ok: false, message: 'Pull request metadata is required.' }
+  }
+
+  if (value.provider !== 'github') {
+    return { ok: false, message: 'Pull request provider must be github.' }
+  }
+
+  const number = value.number
+  if (typeof number !== 'number' || !Number.isInteger(number) || number <= 0) {
+    return { ok: false, message: 'Pull request number must be a positive integer.' }
+  }
+
+  if (typeof value.url !== 'string' || !isHttpsUrl(value.url)) {
+    return { ok: false, message: 'Pull request URL must be a valid HTTPS URL.' }
+  }
+
+  const head = normalizedNonEmptyString(value.head)
+  if (head === undefined) {
+    return { ok: false, message: 'Pull request head branch is required.' }
+  }
+
+  const base = normalizedNonEmptyString(value.base)
+  if (base === undefined) {
+    return { ok: false, message: 'Pull request base branch is required.' }
+  }
+
+  if (!isFlowPullRequestStatus(value.status)) {
+    return { ok: false, message: 'Pull request status must be open, closed, or merged.' }
+  }
+
+  return {
+    ok: true,
+    pr: {
+      provider: 'github',
+      number,
+      url: value.url,
+      head,
+      base,
+      status: value.status
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizedNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+}
+
+function isFlowPullRequestStatus(value: unknown): value is FlowPullRequestStatus {
+  return value === 'open' || value === 'closed' || value === 'merged'
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}

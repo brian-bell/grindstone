@@ -273,6 +273,61 @@ describe('Flow artifact store', () => {
     await expect(store.flowArtifactExists('../unsafe')).resolves.toBe(false)
   })
 
+  it('exposes valid PR metadata and omits malformed legacy PR metadata', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-pr-metadata')
+    await writeFlowMeta(
+      artifactRoot,
+      'with-pr',
+      flowMeta('with-pr', repository.path, {
+        pr: {
+          provider: 'github',
+          number: 42,
+          url: 'https://github.com/acme/grindstone/pull/42',
+          head: 'flow/with-pr',
+          base: 'main',
+          status: 'open'
+        }
+      })
+    )
+    await writeFlowMeta(
+      artifactRoot,
+      'malformed-pr',
+      flowMeta('malformed-pr', repository.path, {
+        updated_at: '2026-06-10T10:01:00.000Z',
+        pr: {
+          provider: 'github',
+          number: '42',
+          url: 'http://github.com/acme/grindstone/pull/42',
+          head: '',
+          base: 'main',
+          status: 'open'
+        }
+      })
+    )
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.listFlowsForRepository(repository)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'malformed-pr',
+        pr: undefined
+      }),
+      expect.objectContaining({
+        id: 'with-pr',
+        pr: {
+          provider: 'github',
+          number: 42,
+          url: 'https://github.com/acme/grindstone/pull/42',
+          head: 'flow/with-pr',
+          base: 'main',
+          status: 'open'
+        }
+      })
+    ])
+  })
+
   it('creates and updates Flow records under the artifact root', async () => {
     const root = await makeTempDir()
     const artifactRoot = join(root, 'artifacts')

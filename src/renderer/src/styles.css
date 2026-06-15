@@ -490,7 +490,8 @@ textarea {
 }
 
 .phase-edit-form,
-.phase-skip-form {
+.phase-skip-form,
+.phase-pr-form {
   display: grid;
   grid-template-columns: minmax(160px, 1.6fr) minmax(80px, 0.5fr);
   gap: 8px;
@@ -502,6 +503,10 @@ textarea {
 
 .phase-skip-form {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.phase-pr-form {
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
 }
 
 .phase-edit-field {

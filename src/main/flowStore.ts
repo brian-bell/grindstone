@@ -1,7 +1,7 @@
 import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { PersistedFlowPhase } from '@shared/artifacts'
+import { normalizeFlowPullRequestMetadata, type PersistedFlowPhase } from '@shared/artifacts'
 import type {
   FlowFailureSummary,
   FlowListRow,
@@ -227,6 +227,7 @@ async function mapFlowMetadata(
     failure: mapFailureSummary(metadata.failure),
     planId: optionalString(metadata.plan_id),
     planPath: optionalString(metadata.plan_path),
+    pr: normalizeFlowPullRequestMetadata(metadata.pr),
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
     phases: mapPhases(metadata.phases)

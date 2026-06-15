@@ -31,6 +31,7 @@ describe('IPC contract', () => {
     expect(ipcChannels.workspace.launchFlowPhase).toBe('workspace:launchFlowPhase')
     expect(ipcChannels.workspace.skipFlowPhase).toBe('workspace:skipFlowPhase')
     expect(ipcChannels.workspace.completeFlowPhase).toBe('workspace:completeFlowPhase')
+    expect(ipcChannels.workspace.recordFlowPullRequest).toBe('workspace:recordFlowPullRequest')
     expect(ipcChannels.workspace.createRepository).toBe('workspace:createRepository')
     expect(ipcChannels.workspace.retryRepositoryRemote).toBe('workspace:retryRepositoryRemote')
     expect(ipcChannels.config.getEditableConfig).toBe('config:getEditableConfig')
@@ -116,15 +117,32 @@ describe('IPC contract', () => {
     } satisfies IpcRequestMap[CompleteFlowPhaseChannel]
     const completeResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[CompleteFlowPhaseChannel]
 
+    type RecordFlowPullRequestChannel = typeof ipcChannels.workspace.recordFlowPullRequest
+    const recordPrRequest = {
+      flowId: 'flow-one',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/one',
+        base: 'main',
+        status: 'open'
+      }
+    } satisfies IpcRequestMap[RecordFlowPullRequestChannel]
+    const recordPrResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[RecordFlowPullRequestChannel]
+
     expect(launchRequest.phaseId).toBe('implementation')
     expect(skipRequest.notes).toBe('Covered by another slice.')
     expect(completeRequest.summary).toBe('Implementation complete.')
+    expect(recordPrRequest.pr.number).toBe(12)
     expect(launchResponse).toEqual(defaultInitialWorkspaceState)
     expect(skipResponse).toEqual(defaultInitialWorkspaceState)
     expect(completeResponse).toEqual(defaultInitialWorkspaceState)
+    expect(recordPrResponse).toEqual(defaultInitialWorkspaceState)
     expectTypeOf(launchResponse).toEqualTypeOf<InitialWorkspaceState>()
     expectTypeOf(skipResponse).toEqualTypeOf<InitialWorkspaceState>()
     expectTypeOf(completeResponse).toEqualTypeOf<InitialWorkspaceState>()
+    expectTypeOf(recordPrResponse).toEqualTypeOf<InitialWorkspaceState>()
   })
 
   it('maps workspace:retryRepositoryRemote to a stable retry id request and workspace response', () => {

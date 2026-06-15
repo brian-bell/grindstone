@@ -8,6 +8,7 @@ import type {
   CompleteFlowPhaseRequest,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  RecordFlowPullRequestRequest,
   RetryRepositoryRemoteRequest,
   SkipFlowPhaseRequest,
   UpdateFlowPhaseRequest
@@ -97,6 +98,19 @@ const grindstoneApi = {
         return await invokeTypedIpc(
           ipcRenderer.invoke.bind(ipcRenderer),
           ipcChannels.workspace.completeFlowPhase,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async recordFlowPullRequest(
+      request: RecordFlowPullRequestRequest
+    ): Promise<InitialWorkspaceState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.recordFlowPullRequest,
           request
         )
       } catch (error) {

@@ -11,6 +11,7 @@ import {
   launchFlowPhaseInWorkspace,
   loadInitialWorkspaceState,
   readLinkedFlowPlan,
+  recordFlowPullRequestInWorkspace,
   registerWorkspaceHandlers,
   retryRepositoryRemoteInWorkspace,
   selectRepository,
@@ -524,6 +525,130 @@ describe('workspace main handlers', () => {
       phaseTitle: 'API slice',
       launchId: expect.stringMatching(/^phase-launch-/)
     }))
+  })
+
+  it('launches and completes Review Loop 2 with configured generic review behavior', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-review-two')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-review-two',
+      flowMeta('flow-launch-review-two', repoPath, {
+        phases: [
+          {
+            phase_id: 'review-loop-1',
+            title: 'Review Loop 1',
+            kind: 'review_loop',
+            status: 'completed',
+            outcome: 'review_completed',
+            order: 4
+          },
+          {
+            phase_id: 'review-loop-2',
+            title: 'Review Loop 2',
+            kind: 'review_loop',
+            status: 'ready',
+            order: 5
+          },
+          {
+            phase_id: 'pr-creation',
+            title: 'PR Creation',
+            kind: 'pr_creation',
+            status: 'pending',
+            order: 6
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    const runPhase = vi.fn<FlowPhaseRunner>().mockResolvedValue(undefined)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-review-two',
+      phaseId: 'review-loop-2'
+    }, {
+      runPhase,
+      reviewBehaviors: {
+        byPhaseId: {
+          'review-loop-2': {
+            id: 'second-review',
+            prompt: 'Run an independent generic second review.',
+            runnerHint: 'generic'
+          }
+        },
+        byKind: {
+          review_loop: {
+            id: 'kind-review',
+            prompt: 'Run a generic review loop.'
+          }
+        }
+      }
+    })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          expect.objectContaining({
+            phases: expect.arrayContaining([
+              expect.objectContaining({ id: 'review-loop-2', status: 'running' }),
+              expect.objectContaining({ id: 'pr-creation', status: 'pending' })
+            ])
+          })
+        ]
+      }
+    })
+    expect(runPhase).toHaveBeenCalledWith(expect.objectContaining({
+      phaseId: 'review-loop-2',
+      phaseKind: 'review_loop',
+      reviewBehavior: {
+        id: 'second-review',
+        prompt: 'Run an independent generic second review.',
+        runnerHint: 'generic'
+      }
+    }))
+
+    const launchId = runPhase.mock.calls[0]?.[0].launchId ?? ''
+    const launchMetadata = JSON.parse(
+      await readFile(join(artifactRoot, 'launches', launchId, 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(launchMetadata).toMatchObject({
+      phase_id: 'review-loop-2',
+      review_behavior: {
+        id: 'second-review',
+        prompt: 'Run an independent generic second review.',
+        runner_hint: 'generic'
+      }
+    })
+    expect(JSON.stringify(launchMetadata)).not.toMatch(/autoreview/i)
+
+    await expect(completeFlowPhaseInWorkspace({
+      flowId: 'flow-launch-review-two',
+      phaseId: 'review-loop-2',
+      summary: 'Second review complete.'
+    })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          expect.objectContaining({
+            phases: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'review-loop-2',
+                status: 'completed',
+                outcome: 'review_completed',
+                summary: 'Second review complete.'
+              }),
+              expect.objectContaining({ id: 'pr-creation', status: 'ready' })
+            ])
+          })
+        ]
+      }
+    })
   })
 
   it('rejects overlapping launches for the same phase after the persisted phase is running', async () => {
@@ -1062,6 +1187,115 @@ describe('workspace main handlers', () => {
                 summary: 'Implemented the parent phase.'
               }),
               expect.objectContaining({ id: 'review-loop-1', status: 'ready' })
+            ])
+          })
+        ]
+      }
+    })
+  })
+
+  it('records PR metadata through PR Creation and rejects invalid metadata before promotion', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-record-pr')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-record-pr',
+      flowMeta('flow-record-pr', repoPath, {
+        branch: 'flow/record-pr',
+        phases: [
+          {
+            phase_id: 'review-loop-2',
+            title: 'Review Loop 2',
+            kind: 'review_loop',
+            status: 'completed',
+            outcome: 'review_completed',
+            order: 5
+          },
+          {
+            phase_id: 'pr-creation',
+            title: 'PR Creation',
+            kind: 'pr_creation',
+            status: 'ready',
+            order: 6
+          },
+          {
+            phase_id: 'human-review',
+            title: 'Human Review',
+            kind: 'human_review',
+            status: 'pending',
+            order: 7
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(recordFlowPullRequestInWorkspace({
+      flowId: 'flow-record-pr',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'http://github.com/acme/grindstone/pull/12',
+        head: 'flow/record-pr',
+        base: 'main',
+        status: 'open'
+      }
+    })).rejects.toThrow('Pull request URL must be a valid HTTPS URL.')
+    await expect(selectRepository({ repositoryId })).resolves.toMatchObject({
+      flow: {
+        flows: [
+          expect.objectContaining({
+            id: 'flow-record-pr',
+            pr: undefined,
+            phases: expect.arrayContaining([
+              expect.objectContaining({ id: 'pr-creation', status: 'ready' }),
+              expect.objectContaining({ id: 'human-review', status: 'pending' })
+            ])
+          })
+        ]
+      }
+    })
+
+    await expect(recordFlowPullRequestInWorkspace({
+      flowId: 'flow-record-pr',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/record-pr',
+        base: 'main',
+        status: 'open'
+      },
+      summary: 'Opened GitHub PR #12.'
+    })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          expect.objectContaining({
+            id: 'flow-record-pr',
+            pr: {
+              provider: 'github',
+              number: 12,
+              url: 'https://github.com/acme/grindstone/pull/12',
+              head: 'flow/record-pr',
+              base: 'main',
+              status: 'open'
+            },
+            phases: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'pr-creation',
+                status: 'completed',
+                outcome: 'pr_recorded',
+                summary: 'Opened GitHub PR #12.'
+              }),
+              expect.objectContaining({ id: 'human-review', status: 'ready' })
             ])
           })
         ]

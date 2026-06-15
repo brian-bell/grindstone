@@ -9,6 +9,7 @@ import {
   type CreateRepositoryRequest,
   type InitialWorkspaceState,
   type LaunchFlowPhaseRequest,
+  type RecordFlowPullRequestRequest,
   type RetryRepositoryRemoteRequest,
   type SkipFlowPhaseRequest,
   type UpdateFlowPhaseRequest
@@ -24,6 +25,7 @@ type PreloadApi = {
     launchFlowPhase: (request: LaunchFlowPhaseRequest) => Promise<InitialWorkspaceState>
     skipFlowPhase: (request: SkipFlowPhaseRequest) => Promise<InitialWorkspaceState>
     completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
+    recordFlowPullRequest: (request: RecordFlowPullRequestRequest) => Promise<InitialWorkspaceState>
     createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
     retryRepositoryRemote: (
       request: RetryRepositoryRemoteRequest
@@ -87,6 +89,7 @@ describe('preload bridge', () => {
       'launchFlowPhase',
       'skipFlowPhase',
       'completeFlowPhase',
+      'recordFlowPullRequest',
       'createRepository',
       'retryRepositoryRemote'
     ])
@@ -225,6 +228,29 @@ describe('preload bridge', () => {
       flowId: 'flow-one',
       phaseId: 'implementation',
       summary: 'Implemented.'
+    })
+
+    await expect(api.workspace.recordFlowPullRequest({
+      flowId: 'flow-one',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/one',
+        base: 'main',
+        status: 'open'
+      }
+    })).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.recordFlowPullRequest, {
+      flowId: 'flow-one',
+      pr: {
+        provider: 'github',
+        number: 12,
+        url: 'https://github.com/acme/grindstone/pull/12',
+        head: 'flow/one',
+        base: 'main',
+        status: 'open'
+      }
     })
   })
 

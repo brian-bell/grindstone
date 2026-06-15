@@ -8,6 +8,7 @@ import type {
   CompleteFlowPhaseRequest,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  RecordFlowPullRequestRequest,
   RetryRepositoryRemoteRequest,
   SkipFlowPhaseRequest,
   UpdateFlowPhaseRequest
@@ -25,6 +26,9 @@ declare global {
         launchFlowPhase: (request: LaunchFlowPhaseRequest) => Promise<InitialWorkspaceState>
         skipFlowPhase: (request: SkipFlowPhaseRequest) => Promise<InitialWorkspaceState>
         completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
+        recordFlowPullRequest: (
+          request: RecordFlowPullRequestRequest
+        ) => Promise<InitialWorkspaceState>
         createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
         retryRepositoryRemote: (
           request: RetryRepositoryRemoteRequest
