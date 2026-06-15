@@ -33,6 +33,7 @@ export type PersistedFlowPhase = {
   generated?: boolean
   editable?: boolean
   source_plan_id?: string
+  launch_ids?: string[]
   note_history?: Array<{
     created_at: string
     note: string

@@ -86,6 +86,17 @@ describe('Flow artifact store', () => {
             kind: 'implementation',
             summary: 'List rendered',
             launch_ids: ['wtui-launch-one'],
+            sessions: [
+              {
+                provider: 'codex',
+                session_id: 'codex-session-one',
+                launch_id: 'wtui-launch-two',
+                status: 'unknown',
+                attachment_status: 'attached',
+                started_at: '2026-06-10T10:31:00.000Z',
+                transcript_path: join(artifactRoot, 'sessions', 'codex', 'codex-session-one', 'transcript.jsonl')
+              }
+            ],
             updated_at: '2026-06-10T10:30:00.000Z'
           }
         ]
@@ -136,7 +147,7 @@ describe('Flow artifact store', () => {
             order: 2,
             kind: 'implementation',
             summary: 'List rendered',
-            launchIds: ['wtui-launch-one'],
+            launchIds: ['wtui-launch-one', 'wtui-launch-two'],
             updatedAt: '2026-06-10T10:30:00.000Z'
           }
         ]

@@ -1603,10 +1603,11 @@ function FlowPhaseRow({
     phase.editable === true &&
     (phase.status === 'pending' || phase.status === 'ready')
   const isImplementationPhase = phase.id === 'implementation' ||
-    phase.parentPhaseId === 'implementation'
+    (phase.parentPhaseId === 'implementation' && phase.kind === 'implementation_child')
   const canLaunch = isImplementationPhase && phase.status === 'ready'
   const canComplete = isImplementationPhase && phase.status === 'running'
   const canSkip = phase.parentPhaseId === 'implementation' &&
+    phase.kind === 'implementation_child' &&
     (phase.status === 'pending' || phase.status === 'ready' || phase.status === 'running')
 
   useEffect(() => {

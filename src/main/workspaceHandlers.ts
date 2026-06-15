@@ -33,6 +33,8 @@ import { createFlow, type FlowCommandRunner, type LaunchPreparer } from './flowC
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { ArtifactStoreError } from './artifactStore'
 import {
+  createFlowPhaseLaunchId,
+  createFlowPhaseLaunchRecord,
   noopFlowPhaseRunner,
   type FlowPhaseLaunchContext,
   type FlowPhaseRunner
@@ -422,22 +424,36 @@ export async function launchFlowPhaseInWorkspace(
     throw new Error(`Phase is not ready to launch: ${phase.id}`)
   }
 
+  const flowOperations = createFlowOperations({ artifactRoot: currentArtifactRoot as string })
   const launchContext = createFlowPhaseLaunchContext({
     artifactRoot: currentArtifactRoot as string,
     flow,
-    phase
+    phase,
+    launchId: createFlowPhaseLaunchId()
   })
-  await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).setPhase({
+  await createFlowPhaseLaunchRecord(launchContext)
+  await flowOperations.setPhase({
     flowId: request.flowId,
     phaseId: request.phaseId,
-    status: 'running'
+    status: 'running',
+    launchId: launchContext.launchId
   })
 
   try {
     await (options.runPhase ?? noopFlowPhaseRunner)(launchContext)
   } catch (error) {
-    await refreshSelectedRepositoryWorkspace(workspaceState)
-    throw error
+    try {
+      await flowOperations.needsAttentionPhase({
+        flowId: request.flowId,
+        phaseId: request.phaseId,
+        notes: `Phase launch failed: ${getErrorMessage(error)}`,
+        launchId: launchContext.launchId
+      })
+    } catch (markError) {
+      await refreshSelectedRepositoryWorkspace(workspaceState)
+      throw markError
+    }
+    return refreshSelectedRepositoryWorkspace(workspaceState)
   }
 
   return refreshSelectedRepositoryWorkspace(workspaceState)
@@ -531,24 +547,28 @@ function isFlowPhaseActionRequest(
 }
 
 function isLaunchableImplementationPhase(phase: FlowPhaseSummary): boolean {
-  return phase.id === 'implementation' || phase.parentPhaseId === 'implementation'
+  return phase.id === 'implementation' ||
+    (phase.parentPhaseId === 'implementation' && phase.kind === 'implementation_child')
 }
 
 function isSkippableImplementationChildPhase(phase: FlowPhaseSummary): boolean {
-  return phase.parentPhaseId === 'implementation'
+  return phase.parentPhaseId === 'implementation' && phase.kind === 'implementation_child'
 }
 
 function createFlowPhaseLaunchContext({
   artifactRoot,
   flow,
-  phase
+  phase,
+  launchId
 }: {
   artifactRoot: string
   flow: FlowListRow
   phase: FlowPhaseSummary
+  launchId: string
 }): FlowPhaseLaunchContext {
   return {
     artifactRoot,
+    launchId,
     flowId: flow.id,
     phaseId: phase.id,
     phaseTitle: phase.title,

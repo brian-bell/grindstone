@@ -35,6 +35,7 @@ export type PhaseSetInput = {
   order?: number
   title?: string
   kind?: string
+  launchId?: string
   now?: string
 }
 
@@ -243,6 +244,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         outcome: input.outcome ?? existing?.outcome,
         summary: input.summary ?? existing?.summary,
         notes: input.notes ?? existing?.notes,
+        launch_ids: appendUniqueString(existing?.launch_ids, input.launchId),
         note_history: note_history.length === 0 ? undefined : note_history,
         sessions: existing?.sessions,
         created_at: existing?.created_at ?? now,
@@ -270,7 +272,9 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       }
       if (input.phaseId === 'implementation' && nextStatus === 'running') {
         nextPhases = nextPhases.map((candidate) =>
-          candidate.parent_phase_id === 'implementation' && candidate.status === 'pending'
+          candidate.parent_phase_id === 'implementation' &&
+            candidate.kind === 'implementation_child' &&
+            candidate.status === 'pending'
             ? { ...candidate, status: 'ready', updated_at: now }
             : candidate
         )
@@ -494,7 +498,7 @@ function promotePhase(
 
 function implementationChildrenAreSettled(phases: PersistedFlowPhase[]): boolean {
   const implementationChildren = phases.filter((phase) =>
-    phase.parent_phase_id === 'implementation'
+    phase.parent_phase_id === 'implementation' && phase.kind === 'implementation_child'
   )
   return implementationChildren.length > 0 &&
     implementationChildren.every((phase) =>
@@ -542,7 +546,7 @@ function mergeGeneratedImplementationChildren(
       next.push(withoutUndefined({
         phase_id: phaseId,
         title: draft.title,
-        kind: 'implementation',
+        kind: 'implementation_child',
         status: 'pending',
         order: draft.order,
         notes: draft.notes,
@@ -565,7 +569,7 @@ function mergeGeneratedImplementationChildren(
     const index = next.findIndex((phase) => phase.phase_id === phaseId)
     next[index] = withoutUndefined({
       ...existing,
-      kind: existing.kind ?? 'implementation',
+      kind: 'implementation_child',
       parent_phase_id: existing.parent_phase_id ?? 'implementation',
       generated: true,
       editable: true,
@@ -613,6 +617,13 @@ function validateEditablePhaseUpdate(
 
 function normalizePhaseTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function appendUniqueString(values: string[] | undefined, value: string | undefined): string[] | undefined {
+  if (value === undefined) {
+    return values
+  }
+  return [...new Set([...(values ?? []), value])]
 }
 
 function sortPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[] {

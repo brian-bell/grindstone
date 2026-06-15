@@ -305,7 +305,7 @@ function mapPhases(value: unknown): FlowPhaseSummary[] | undefined {
         outcome: optionalString(phase.outcome),
         summary: optionalString(phase.summary),
         notes: optionalString(phase.notes),
-        launchIds: optionalStringArray(phase.launch_ids),
+        launchIds: launchIdsFromPhase(phase),
         generated: optionalBoolean(phase.generated),
         editable: optionalBoolean(phase.editable),
         sourcePlanId: optionalString(phase.source_plan_id),
@@ -333,6 +333,18 @@ function optionalStringArray(value: unknown): string[] | undefined {
   }
 
   return value
+}
+
+function launchIdsFromPhase(phase: Record<string, unknown>): string[] | undefined {
+  const ids = new Set(optionalStringArray(phase.launch_ids) ?? [])
+  if (Array.isArray(phase.sessions)) {
+    for (const session of phase.sessions) {
+      if (isRecord(session) && typeof session.launch_id === 'string' && session.launch_id !== '') {
+        ids.add(session.launch_id)
+      }
+    }
+  }
+  return ids.size === 0 ? undefined : [...ids]
 }
 
 function sortPhaseSummaries(phases: FlowPhaseSummary[]): FlowPhaseSummary[] {

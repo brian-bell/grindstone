@@ -501,6 +501,7 @@ describe('App shell', () => {
           status: 'pending',
           order: 1,
           parentPhaseId: 'implementation',
+          kind: 'implementation_child',
           generated: true,
           editable: true,
           notes: 'Wire the handler'
@@ -625,6 +626,7 @@ describe('App shell', () => {
           status: 'ready',
           order: 1,
           parentPhaseId: 'implementation',
+          kind: 'implementation_child',
           generated: true,
           editable: true
         }
@@ -756,6 +758,7 @@ describe('App shell', () => {
           status: 'ready',
           order: 1,
           parentPhaseId: 'implementation',
+          kind: 'implementation_child',
           generated: true,
           editable: true
         },
