@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -57,6 +57,40 @@ describe('Flow operations', () => {
       flowId: 'plan-ready',
       phaseId: 'plan',
       outcome: 'plan_saved',
+      now: '2026-06-15T12:02:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'plan-review', status: 'ready' })
+      ])
+    })
+  })
+
+  it('promotes Plan Review when a plan is linked after Plan already completed', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'late-linked-plan',
+      title: 'Late Linked Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build the graph\n'
+    })
+    await flows.createFlow({
+      id: 'late-plan-ready',
+      title: 'Late plan ready',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'late-plan-ready',
+      phaseId: 'plan',
+      outcome: 'plan_saved',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+
+    await expect(flows.linkPlan({
+      flowId: 'late-plan-ready',
+      planId: 'late-linked-plan',
       now: '2026-06-15T12:02:00.000Z'
     })).resolves.toMatchObject({
       phases: expect.arrayContaining([
@@ -150,6 +184,156 @@ describe('Flow operations', () => {
       code: 'validation_error',
       message: 'Implementation requires a completed approving Plan Review.'
     })
+  })
+
+  it('rejects Implementation transitions when a default graph is missing Plan Review', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'missing-plan-review',
+      title: 'Missing Plan Review',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'missing-plan-review', (flow) => ({
+      ...flow,
+      phases: Array.isArray(flow.phases)
+        ? flow.phases.filter((phase) =>
+            isRawPhase(phase) && phase.phase_id !== 'plan-review'
+          ).map((phase) =>
+            isRawPhase(phase) && phase.phase_id === 'implementation'
+              ? { ...phase, status: 'ready' }
+              : phase
+          )
+        : flow.phases
+    }))
+
+    await expect(flows.setPhase({
+      flowId: 'missing-plan-review',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:01:00.000Z'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Implementation requires a completed approving Plan Review.'
+    })
+  })
+
+  it('keeps Plan Review unapproved when linked plan phase extraction fails', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'unsupported-plan',
+      title: 'Unsupported Plan',
+      status: 'approved',
+      body: '# Plan\n\nThis plan has no supported implementation phase section.\n'
+    })
+    await flows.createFlow({ id: 'unsupported-flow', title: 'Unsupported Flow', repoPath: '/repo' })
+    await flows.linkPlan({ flowId: 'unsupported-flow', planId: 'unsupported-plan' })
+    await flows.completePhase({ flowId: 'unsupported-flow', phaseId: 'plan', outcome: 'plan_saved' })
+
+    await expect(flows.completePhase({
+      flowId: 'unsupported-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Linked plan does not contain supported implementation phases.'
+    })
+
+    await expect(flows.readFlow('unsupported-flow')).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'plan-review', status: 'ready' }),
+        expect.objectContaining({ phase_id: 'implementation', status: 'pending' })
+      ])
+    })
+  })
+
+  it('rejects Plan Review approval when linked Flow and plan paths disagree', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'path-plan',
+      title: 'Path Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build path checks\n'
+    })
+    await flows.createFlow({ id: 'path-flow', title: 'Path Flow', repoPath: '/repo' })
+    await flows.linkPlan({ flowId: 'path-flow', planId: 'path-plan' })
+    await flows.completePhase({ flowId: 'path-flow', phaseId: 'plan', outcome: 'plan_saved' })
+    await rewriteFlow(root, 'path-flow', (flow) => ({
+      ...flow,
+      plan_path: '/unexpected/path.md'
+    }))
+
+    await expect(flows.completePhase({
+      flowId: 'path-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Linked plan path mismatch for path-plan.'
+    })
+
+    await expect(flows.readFlow('path-flow')).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'plan-review', status: 'ready' }),
+        expect.objectContaining({ phase_id: 'implementation', status: 'pending' })
+      ])
+    })
+  })
+
+  it('rejects generated child phase id collisions with non-generated phases', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'collision-plan',
+      title: 'Collision Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- First slice\n'
+    })
+    await flows.createFlow({ id: 'collision-flow', title: 'Collision Flow', repoPath: '/repo' })
+    await rewriteFlow(root, 'collision-flow', (flow) => ({
+      ...flow,
+      phases: [
+        ...(Array.isArray(flow.phases) ? flow.phases : []),
+        {
+          phase_id: 'implementation-first-slice',
+          title: 'Existing custom phase',
+          kind: 'implementation',
+          status: 'ready',
+          order: 99,
+          created_at: '2026-06-15T12:00:00.000Z',
+          updated_at: '2026-06-15T12:00:00.000Z'
+        }
+      ]
+    }))
+    await flows.linkPlan({ flowId: 'collision-flow', planId: 'collision-plan' })
+    await flows.completePhase({ flowId: 'collision-flow', phaseId: 'plan', outcome: 'plan_saved' })
+
+    await expect(flows.completePhase({
+      flowId: 'collision-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Generated implementation phase id conflicts with existing phase: implementation-first-slice'
+    })
+
+    const collisionFlow = await flows.readFlow('collision-flow')
+    const existingPhase = collisionFlow.phases?.find((phase) =>
+      phase.phase_id === 'implementation-first-slice'
+    )
+    expect(existingPhase).toEqual(expect.objectContaining({
+      phase_id: 'implementation-first-slice',
+      title: 'Existing custom phase'
+    }))
+    expect(existingPhase).not.toHaveProperty('generated')
+    expect(existingPhase).not.toHaveProperty('editable')
+    expect(existingPhase).not.toHaveProperty('parent_phase_id')
   })
 
   it('edits pending generated children and rejects locked child edits', async () => {
@@ -248,3 +432,17 @@ describe('Flow operations', () => {
     ]))
   })
 })
+
+async function rewriteFlow(
+  artifactRoot: string,
+  flowId: string,
+  update: (flow: Record<string, unknown>) => Record<string, unknown>
+): Promise<void> {
+  const path = join(artifactRoot, 'flows', flowId, 'meta.json')
+  const flow = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+  await writeFile(path, JSON.stringify(update(flow), null, 2))
+}
+
+function isRawPhase(value: unknown): value is { phase_id?: unknown } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}

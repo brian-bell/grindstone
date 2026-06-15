@@ -311,6 +311,58 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('rejects malformed Flow phase edit payloads before updating artifacts', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-invalid-edit-phase')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-invalid-edit-phase',
+      flowMeta('flow-invalid-edit-phase', repoPath, {
+        phases: [
+          {
+            phase_id: 'implementation-first-slice',
+            title: 'First slice',
+            kind: 'implementation',
+            status: 'pending',
+            order: 1,
+            parent_phase_id: 'implementation',
+            generated: true,
+            editable: true
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(updateFlowPhaseInWorkspace({
+      flowId: 'flow-invalid-edit-phase',
+      phaseId: 'implementation-first-slice',
+      title: 42
+    } as never)).rejects.toThrow('Update Flow phase request is invalid.')
+    await expect(updateFlowPhaseInWorkspace({
+      flowId: 'flow-invalid-edit-phase',
+      phaseId: 'implementation-first-slice',
+      order: '2'
+    } as never)).rejects.toThrow('Update Flow phase request is invalid.')
+    await expect(updateFlowPhaseInWorkspace({
+      flowId: 'flow-invalid-edit-phase',
+      phaseId: 'implementation-first-slice',
+      order: 1.5
+    })).rejects.toThrow('Update Flow phase request is invalid.')
+    await expect(updateFlowPhaseInWorkspace({
+      flowId: 'flow-invalid-edit-phase',
+      phaseId: 'implementation-first-slice',
+      notes: false
+    } as never)).rejects.toThrow('Update Flow phase request is invalid.')
+  })
+
   it('exposes configured scan roots as opaque create targets', async () => {
     const root = await makeTempDir()
     const scanRoot = join(root, 'repos')

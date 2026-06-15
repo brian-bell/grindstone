@@ -327,10 +327,18 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         updated_at: now
       })
 
+      const phases = flow.phases ?? []
+      const nextPhases = phases.some((phase) =>
+        phase.phase_id === 'plan' && phase.status === 'completed'
+      )
+        ? promotePhase(phases, 'plan-review', 'ready', now)
+        : phases
+
       return writeFlow({
         ...flow,
         plan_id: input.planId,
         plan_path: plan.plan_path,
+        phases: nextPhases,
         updated_at: now
       })
     },
@@ -420,6 +428,12 @@ function validatePlanReviewGate({
 
   const planReview = phases.find((candidate) => candidate.phase_id === 'plan-review')
   if (planReview === undefined) {
+    if (phases.some((candidate) => candidate.phase_id === 'plan')) {
+      throw new ArtifactStoreError(
+        'validation_error',
+        'Implementation requires a completed approving Plan Review.'
+      )
+    }
     return
   }
   if (isApprovingPlanReview(planReview)) {
@@ -514,6 +528,13 @@ function mergeGeneratedImplementationChildren(
         updated_at: now
       }))
       continue
+    }
+    if (existing.generated !== true || existing.parent_phase_id !== 'implementation') {
+      throw new ArtifactStoreError(
+        'validation_error',
+        `Generated implementation phase id conflicts with existing phase: ${phaseId}`,
+        phaseId
+      )
     }
     const index = next.findIndex((phase) => phase.phase_id === phaseId)
     next[index] = withoutUndefined({

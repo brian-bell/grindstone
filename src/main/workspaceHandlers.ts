@@ -374,10 +374,7 @@ export async function updateFlowPhaseInWorkspace(
     throw new Error('Flow artifact root is not configured.')
   }
   if (
-    typeof request !== 'object' ||
-    request === null ||
-    typeof request.flowId !== 'string' ||
-    typeof request.phaseId !== 'string'
+    !isUpdateFlowPhaseRequest(request)
   ) {
     throw new Error('Update Flow phase request is invalid.')
   }
@@ -398,6 +395,24 @@ export async function updateFlowPhaseInWorkspace(
   )
   currentWorkspaceState = refreshedWorkspace
   return refreshedWorkspace
+}
+
+function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseRequest {
+  return typeof request === 'object' &&
+    request !== null &&
+    typeof (request as { flowId?: unknown }).flowId === 'string' &&
+    typeof (request as { phaseId?: unknown }).phaseId === 'string' &&
+    optionalStringField((request as { title?: unknown }).title) &&
+    optionalNumberField((request as { order?: unknown }).order) &&
+    optionalStringField((request as { notes?: unknown }).notes)
+}
+
+function optionalStringField(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+function optionalNumberField(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isInteger(value))
 }
 
 export async function retryRepositoryRemoteInWorkspace(
