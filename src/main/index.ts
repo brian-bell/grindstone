@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { registerWorkspaceHandlers } from './workspaceHandlers'
 
+app.setName('Grindstone')
+
 registerWorkspaceHandlers(ipcMain)
 
 const createWindow = (): void => {
