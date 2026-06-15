@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { lstat, readFile } from 'node:fs/promises'
+import { lstat, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   FlowPhaseSessionReference,
@@ -153,16 +153,6 @@ async function attachSessionReference(
     ended_at: events.at(-1)?.timestamp,
     transcript_path: metadata.transcript_path
   })
-  const sessions = [...(phase.sessions ?? [])]
-  const existingIndex = sessions.findIndex((session) =>
-    session.provider === reference.provider && session.session_id === reference.session_id
-  )
-  if (existingIndex === -1) {
-    sessions.push(reference)
-  } else {
-    sessions[existingIndex] = reference
-  }
-
   await flows.setPhase({
     flowId: metadata.flow_id,
     phaseId: metadata.phase_id,
@@ -178,6 +168,15 @@ async function attachSessionReference(
   const phaseIndex = updatedPhases.findIndex((candidate) => candidate.phase_id === metadata.phase_id)
   if (phaseIndex === -1) {
     throw new ArtifactStoreError('validation_error', `Unknown phase: ${metadata.phase_id}`)
+  }
+  const sessions = [...(updatedPhases[phaseIndex].sessions ?? [])]
+  const existingIndex = sessions.findIndex((session) =>
+    session.provider === reference.provider && session.session_id === reference.session_id
+  )
+  if (existingIndex === -1) {
+    sessions.push(reference)
+  } else {
+    sessions[existingIndex] = reference
   }
   updatedPhases[phaseIndex] = {
     ...updatedPhases[phaseIndex],
@@ -263,6 +262,12 @@ async function readClaudeTranscript(input: SessionIngestInput, transcriptPath: s
   const transcriptStat = await lstat(resolvedPath)
   if (transcriptStat.isSymbolicLink()) {
     throw new ArtifactStoreError('validation_error', 'Claude transcript_path must not be a symlink.')
+  }
+  const realRoot = await realpath(transcriptRoot)
+  const realTarget = await realpath(resolvedPath)
+  const realRelativePath = relative(realRoot, realTarget)
+  if (realRelativePath.startsWith('..') || isAbsolute(realRelativePath)) {
+    throw new ArtifactStoreError('validation_error', 'Claude transcript_path must stay inside the hook directory.')
   }
   if (transcriptStat.size > MAX_TRANSCRIPT_TEXT_BYTES) {
     throw new ArtifactStoreError(

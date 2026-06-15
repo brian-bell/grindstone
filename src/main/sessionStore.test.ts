@@ -397,6 +397,21 @@ describe('session-hook transcript ingestion', () => {
         transcript_path: 'link.jsonl'
       })
     })).rejects.toThrow(/must not be a symlink/)
+
+    const outsideDir = join(root, 'outside-dir')
+    await mkdir(outsideDir)
+    await writeFile(join(outsideDir, 'outside.jsonl'), `${JSON.stringify({ text: 'outside' })}\n`)
+    await symlink(outsideDir, join(hookDir, 'linked-dir'))
+    await expect(ingestSessionHook({ artifactRoot: root }, {
+      provider: 'claude',
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      sourcePath: join(hookDir, 'hook.json'),
+      payload: JSON.stringify({
+        session_id: 'claude-session',
+        transcript_path: 'linked-dir/outside.jsonl'
+      })
+    })).rejects.toThrow(/must stay inside/)
   })
 
   it('preserves original session metadata when reattachment targets another Flow phase', async () => {
