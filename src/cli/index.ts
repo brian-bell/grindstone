@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from 'node:process'
 import { ArtifactStoreError, resolveArtifactRoot, typedErrorPayload, getErrorMessage } from '../main/artifactStore'
 import { createFlowOperations } from '../main/flowOperations'
@@ -23,6 +23,7 @@ const JSON_DEFAULT_COMMANDS = new Set([
   'plan:link',
   'session-hook:ingest'
 ])
+const MAX_SESSION_HOOK_INPUT_BYTES = 10 * 1024 * 1024
 
 export async function runCli(
   argv: string[],
@@ -166,12 +167,13 @@ export async function runCli(
       if (provider !== 'codex' && provider !== 'claude') {
         throw new ArtifactStoreError('validation_error', `Unsupported provider: ${provider}`)
       }
+      const sourcePath = optionalFlag(parsed, 'file')
       const result = await ingestSessionHook({ artifactRoot }, {
         provider,
-        payload: optionalFlag(parsed, 'file') === undefined
-          ? await readStdin(io.stdin)
-          : await readFile(requiredFlag(parsed, 'file'), 'utf8'),
-        sourcePath: optionalFlag(parsed, 'file'),
+        payload: sourcePath === undefined
+          ? await readStdin(io.stdin, MAX_SESSION_HOOK_INPUT_BYTES)
+          : await readUtf8File(sourcePath, MAX_SESSION_HOOK_INPUT_BYTES),
+        sourcePath,
         flowId: metadataOptional(parsed, io.env, 'flow-id', 'GRINDSTONE_FLOW_ID', 'WTUI_FLOW_ID'),
         phaseId: metadataOptional(parsed, io.env, 'phase-id', 'GRINDSTONE_PHASE_ID', 'WTUI_FLOW_PHASE_ID'),
         launchId: metadataOptional(parsed, io.env, 'launch-id', 'GRINDSTONE_LAUNCH_ID', 'WTUI_LAUNCH_ID'),
@@ -272,12 +274,29 @@ function flowId(parsed: ParsedArgs, env: NodeJS.ProcessEnv): string {
   return metadata(parsed, env, 'flow-id', 'GRINDSTONE_FLOW_ID', 'WTUI_FLOW_ID')
 }
 
-async function readStdin(stream: NodeJS.ReadStream): Promise<string> {
+async function readStdin(stream: NodeJS.ReadStream, maxBytes?: number): Promise<string> {
   const chunks: Buffer[] = []
+  let totalBytes = 0
   for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+    totalBytes += buffer.byteLength
+    if (maxBytes !== undefined && totalBytes > maxBytes) {
+      throw new ArtifactStoreError('validation_error', `Input exceeds maximum size of ${maxBytes} bytes.`)
+    }
+    chunks.push(buffer)
   }
   return Buffer.concat(chunks).toString('utf8')
+}
+
+async function readUtf8File(path: string, maxBytes?: number): Promise<string> {
+  if (maxBytes !== undefined && (await stat(path)).size > maxBytes) {
+    throw new ArtifactStoreError('validation_error', `Input exceeds maximum size of ${maxBytes} bytes.`)
+  }
+  const value = await readFile(path, 'utf8')
+  if (maxBytes !== undefined && Buffer.byteLength(value, 'utf8') > maxBytes) {
+    throw new ArtifactStoreError('validation_error', `Input exceeds maximum size of ${maxBytes} bytes.`)
+  }
+  return value
 }
 
 function writeJson(io: CliIo, value: unknown): void {

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile, readdir, symlink } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Readable } from 'node:stream'
@@ -90,6 +90,29 @@ describe('grindstone CLI', () => {
       error: {
         code: 'validation_error',
         message: 'Unsupported provider: unknown'
+      }
+    })
+  })
+
+  it('rejects oversized session-hook files before ingestion', async () => {
+    const root = await makeTempDir()
+    const payloadPath = join(root, 'oversized.jsonl')
+    await writeFile(payloadPath, 'x'.repeat((10 * 1024 * 1024) + 1))
+    const oversizedIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+
+    await expect(runCli([
+      'session-hook',
+      'ingest',
+      '--provider',
+      'codex',
+      '--file',
+      payloadPath
+    ], oversizedIo)).resolves.toBe(1)
+
+    expect(JSON.parse(oversizedIo.stderr.value)).toMatchObject({
+      error: {
+        code: 'validation_error',
+        message: expect.stringContaining('Input exceeds maximum size')
       }
     })
   })

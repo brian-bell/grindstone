@@ -260,6 +260,33 @@ describe('session-hook transcript ingestion', () => {
     })).rejects.toThrow(/requires Flow and phase/)
   })
 
+  it('rejects oversized Claude transcript_path files before parsing', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({ id: 'flow-one', title: 'Flow One', repoPath: '/repo' })
+    await flows.setPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      title: 'Implementation',
+      status: 'running',
+      order: 1
+    })
+    const hookDir = join(root, 'hooks')
+    await mkdir(hookDir)
+    await writeFile(join(hookDir, 'transcript.jsonl'), 'x'.repeat((10 * 1024 * 1024) + 1))
+
+    await expect(ingestSessionHook({ artifactRoot: root }, {
+      provider: 'claude',
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      sourcePath: join(hookDir, 'hook.json'),
+      payload: JSON.stringify({
+        session_id: 'claude-session',
+        transcript_path: 'transcript.jsonl'
+      })
+    })).rejects.toThrow(/Transcript exceeds maximum size/)
+  })
+
   it('preserves original session metadata when reattachment targets another Flow phase', async () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })

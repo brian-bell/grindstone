@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type {
   FlowPhaseSessionReference,
@@ -256,7 +256,20 @@ async function readClaudeTranscript(input: SessionIngestInput, transcriptPath: s
   if (resolvedPath === undefined) {
     throw new ArtifactStoreError('validation_error', 'Claude stdin hooks require an absolute transcript_path.')
   }
-  return readFile(resolvedPath, 'utf8')
+  if ((await stat(resolvedPath)).size > MAX_TRANSCRIPT_TEXT_BYTES) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      `Transcript exceeds maximum size of ${MAX_TRANSCRIPT_TEXT_BYTES} bytes.`
+    )
+  }
+  const payload = await readFile(resolvedPath, 'utf8')
+  if (Buffer.byteLength(payload, 'utf8') > MAX_TRANSCRIPT_TEXT_BYTES) {
+    throw new ArtifactStoreError(
+      'validation_error',
+      `Transcript exceeds maximum size of ${MAX_TRANSCRIPT_TEXT_BYTES} bytes.`
+    )
+  }
+  return payload
 }
 
 function normalizeEvent({
