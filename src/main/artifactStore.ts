@@ -164,7 +164,7 @@ async function writeFileAtomically(path: string, value: string): Promise<void> {
     tempFile = undefined
     await rename(tempPath, path)
     await chmodBestEffort(path, 0o600)
-    await syncDirectory(directory)
+    await syncDirectoryBestEffort(directory)
   } catch (error) {
     await tempFile?.close().catch(() => undefined)
     await unlink(tempPath).catch(() => undefined)
@@ -182,11 +182,13 @@ async function chmodBestEffort(path: string, mode: number): Promise<void> {
   }
 }
 
-async function syncDirectory(path: string): Promise<void> {
+async function syncDirectoryBestEffort(path: string): Promise<void> {
   let directory: Awaited<ReturnType<typeof open>> | undefined
   try {
     directory = await open(path, 'r')
     await directory.sync()
+  } catch {
+    // Directory fsync is not supported on every filesystem and commonly fails on Windows.
   } finally {
     await directory?.close().catch(() => undefined)
   }
