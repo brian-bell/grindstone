@@ -59,6 +59,9 @@ type ManagedTerminal = {
   outputQueue: Promise<void>
 }
 
+const PRIVATE_DIRECTORY_MODE = 0o700
+const PRIVATE_FILE_MODE = 0o600
+
 export const nodePtyAdapter: PtyAdapter = {
   spawn(command, args, options) {
     return nodePty.spawn(command, args, {
@@ -72,6 +75,7 @@ export const nodePtyAdapter: PtyAdapter = {
 
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, ManagedTerminal>()
+  private readonly persistQueues = new Map<string, Promise<void>>()
 
   constructor(
     private readonly options: {
@@ -103,7 +107,7 @@ export class TerminalSessionManager {
     )
     const logPath = join(terminalDir, 'raw.log')
     const metaPath = join(terminalDir, 'meta.json')
-    await mkdir(terminalDir, { recursive: true })
+    await mkdir(terminalDir, { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
 
     const launchCommand = buildAgentLaunchCommand({
       provider: request.provider,
@@ -144,7 +148,7 @@ export class TerminalSessionManager {
       recentOutput: ''
     }
 
-    await writeFile(logPath, '', { flag: 'a' })
+    await writeFile(logPath, '', { flag: 'a', mode: PRIVATE_FILE_MODE })
     await this.writeTerminalMetadata(metaPath, terminal)
     await this.persistTerminal(request.flow.id, terminal)
 
@@ -357,6 +361,25 @@ export class TerminalSessionManager {
   }
 
   private async persistTerminal(flowId: string, terminal: FlowTerminalSummary): Promise<void> {
+    const previous = this.persistQueues.get(flowId) ?? Promise.resolve()
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.persistTerminalNow(flowId, terminal))
+    this.persistQueues.set(flowId, next)
+
+    try {
+      await next
+    } finally {
+      if (this.persistQueues.get(flowId) === next) {
+        this.persistQueues.delete(flowId)
+      }
+    }
+  }
+
+  private async persistTerminalNow(
+    flowId: string,
+    terminal: FlowTerminalSummary
+  ): Promise<void> {
     const flow = await this.options.store.readFlow(flowId)
     if (flow === undefined) {
       throw new Error(`Flow record not found: ${flowId}`)
@@ -404,8 +427,11 @@ export class TerminalSessionManager {
     metaPath: string,
     terminal: FlowTerminalSummary
   ): Promise<void> {
-    await mkdir(dirname(metaPath), { recursive: true })
-    await writeFile(`${metaPath}`, `${JSON.stringify(toRawTerminal(terminal), null, 2)}\n`, 'utf8')
+    await mkdir(dirname(metaPath), { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
+    await writeFile(metaPath, `${JSON.stringify(toRawTerminal(terminal), null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: PRIVATE_FILE_MODE
+    })
   }
 
   private emitState(managed: ManagedTerminal): void {

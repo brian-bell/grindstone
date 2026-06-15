@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -173,6 +173,18 @@ describe('terminal session manager', () => {
       cwd: join(root, 'worktree'),
       logPath: join(artifactRoot, 'flows', 'launch-terminal', 'terminals', 'terminal-123', 'raw.log')
     })
+    await expect(stat(terminal.logPath ?? '')).resolves.toMatchObject({
+      mode: expect.any(Number)
+    })
+    expect((await stat(terminal.logPath ?? '')).mode & 0o777).toBe(0o600)
+    expect((await stat(join(
+      artifactRoot,
+      'flows',
+      'launch-terminal',
+      'terminals',
+      'terminal-123',
+      'meta.json'
+    ))).mode & 0o777).toBe(0o600)
     expect(spawned).toEqual([
       expect.objectContaining({
         command: 'codex',
@@ -254,6 +266,96 @@ describe('terminal session manager', () => {
         status: 'dismissed'
       })
     ])
+  })
+
+  it('serializes concurrent terminal persists without dropping sibling terminals', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const realStore = await createFlowStore({ artifactRoot })
+    const storedFlow = await realStore.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: join(root, 'repo'),
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    let activeTerminalPersists = 0
+    let maxActiveTerminalPersists = 0
+    const delayedStore: FlowStore = {
+      ...realStore,
+      async updateFlowRecord(flowId, update) {
+        if (update.terminals !== undefined) {
+          activeTerminalPersists += 1
+          maxActiveTerminalPersists = Math.max(
+            maxActiveTerminalPersists,
+            activeTerminalPersists
+          )
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          try {
+            return await realStore.updateFlowRecord(flowId, update)
+          } finally {
+            activeTerminalPersists -= 1
+          }
+        }
+
+        return realStore.updateFlowRecord(flowId, update)
+      }
+    }
+    const processes = [new FakePtyProcess(), new FakePtyProcess()]
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store: delayedStore,
+      pty: {
+        spawn() {
+          const process = processes.shift()
+          if (process === undefined) {
+            throw new Error('unexpected extra spawn')
+          }
+
+          return process
+        }
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn()
+        .mockReturnValueOnce('terminal-a')
+        .mockReturnValueOnce('launch-a')
+        .mockReturnValueOnce('terminal-b')
+        .mockReturnValueOnce('launch-b')
+    })
+
+    await Promise.all([
+      manager.launchTerminal({
+        flow: storedFlow,
+        provider: 'codex',
+        mode: 'interactive',
+        phaseId: 'plan',
+        prompt: 'Implement the approved plan.'
+      }),
+      manager.launchTerminal({
+        flow: storedFlow,
+        provider: 'claude',
+        mode: 'interactive',
+        phaseId: 'review',
+        prompt: 'Review the implementation.'
+      })
+    ])
+
+    expect(maxActiveTerminalPersists).toBe(1)
+    await expect(realStore.readFlow('launch-terminal')).resolves.toMatchObject({
+      terminals: expect.arrayContaining([
+        expect.objectContaining({ terminalId: 'terminal-a' }),
+        expect.objectContaining({ terminalId: 'terminal-b' })
+      ])
+    })
   })
 
   it('reconciles persisted terminals without a live PTY and allows completed dismissal after reload', async () => {
