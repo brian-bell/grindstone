@@ -14,6 +14,7 @@ type Heading = {
 }
 
 const PREFERRED_SECTION_TITLES = new Set(['implementation phases', 'implementation slices', 'phases'])
+const LIST_ITEM_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/
 
 export function extractImplementationPhaseDrafts(markdown: string): ImplementationPhaseDraft[] {
   const lines = maskFencedCode(markdown.split(/\r?\n/))
@@ -52,7 +53,7 @@ function extractListDrafts(
   }> = []
 
   for (let index = heading.lineIndex + 1; index < endLine; index += 1) {
-    const match = /^(\s*)[-*+]\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/.exec(lines[index] ?? '')
+    const match = LIST_ITEM_PATTERN.exec(lines[index] ?? '')
     if (match === null) {
       continue
     }
@@ -72,7 +73,7 @@ function extractListDrafts(
 
   for (let index = heading.lineIndex + 1; index < endLine; index += 1) {
     const line = lines[index] ?? ''
-    const match = /^(\s*)[-*+]\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/.exec(line)
+    const match = LIST_ITEM_PATTERN.exec(line)
     if (match !== null && match[1].length === siblingIndent) {
       if (current !== undefined) {
         drafts.push(toDraft(current, drafts.length + 1))
@@ -192,8 +193,7 @@ function normalizeHeading(value: string): string {
 function stripNestedMarker(value: string): string {
   return value
     .trim()
-    .replace(/^[-*+]\s+(?:\[[ xX]\]\s+)?/, '')
-    .replace(/^\d+[.)]\s+/, '')
+    .replace(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, '')
 }
 
 function cleanTitle(value: string): string {
