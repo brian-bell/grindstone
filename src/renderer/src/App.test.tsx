@@ -1030,6 +1030,72 @@ describe('App shell', () => {
       .toBeInTheDocument()
   })
 
+  it('does not show Record PR controls for custom PR creation phases', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'custom-pr-flow',
+      title: 'Custom PR Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'custom-pr-gate',
+          title: 'Custom PR Gate',
+          status: 'ready',
+          kind: 'pr_creation',
+          order: 6
+        }
+      ]
+    }
+    const state: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [flow]
+      }
+    }
+    const recordFlowPullRequest = vi.fn<(
+      request: RecordFlowPullRequestRequest
+    ) => Promise<InitialWorkspaceState>>().mockResolvedValue(state)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: state,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(state),
+      undefined,
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      recordFlowPullRequest
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /custom pr flow details/i }))
+
+    expect(within(flowPane).queryByRole('form', { name: /record pr for custom pr flow/i }))
+      .not.toBeInTheDocument()
+    expect(recordFlowPullRequest).not.toHaveBeenCalled()
+  })
+
   it('requires notes before skipping an implementation child and shows refreshed readiness', async () => {
     const user = userEvent.setup()
     const flow: FlowListRow = {

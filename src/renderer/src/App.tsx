@@ -2044,7 +2044,7 @@ function isExecutableWorkspacePhase(phase: FlowPhaseSummary): boolean {
 }
 
 function isPrCreationPhase(phase: FlowPhaseSummary): boolean {
-  return phase.id === 'pr-creation' || phase.kind === 'pr_creation'
+  return phase.id === 'pr-creation'
 }
 
 function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
