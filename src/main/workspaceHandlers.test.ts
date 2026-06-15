@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -597,6 +597,86 @@ describe('workspace main handlers', () => {
         ]
       }
     })
+    await expect(readdir(join(artifactRoot, 'launches'))).resolves.toHaveLength(1)
+  })
+
+  it('preserves concurrent launch updates for different implementation children', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-concurrent-children')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-concurrent-children',
+      flowMeta('flow-launch-concurrent-children', repoPath, {
+        phases: [
+          {
+            phase_id: 'plan-review',
+            title: 'Plan Review',
+            kind: 'plan_review',
+            status: 'completed',
+            outcome: 'approved',
+            order: 2
+          },
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'running',
+            order: 3
+          },
+          {
+            phase_id: 'implementation-api',
+            title: 'API slice',
+            kind: 'implementation_child',
+            status: 'ready',
+            parent_phase_id: 'implementation',
+            order: 1
+          },
+          {
+            phase_id: 'implementation-ui',
+            title: 'UI slice',
+            kind: 'implementation_child',
+            status: 'ready',
+            parent_phase_id: 'implementation',
+            order: 2
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    const runPhase = vi.fn<FlowPhaseRunner>().mockResolvedValue(undefined)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await Promise.all([
+      launchFlowPhaseInWorkspace({
+        flowId: 'flow-launch-concurrent-children',
+        phaseId: 'implementation-api'
+      }, { runPhase }),
+      launchFlowPhaseInWorkspace({
+        flowId: 'flow-launch-concurrent-children',
+        phaseId: 'implementation-ui'
+      }, { runPhase })
+    ])
+    await expect(selectRepository({ repositoryId })).resolves.toMatchObject({
+      flow: {
+        flows: [
+          expect.objectContaining({
+            id: 'flow-launch-concurrent-children',
+            phases: expect.arrayContaining([
+              expect.objectContaining({ id: 'implementation-api', status: 'running' }),
+              expect.objectContaining({ id: 'implementation-ui', status: 'running' })
+            ])
+          })
+        ]
+      }
+    })
+    expect(runPhase).toHaveBeenCalledTimes(2)
+    await expect(readdir(join(artifactRoot, 'launches'))).resolves.toHaveLength(2)
   })
 
   it('launches legacy generated implementation children as child phases', async () => {
