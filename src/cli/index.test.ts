@@ -198,11 +198,14 @@ describe('grindstone CLI', () => {
     } as NodeJS.ProcessEnv)
     await expect(runCli(['session-hook', 'ingest', '--provider', 'codex'], ingestIo)).resolves.toBe(0)
     expect(JSON.parse(ingestIo.stdout.value)).toMatchObject({
+      event_count: 1,
       metadata: {
         session_id: 'codex-session',
         attachment_status: 'attached'
       }
     })
+    expect(JSON.parse(ingestIo.stdout.value)).not.toHaveProperty('events')
+    expect(ingestIo.stdout.value).not.toContain('done')
     await expect(readFile(
       join(root, 'sessions', 'codex', 'codex-session', 'transcript.jsonl'),
       'utf8'

@@ -3,7 +3,7 @@ import { stdin as processStdin, stdout as processStdout, stderr as processStderr
 import { ArtifactStoreError, resolveArtifactRoot, typedErrorPayload, getErrorMessage } from '../main/artifactStore'
 import { createFlowOperations } from '../main/flowOperations'
 import { createPlanStore, validatePlanStatus } from '../main/planStore'
-import { ingestSessionHook } from '../main/sessionStore'
+import { ingestSessionHook, type SessionIngestResult } from '../main/sessionStore'
 
 type CliIo = {
   stdout: Pick<NodeJS.WriteStream, 'write'>
@@ -182,7 +182,7 @@ export async function runCli(
         branch: metadataOptional(parsed, io.env, 'branch', 'GRINDSTONE_BRANCH', 'WTUI_BRANCH'),
         commit: metadataOptional(parsed, io.env, 'commit', 'GRINDSTONE_COMMIT', 'WTUI_COMMIT')
       })
-      writeJson(io, result)
+      writeJson(io, sessionHookOutput(result))
       return 0
     }
 
@@ -301,6 +301,15 @@ async function readUtf8File(path: string, maxBytes?: number): Promise<string> {
 
 function writeJson(io: CliIo, value: unknown): void {
   io.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+function sessionHookOutput(result: SessionIngestResult): Record<string, unknown> {
+  return {
+    metadata: result.metadata,
+    event_count: result.events.length,
+    warnings: result.metadata.source_summary.warnings,
+    truncated: result.metadata.truncated === true ? true : undefined
+  }
 }
 
 function helpText(): string {
