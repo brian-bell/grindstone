@@ -106,7 +106,7 @@ function extractNumberedHeadingDrafts(
   headings: Heading[]
 ): Array<Omit<ImplementationPhaseDraft, 'idBase'>> {
   const section = headings.find((heading) =>
-    normalizeHeading(heading.text) === 'implementation slices'
+    IMPLEMENTATION_SECTION_TITLES.has(normalizeHeading(heading.text))
   )
   if (section === undefined) {
     return []
