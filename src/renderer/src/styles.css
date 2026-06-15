@@ -104,7 +104,7 @@ textarea {
   max-width: 560px;
 }
 
-.repository-summary h3,
+.repository-status-title,
 .state-block h2,
 .hint-row h3 {
   margin: 0;
@@ -112,9 +112,10 @@ textarea {
   letter-spacing: 0;
 }
 
-.repository-summary h3,
+.repository-status-title,
 .state-block h2 {
   font-size: 1.5rem;
+  font-weight: 700;
 }
 
 .repository-summary p,
@@ -405,13 +406,13 @@ textarea {
   gap: 12px;
 }
 
+.repository-create-launcher {
+  justify-self: start;
+}
+
 .repository-create-form {
   display: grid;
   gap: 10px;
-  padding: 12px;
-  border: 1px solid #d1d7d4;
-  border-radius: 7px;
-  background: #fbfaf6;
 }
 
 .field {
