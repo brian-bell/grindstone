@@ -15,6 +15,8 @@ import type {
   CreateRepositoryRequest,
   FlowListRow,
   InitialWorkspaceState,
+  LaunchFlowPhaseRequest,
+  SkipFlowPhaseRequest,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
@@ -300,7 +302,10 @@ const setWorkspaceApi = (
     planId: 'plan-flow-list',
     message: 'Linked plan missing'
   } satisfies LinkedFlowPlanResponse),
-  updateFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState)
+  updateFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
+  launchFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
+  skipFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
+  completeFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -311,6 +316,9 @@ const setWorkspaceApi = (
         readFlowPlan,
         createFlow,
         updateFlowPhase,
+        launchFlowPhase,
+        skipFlowPhase,
+        completeFlowPhase,
         createRepository,
         retryRepositoryRemote
       },
@@ -591,6 +599,257 @@ describe('App shell', () => {
       notes: 'Saved notes'
     })
     expect(await within(flowPane).findByText('Phase: Build API contract - pending'))
+      .toBeInTheDocument()
+  })
+
+  it('launches parent and child implementation phases from the phase tree', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'launchable-flow',
+      title: 'Launchable Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'implementation',
+          title: 'Implementation',
+          status: 'ready',
+          order: 3
+        },
+        {
+          id: 'implementation-build-api',
+          title: 'Build API',
+          status: 'ready',
+          order: 1,
+          parentPhaseId: 'implementation',
+          generated: true,
+          editable: true
+        }
+      ]
+    }
+    const launchedState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...flow,
+            phases: flow.phases?.map((phase) =>
+              phase.id === 'implementation'
+                ? { ...phase, status: 'running' }
+                : phase
+            )
+          }
+        ]
+      }
+    }
+    const childLaunchedState: InitialWorkspaceState = {
+      ...launchedState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...flow,
+            phases: flow.phases?.map((phase) =>
+              phase.id === 'implementation-build-api'
+                ? { ...phase, status: 'running' }
+                : phase.id === 'implementation'
+                  ? { ...phase, status: 'running' }
+                  : phase
+            )
+          }
+        ]
+      }
+    }
+    const launchFlowPhase = vi.fn<(
+      request: LaunchFlowPhaseRequest
+    ) => Promise<InitialWorkspaceState>>()
+      .mockResolvedValueOnce(launchedState)
+      .mockResolvedValueOnce(childLaunchedState)
+    const launchableState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [flow]
+      }
+    }
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(launchableState),
+      vi.fn().mockResolvedValue(launchableState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: launchableState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(launchableState),
+      undefined,
+      vi.fn().mockResolvedValue(launchableState),
+      launchFlowPhase
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /launchable flow details/i }))
+    await user.click(within(flowPane).getByRole('button', { name: /launch implementation/i }))
+
+    expect(launchFlowPhase).toHaveBeenCalledWith({
+      flowId: 'launchable-flow',
+      phaseId: 'implementation'
+    })
+    expect(await within(flowPane).findByText('Phase: Implementation - running'))
+      .toBeInTheDocument()
+
+    await user.click(within(flowPane).getByRole('button', { name: /launch build api/i }))
+    expect(launchFlowPhase).toHaveBeenLastCalledWith({
+      flowId: 'launchable-flow',
+      phaseId: 'implementation-build-api'
+    })
+    expect(await within(flowPane).findByText('Phase: Build API - running'))
+      .toBeInTheDocument()
+  })
+
+  it('requires notes before skipping an implementation child and shows refreshed readiness', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'skip-child-flow',
+      title: 'Skip Child Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'implementation',
+          title: 'Implementation',
+          status: 'running',
+          order: 3
+        },
+        {
+          id: 'implementation-build-api',
+          title: 'Build API',
+          status: 'ready',
+          order: 1,
+          parentPhaseId: 'implementation',
+          generated: true,
+          editable: true
+        },
+        {
+          id: 'review-loop-1',
+          title: 'Review Loop 1',
+          status: 'pending',
+          order: 4
+        }
+      ]
+    }
+    const skippedState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...flow,
+            phases: flow.phases?.map((phase) =>
+              phase.id === 'implementation-build-api'
+                ? { ...phase, status: 'skipped', notes: 'Covered by the parent slice.' }
+                : phase.id === 'review-loop-1'
+                  ? { ...phase, status: 'ready' }
+                  : phase
+            )
+          }
+        ]
+      }
+    }
+    const skipFlowPhase = vi.fn<(
+      request: SkipFlowPhaseRequest
+    ) => Promise<InitialWorkspaceState>>()
+      .mockResolvedValue(skippedState)
+    const state: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [flow]
+      }
+    }
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: state,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(state),
+      undefined,
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      skipFlowPhase
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /skip child flow details/i }))
+    await user.click(within(flowPane).getByRole('button', { name: /skip build api/i }))
+    const skipForm = within(flowPane).getByRole('form', { name: /skip build api/i })
+    await user.click(within(skipForm).getByRole('button', { name: /^skip phase$/i }))
+
+    expect(await within(skipForm).findByRole('alert')).toHaveTextContent(
+      'Skip notes are required.'
+    )
+    expect(skipFlowPhase).not.toHaveBeenCalled()
+
+    await user.type(within(skipForm).getByLabelText(/skip notes for build api/i), 'Covered by the parent slice.')
+    await user.click(within(skipForm).getByRole('button', { name: /^skip phase$/i }))
+
+    expect(skipFlowPhase).toHaveBeenCalledWith({
+      flowId: 'skip-child-flow',
+      phaseId: 'implementation-build-api',
+      notes: 'Covered by the parent slice.'
+    })
+    expect(await within(flowPane).findByText('Phase: Build API - skipped'))
+      .toBeInTheDocument()
+    expect(await within(flowPane).findByText('Phase: Review Loop 1 - ready'))
       .toBeInTheDocument()
   })
 

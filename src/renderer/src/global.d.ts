@@ -5,8 +5,11 @@ import type {
 import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
+  CompleteFlowPhaseRequest,
   InitialWorkspaceState,
+  LaunchFlowPhaseRequest,
   RetryRepositoryRemoteRequest,
+  SkipFlowPhaseRequest,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
@@ -19,6 +22,9 @@ declare global {
         readFlowPlan: (request: { flowId: string }) => Promise<LinkedFlowPlanResponse>
         createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
         updateFlowPhase: (request: UpdateFlowPhaseRequest) => Promise<InitialWorkspaceState>
+        launchFlowPhase: (request: LaunchFlowPhaseRequest) => Promise<InitialWorkspaceState>
+        skipFlowPhase: (request: SkipFlowPhaseRequest) => Promise<InitialWorkspaceState>
+        completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
         createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
         retryRepositoryRemote: (
           request: RetryRepositoryRemoteRequest

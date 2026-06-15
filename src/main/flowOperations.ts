@@ -281,6 +281,9 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
           nextPhases = promotePhase(nextPhases, nextDefaultPhaseId, 'ready', now)
         }
       }
+      if (implementationChildrenAreSettled(nextPhases)) {
+        nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
+      }
 
       return writeFlow({
         ...flow,
@@ -486,7 +489,18 @@ function promotePhase(
     phase.phase_id === phaseId && phase.status === 'pending'
       ? { ...phase, status, updated_at: now }
       : phase
+    )
+}
+
+function implementationChildrenAreSettled(phases: PersistedFlowPhase[]): boolean {
+  const implementationChildren = phases.filter((phase) =>
+    phase.parent_phase_id === 'implementation'
   )
+  return implementationChildren.length > 0 &&
+    implementationChildren.every((phase) =>
+      phase.status === 'completed' ||
+        (phase.status === 'skipped' && phase.notes !== undefined && phase.notes.trim() !== '')
+    )
 }
 
 async function readLinkedImplementationDrafts(

@@ -322,6 +322,78 @@ describe('Flow operations', () => {
     })
   })
 
+  it('promotes Review Loop 1 after every implementation child is completed or skipped', async () => {
+    const root = await makeTempDir()
+    const plans = createPlanStore({ artifactRoot: root })
+    const flows = createFlowOperations({ artifactRoot: root })
+    await plans.savePlan({
+      planId: 'child-readiness-plan',
+      title: 'Child Readiness Plan',
+      status: 'approved',
+      body: '# Plan\n\n## Implementation Phases\n\n- Build API\n- Render UI\n'
+    })
+    await flows.createFlow({
+      id: 'child-readiness-flow',
+      title: 'Child readiness Flow',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await flows.linkPlan({
+      flowId: 'child-readiness-flow',
+      planId: 'child-readiness-plan',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'plan',
+      outcome: 'plan_saved',
+      now: '2026-06-15T12:02:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'plan-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:03:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation',
+      status: 'running',
+      now: '2026-06-15T12:04:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-build-api',
+      status: 'running',
+      now: '2026-06-15T12:05:00.000Z'
+    })
+    await flows.completePhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-build-api',
+      outcome: 'implemented',
+      now: '2026-06-15T12:06:00.000Z'
+    })
+    await flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-render-ui',
+      status: 'running',
+      now: '2026-06-15T12:07:00.000Z'
+    })
+
+    await expect(flows.setPhase({
+      flowId: 'child-readiness-flow',
+      phaseId: 'implementation-render-ui',
+      status: 'skipped',
+      notes: 'Covered by the API slice.',
+      now: '2026-06-15T12:08:00.000Z'
+    })).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({ phase_id: 'implementation', status: 'running' }),
+        expect.objectContaining({ phase_id: 'review-loop-1', status: 'ready' })
+      ])
+    })
+  })
+
   it('keeps Plan Review unapproved when linked plan phase extraction fails', async () => {
     const root = await makeTempDir()
     const plans = createPlanStore({ artifactRoot: root })

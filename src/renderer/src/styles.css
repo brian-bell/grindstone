@@ -451,6 +451,12 @@ textarea {
   background: #fffdf8;
 }
 
+.phase-row-wrap {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
 .phase-tree-copy {
   display: grid;
   gap: 2px;
@@ -465,13 +471,26 @@ textarea {
   font-weight: 500;
 }
 
+.phase-tree-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.phase-action-button {
+  width: 28px;
+  height: 28px;
+}
+
 .phase-edit-button {
   min-height: 28px;
   padding: 0 8px;
   font-size: 0.76rem;
 }
 
-.phase-edit-form {
+.phase-edit-form,
+.phase-skip-form {
   display: grid;
   grid-template-columns: minmax(160px, 1.6fr) minmax(80px, 0.5fr);
   gap: 8px;
@@ -479,6 +498,10 @@ textarea {
   border: 1px solid #c8d0cd;
   border-radius: 6px;
   background: #fffdf8;
+}
+
+.phase-skip-form {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .phase-edit-field {
@@ -506,6 +529,10 @@ textarea {
   border-radius: 6px;
   background: #fff0ee;
   color: #7e2525;
+}
+
+.phase-action-error {
+  max-width: 560px;
 }
 
 .phase-edit-actions {

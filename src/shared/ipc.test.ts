@@ -28,6 +28,9 @@ describe('IPC contract', () => {
     expect(ipcChannels.workspace.getInitialState).toBe('workspace:getInitialState')
     expect(ipcChannels.workspace.selectRepository).toBe('workspace:selectRepository')
     expect(ipcChannels.workspace.createFlow).toBe('workspace:createFlow')
+    expect(ipcChannels.workspace.launchFlowPhase).toBe('workspace:launchFlowPhase')
+    expect(ipcChannels.workspace.skipFlowPhase).toBe('workspace:skipFlowPhase')
+    expect(ipcChannels.workspace.completeFlowPhase).toBe('workspace:completeFlowPhase')
     expect(ipcChannels.workspace.createRepository).toBe('workspace:createRepository')
     expect(ipcChannels.workspace.retryRepositoryRemote).toBe('workspace:retryRepositoryRemote')
     expect(ipcChannels.config.getEditableConfig).toBe('config:getEditableConfig')
@@ -87,6 +90,41 @@ describe('IPC contract', () => {
     expect(request.baseRef).toBe('main')
     expect(response).toEqual(defaultInitialWorkspaceState)
     expectTypeOf(response).toEqualTypeOf<InitialWorkspaceState>()
+  })
+
+  it('maps workspace phase actions to typed requests and workspace responses', () => {
+    type LaunchFlowPhaseChannel = typeof ipcChannels.workspace.launchFlowPhase
+    const launchRequest = {
+      flowId: 'flow-one',
+      phaseId: 'implementation'
+    } satisfies IpcRequestMap[LaunchFlowPhaseChannel]
+    const launchResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[LaunchFlowPhaseChannel]
+
+    type SkipFlowPhaseChannel = typeof ipcChannels.workspace.skipFlowPhase
+    const skipRequest = {
+      flowId: 'flow-one',
+      phaseId: 'implementation-ui',
+      notes: 'Covered by another slice.'
+    } satisfies IpcRequestMap[SkipFlowPhaseChannel]
+    const skipResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[SkipFlowPhaseChannel]
+
+    type CompleteFlowPhaseChannel = typeof ipcChannels.workspace.completeFlowPhase
+    const completeRequest = {
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      summary: 'Implementation complete.'
+    } satisfies IpcRequestMap[CompleteFlowPhaseChannel]
+    const completeResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[CompleteFlowPhaseChannel]
+
+    expect(launchRequest.phaseId).toBe('implementation')
+    expect(skipRequest.notes).toBe('Covered by another slice.')
+    expect(completeRequest.summary).toBe('Implementation complete.')
+    expect(launchResponse).toEqual(defaultInitialWorkspaceState)
+    expect(skipResponse).toEqual(defaultInitialWorkspaceState)
+    expect(completeResponse).toEqual(defaultInitialWorkspaceState)
+    expectTypeOf(launchResponse).toEqualTypeOf<InitialWorkspaceState>()
+    expectTypeOf(skipResponse).toEqualTypeOf<InitialWorkspaceState>()
+    expectTypeOf(completeResponse).toEqualTypeOf<InitialWorkspaceState>()
   })
 
   it('maps workspace:retryRepositoryRemote to a stable retry id request and workspace response', () => {
@@ -158,6 +196,17 @@ describe('IPC contract', () => {
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.createFlow, {
       title: 'Create Flow worktree',
       instructions: 'Build the end-to-end creation path.'
+    })
+
+    await expect(
+      invokeTypedIpc(invoke, ipcChannels.workspace.launchFlowPhase, {
+        flowId: 'flow-one',
+        phaseId: 'implementation'
+      })
+    ).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.launchFlowPhase, {
+      flowId: 'flow-one',
+      phaseId: 'implementation'
     })
 
     await expect(

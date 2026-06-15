@@ -5,8 +5,11 @@ import type { LinkedFlowPlanResponse } from '@shared/artifacts'
 import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
+  CompleteFlowPhaseRequest,
   InitialWorkspaceState,
+  LaunchFlowPhaseRequest,
   RetryRepositoryRemoteRequest,
+  SkipFlowPhaseRequest,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
@@ -61,6 +64,39 @@ const grindstoneApi = {
         return await invokeTypedIpc(
           ipcRenderer.invoke.bind(ipcRenderer),
           ipcChannels.workspace.updateFlowPhase,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async launchFlowPhase(request: LaunchFlowPhaseRequest): Promise<InitialWorkspaceState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.launchFlowPhase,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async skipFlowPhase(request: SkipFlowPhaseRequest): Promise<InitialWorkspaceState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.skipFlowPhase,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async completeFlowPhase(request: CompleteFlowPhaseRequest): Promise<InitialWorkspaceState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.completeFlowPhase,
           request
         )
       } catch (error) {
