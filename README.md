@@ -13,8 +13,10 @@ and keeps the middle pane scoped to the Flow workspace surface.
     artifact-backed list states,
   - contextual hints and disabled Flow shortcut affordances.
 - Typed preload API at `window.grindstone.workspace`.
-- Shared IPC contracts for `workspace:getInitialState` and
-  `workspace:selectRepository`.
+- Shared IPC contracts for workspace state, repository selection, Flow creation,
+  and selected-Flow linked plan reads.
+- Agent-facing `grindstone` CLI for Flow updates, plan artifacts, and normalized
+  session-hook transcript capture.
 - Flow-only middle-pane manifest and route guard.
 - Renderer security defaults: context isolation, no node integration, sandboxing,
   and a renderer Content Security Policy.
@@ -52,6 +54,45 @@ root = "~/.local/state/wtui/sessions/v1"
 The artifact root is the wtui state root, so `flows/` and `plans/` are siblings
 below it. Relative artifact roots use the same config-file-relative resolution
 rules as repository paths.
+
+The CLI resolves its artifact root in this order:
+
+1. `--state-root PATH`
+2. `GRINDSTONE_STATE_ROOT`
+3. `WTUI_FLOW_STATE_ROOT`, `WTUI_PLAN_STATE_ROOT`, then
+   `WTUI_SESSION_STATE_ROOT`
+4. configured `artifact_root` or legacy `[artifacts].root`
+5. `${XDG_STATE_HOME}/wtui/sessions/v1` or
+   `~/.local/state/wtui/sessions/v1`
+
+## Agent CLI
+
+Build the Node CLI with:
+
+```bash
+npm run build:cli
+```
+
+The package exposes `grindstone` at `out/cli/index.js` after build. Core
+commands are:
+
+```bash
+grindstone flow create --title "Ship slice" --repo-path /repo
+grindstone flow phase complete --flow-id FLOW --phase-id implementation
+grindstone plan save --title "Implementation plan" --plan-id PLAN < plan.md
+grindstone plan link --flow-id FLOW --plan-id PLAN
+grindstone session-hook ingest --provider codex --flow-id FLOW --phase-id implementation < transcript.jsonl
+```
+
+Explicit metadata flags override `GRINDSTONE_*` environment variables, which
+override the matching `WTUI_*` aliases for Flow id, phase id, plan id, repo
+path, worktree path, branch, commit, and launch id.
+
+Session hooks persist normalized transcripts under
+`sessions/<provider>/<session-id>/transcript.jsonl` with private artifact
+permissions. Raw provider payloads, process environments, and terminal
+scrollback are not stored by default. Text is capped per event and per session;
+truncated records carry truncation metadata.
 
 ## Requirements
 
@@ -95,7 +136,8 @@ npm run build
 ## Project Structure
 
 ```text
-src/main/       Electron main process and workspace IPC handlers
+src/cli/        Agent-facing Grindstone CLI and session-hook fixtures
+src/main/       Electron main process, artifact stores, and workspace IPC handlers
 src/preload/    Safe preload bridge exposed to the renderer
 src/shared/     Shared workspace state, IPC contract, and Flow surface model
 src/renderer/   React app shell, styles, tests, and HTML entry
@@ -107,6 +149,7 @@ Main, preload, and renderer builds are configured in
 
 ## Current Scope
 
-This scaffold can list existing wtui Flow metadata for the selected repository,
-but it does not yet create or edit Flows, inspect plans or transcripts,
-launch terminals/sessions, manage settings, or run PR workflows.
+This shell can list existing wtui Flow metadata for the selected repository,
+create Flow records, inspect linked plans from selected Flow context, and accept
+agent-facing CLI updates. It does not yet launch terminals/sessions, manage PR
+workflows, or expose standalone plan/session middle-pane routes.

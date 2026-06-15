@@ -366,6 +366,25 @@ textarea {
   color: #33413b;
 }
 
+.flow-plan-button {
+  max-width: 160px;
+  padding: 2px 7px;
+  border: 1px solid #ccd6d1;
+  border-radius: 6px;
+  background: #f7faf9;
+  color: #244c5a;
+  font: inherit;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-plan-button:focus-visible {
+  outline: 2px solid #244c5a;
+  outline-offset: 2px;
+}
+
 .flow-details-button:focus-visible {
   outline: 2px solid #244c5a;
   outline-offset: 2px;
@@ -394,6 +413,25 @@ textarea {
   border-radius: 6px;
   background: #fffdf8;
   overflow-wrap: anywhere;
+}
+
+.flow-plan-panel {
+  display: grid;
+}
+
+.flow-plan-panel pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #d7dfdc;
+  border-radius: 6px;
+  background: #fffdf8;
+  color: #25302d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .repository-list {

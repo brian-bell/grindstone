@@ -1,0 +1,2 @@
+{"id":"codex-event-1","session_id":"codex-fixture-session","timestamp":"2026-06-15T10:00:00.000Z","type":"message","role":"user","content":"Implement the approved plan."}
+{"id":"codex-event-2","session_id":"codex-fixture-session","timestamp":"2026-06-15T10:01:00.000Z","type":"message","role":"assistant","content":"Plan implementation started."}

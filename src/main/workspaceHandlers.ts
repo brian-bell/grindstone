@@ -2,6 +2,7 @@ import type { IpcMain } from 'electron'
 import { createHash } from 'node:crypto'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
 import type { CommonConfigUpdateInput, ConfigUpdateResponse } from '@shared/config'
+import type { LinkedFlowPlanResponse } from '@shared/artifacts'
 import {
   defaultInitialWorkspaceState,
   type CatalogDiagnostic,
@@ -24,6 +25,8 @@ import {
 } from './config'
 import { createFlow, type FlowCommandRunner, type LaunchPreparer } from './flowCreation'
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
+import { ArtifactStoreError } from './artifactStore'
+import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 import {
   createRepository,
@@ -166,6 +169,60 @@ export async function selectRepository(request: {
 
   currentWorkspaceState = nextWorkspaceState
   return nextWorkspaceState
+}
+
+export async function readLinkedFlowPlan(request: { flowId: string }): Promise<LinkedFlowPlanResponse> {
+  if (currentArtifactRoot === undefined) {
+    return {
+      status: 'missing',
+      flowId: request.flowId,
+      message: 'Flow artifact root is not configured.'
+    }
+  }
+
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  if (workspaceState.flow.status !== 'ready') {
+    return {
+      status: 'missing',
+      flowId: request.flowId,
+      message: 'Select a repository before reading a linked Flow plan.'
+    }
+  }
+
+  const flow = workspaceState.flow.flows.find((candidate) => candidate.id === request.flowId)
+  if (flow === undefined) {
+    return {
+      status: 'missing',
+      flowId: request.flowId,
+      message: `Flow is not selected in this workspace: ${request.flowId}`
+    }
+  }
+  if (flow.planId === undefined) {
+    return {
+      status: 'missing',
+      flowId: request.flowId,
+      message: `Flow has no linked plan: ${request.flowId}`
+    }
+  }
+
+  try {
+    const plan = await createPlanStore({ artifactRoot: currentArtifactRoot }).readPlan(flow.planId)
+    return {
+      status: 'ready',
+      metadata: plan.metadata,
+      body: plan.body
+    }
+  } catch (error) {
+    const status = error instanceof ArtifactStoreError && error.code === 'corrupt_artifact'
+      ? 'corrupt'
+      : 'missing'
+    return {
+      status,
+      flowId: request.flowId,
+      planId: flow.planId,
+      message: error instanceof Error ? error.message : 'Plan artifact could not be read.'
+    }
+  }
 }
 
 export async function updateCommonConfig(
@@ -403,6 +460,9 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.selectRepository, (request) =>
     selectRepository(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.readFlowPlan, (request) =>
+    readLinkedFlowPlan(request)
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.createFlow, (request) =>
     createFlowInWorkspace(request)

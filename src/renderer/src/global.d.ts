@@ -1,5 +1,8 @@
 import type { CommonConfigUpdateInput, ConfigUpdateResponse, EditableConfigState } from '@shared/config'
 import type {
+  LinkedFlowPlanResponse
+} from '@shared/artifacts'
+import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   InitialWorkspaceState,
@@ -12,6 +15,7 @@ declare global {
       workspace: {
         getInitialState: () => Promise<InitialWorkspaceState>
         selectRepository: (request: { repositoryId: string }) => Promise<InitialWorkspaceState>
+        readFlowPlan: (request: { flowId: string }) => Promise<LinkedFlowPlanResponse>
         createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
         createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
         retryRepositoryRemote: (
