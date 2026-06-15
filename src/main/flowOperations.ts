@@ -1,7 +1,6 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
-  normalizeFlowPullRequestMetadata,
   validateFlowPullRequestMetadata,
   type FlowPullRequestMetadata,
   type PersistedFlowMetadata,
@@ -586,14 +585,20 @@ function validatePrCreationCompletion({
 }
 
 function normalizePersistedFlowPrState(flow: PersistedFlowMetadata): PersistedFlowMetadata {
-  const pr = normalizeFlowPullRequestMetadata(flow.pr)
+  const prResult = validateFlowPullRequestMetadata(flow.pr)
+  const pr = prResult.ok ? prResult.pr : undefined
+  const shouldGatePrDependentPhases = !prResult.ok && hasOwnProperty(flow, 'pr')
   return withoutUndefined({
     ...flow,
     pr,
-    phases: pr === undefined && flow.phases !== undefined
+    phases: shouldGatePrDependentPhases && flow.phases !== undefined
       ? gatePrDependentPersistedPhases(flow.phases)
       : flow.phases
   })
+}
+
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
 }
 
 function gatePrDependentPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[] {

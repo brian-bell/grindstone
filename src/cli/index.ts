@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises'
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from 'node:process'
+import type { FlowPullRequestMetadata, FlowPullRequestStatus } from '@shared/artifacts'
 import { ArtifactStoreError, resolveArtifactRoot, typedErrorPayload, getErrorMessage } from '../main/artifactStore'
 import { createFlowOperations } from '../main/flowOperations'
 import { createPlanStore, validatePlanStatus } from '../main/planStore'
@@ -92,6 +93,14 @@ export async function runCli(
           return 0
         }
         if (subcommand === 'complete') {
+          if (phaseId === 'pr-creation' && hasPullRequestMetadataFlags(parsed)) {
+            writeJson(io, await flows.completePrCreation({
+              flowId: input.flowId,
+              pr: pullRequestMetadata(parsed),
+              summary: input.summary
+            }))
+            return 0
+          }
           writeJson(io, await flows.completePhase(input))
           return 0
         }
@@ -246,6 +255,41 @@ function optionalNumberFlag(parsed: ParsedArgs, name: string): number | undefine
   return parsedValue
 }
 
+function requiredNumberFlag(parsed: ParsedArgs, name: string): number {
+  const value = optionalNumberFlag(parsed, name)
+  if (value === undefined) {
+    throw new Error(`Missing required flag --${name}.`)
+  }
+  return value
+}
+
+function hasPullRequestMetadataFlags(parsed: ParsedArgs): boolean {
+  return [
+    'pr-provider',
+    'pr-number',
+    'pr-url',
+    'pr-head',
+    'pr-base',
+    'pr-status'
+  ].some((flag) => parsed.flags.has(flag))
+}
+
+function pullRequestMetadata(parsed: ParsedArgs): FlowPullRequestMetadata {
+  const provider = requiredFlag(parsed, 'pr-provider')
+  if (provider !== 'github') {
+    throw new ArtifactStoreError('validation_error', 'Pull request provider must be github.')
+  }
+
+  return {
+    provider,
+    number: requiredNumberFlag(parsed, 'pr-number'),
+    url: requiredFlag(parsed, 'pr-url'),
+    head: requiredFlag(parsed, 'pr-head'),
+    base: requiredFlag(parsed, 'pr-base'),
+    status: requiredFlag(parsed, 'pr-status') as FlowPullRequestStatus
+  }
+}
+
 function metadata(
   parsed: ParsedArgs,
   env: NodeJS.ProcessEnv,
@@ -321,6 +365,7 @@ Usage:
   grindstone flow read --flow-id ID
   grindstone flow phase set --flow-id ID --phase-id ID --status STATUS --title TITLE --order N
   grindstone flow phase complete|block|needs-attention|restart --flow-id ID --phase-id ID
+  grindstone flow phase complete --flow-id ID --phase-id pr-creation --pr-provider github --pr-number N --pr-url URL --pr-head BRANCH --pr-base BRANCH --pr-status open|closed|merged
   grindstone flow plan set --flow-id ID --plan-id ID
   grindstone plan save --title TITLE [--plan-id ID] [--file PATH]
   grindstone plan list [--repo-path PATH] [--flow-id ID]

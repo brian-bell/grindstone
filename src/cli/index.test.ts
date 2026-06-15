@@ -157,6 +157,79 @@ describe('grindstone CLI', () => {
     expect(readIo.stdout.value).toBe('# Plan\n')
   })
 
+  it('completes PR Creation with structured PR metadata flags', async () => {
+    const root = await makeTempDir()
+    const createIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'create',
+      '--title',
+      'PR Flow',
+      '--repo-path',
+      '/repo'
+    ], createIo)).resolves.toBe(0)
+    const flow = JSON.parse(createIo.stdout.value) as {
+      flow_id: string
+      phases: Array<Record<string, unknown>>
+    }
+    await writeFile(join(root, 'flows', flow.flow_id, 'meta.json'), JSON.stringify({
+      ...flow,
+      phases: flow.phases.map((phase) =>
+        phase.phase_id === 'pr-creation'
+          ? { ...phase, status: 'running' }
+          : phase
+      )
+    }, null, 2))
+
+    const completeIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'phase',
+      'complete',
+      '--flow-id',
+      flow.flow_id,
+      '--phase-id',
+      'pr-creation',
+      '--pr-provider',
+      'github',
+      '--pr-number',
+      '31',
+      '--pr-url',
+      'https://github.com/acme/grindstone/pull/31',
+      '--pr-head',
+      'flow/cli-pr',
+      '--pr-base',
+      'main',
+      '--pr-status',
+      'open',
+      '--summary',
+      'Opened PR #31.'
+    ], completeIo)).resolves.toBe(0)
+
+    expect(JSON.parse(completeIo.stdout.value)).toMatchObject({
+      pr: {
+        provider: 'github',
+        number: 31,
+        url: 'https://github.com/acme/grindstone/pull/31',
+        head: 'flow/cli-pr',
+        base: 'main',
+        status: 'open'
+      },
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'pr-creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened PR #31.'
+        }),
+        expect.objectContaining({
+          phase_id: 'human-review',
+          status: 'ready'
+        })
+      ])
+    })
+  })
+
   it('ingests a Codex session-hook payload using env metadata aliases', async () => {
     const root = await makeTempDir()
     await runCli([

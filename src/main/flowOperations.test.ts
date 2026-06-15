@@ -714,6 +714,76 @@ describe('Flow operations', () => {
     ]))
   })
 
+  it('preserves completed legacy PR-dependent phases when PR metadata is absent', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'legacy-no-pr',
+      title: 'Legacy no PR',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'legacy-no-pr', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'pr-creation',
+          title: 'PR Creation',
+          kind: 'pr_creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened PR before metadata existed.',
+          order: 6
+        },
+        {
+          phase_id: 'human-review',
+          title: 'Human Review',
+          kind: 'human_review',
+          status: 'completed',
+          outcome: 'approved',
+          order: 7
+        }
+      ]
+    }))
+
+    const legacyFlow = await flows.readFlow('legacy-no-pr')
+    expect(legacyFlow.pr).toBeUndefined()
+    expect(legacyFlow).toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'pr-creation',
+          status: 'completed',
+          outcome: 'pr_recorded',
+          summary: 'Opened PR before metadata existed.'
+        }),
+        expect.objectContaining({
+          phase_id: 'human-review',
+          status: 'completed',
+          outcome: 'approved'
+        })
+      ])
+    })
+
+    await flows.setPhase({
+      flowId: 'legacy-no-pr',
+      phaseId: 'human-review',
+      status: 'running',
+      now: '2026-06-15T12:01:00.000Z'
+    })
+    const rawFlow = JSON.parse(
+      await readFile(join(root, 'flows', 'legacy-no-pr', 'meta.json'), 'utf8')
+    ) as Record<string, unknown>
+    expect(rawFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase_id: 'pr-creation',
+        status: 'completed',
+        outcome: 'pr_recorded',
+        summary: 'Opened PR before metadata existed.'
+      }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'running' })
+    ]))
+  })
+
   it('only promotes implementation-child rows when Implementation starts', async () => {
     const root = await makeTempDir()
     const plans = createPlanStore({ artifactRoot: root })

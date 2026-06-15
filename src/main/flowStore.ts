@@ -1,7 +1,7 @@
 import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { normalizeFlowPullRequestMetadata, type PersistedFlowPhase } from '@shared/artifacts'
+import { validateFlowPullRequestMetadata, type PersistedFlowPhase } from '@shared/artifacts'
 import type {
   FlowFailureSummary,
   FlowListRow,
@@ -212,7 +212,9 @@ async function mapFlowMetadata(
     return undefined
   }
 
-  const pr = normalizeFlowPullRequestMetadata(metadata.pr)
+  const prResult = validateFlowPullRequestMetadata(metadata.pr)
+  const pr = prResult.ok ? prResult.pr : undefined
+  const shouldGatePrDependentPhases = !prResult.ok && hasOwnProperty(metadata, 'pr')
 
   return {
     id: directoryFlowId,
@@ -232,7 +234,7 @@ async function mapFlowMetadata(
     pr,
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
-    phases: mapPhases(metadata.phases, pr !== undefined)
+    phases: mapPhases(metadata.phases, shouldGatePrDependentPhases)
   }
 }
 
@@ -281,7 +283,7 @@ function isFailureStage(value: unknown): value is FlowFailureSummary['stage'] {
     value === 'launch_prep'
 }
 
-function mapPhases(value: unknown, hasValidPullRequestMetadata: boolean): FlowPhaseSummary[] | undefined {
+function mapPhases(value: unknown, shouldGatePrDependentPhases: boolean): FlowPhaseSummary[] | undefined {
   if (!Array.isArray(value)) {
     return undefined
   }
@@ -317,9 +319,9 @@ function mapPhases(value: unknown, hasValidPullRequestMetadata: boolean): FlowPh
     ]
   })
 
-  const gatedPhases = hasValidPullRequestMetadata
-    ? phases
-    : gatePrDependentPhaseSummaries(phases)
+  const gatedPhases = shouldGatePrDependentPhases
+    ? gatePrDependentPhaseSummaries(phases)
+    : phases
 
   return gatedPhases.length === 0
     ? undefined
@@ -477,6 +479,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
 function isSafeFlowId(flowId: string): boolean {
   return SAFE_FLOW_ID.test(flowId)
 }
@@ -505,11 +511,13 @@ function applyMetadataUpdate(
   metadata: RawFlowMetadata,
   update: FlowRecordUpdate
 ): RawFlowMetadata {
-  const pr = normalizeFlowPullRequestMetadata(metadata.pr)
+  const prResult = validateFlowPullRequestMetadata(metadata.pr)
+  const pr = prResult.ok ? prResult.pr : undefined
+  const shouldGatePrDependentPhases = !prResult.ok && hasOwnProperty(metadata, 'pr')
   return withoutUndefined({
     ...metadata,
     pr,
-    phases: pr === undefined
+    phases: shouldGatePrDependentPhases
       ? gatePrDependentRawPhases(metadata.phases)
       : metadata.phases,
     status: update.status ?? metadata.status,
