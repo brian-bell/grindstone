@@ -179,7 +179,7 @@ export async function createFlowStore(options: CreateFlowStoreOptions): Promise<
           throw createFatalStoreError(error)
         }
 
-        const row = await mapFlowMetadata(flowId, metadata)
+        const row = await readFlowFromDirectory(flowsRoot, flowId)
         if (row === undefined) {
           throw new Error(`Updated Flow record is unreadable: ${flowId}`)
         }
@@ -199,7 +199,8 @@ async function readFlowFromDirectory(
     return undefined
   }
 
-  return mapFlowMetadata(flowId, rawMetadata)
+  const terminalMetadata = await readRawTerminalMetadataFromDirectory(flowsRoot, flowId)
+  return mapFlowMetadata(flowId, mergeTerminalMetadata(rawMetadata, terminalMetadata))
 }
 
 async function readRawFlowFromDirectory(
@@ -211,6 +212,77 @@ async function readRawFlowFromDirectory(
     return isRecord(parsedMetadata) ? parsedMetadata : undefined
   } catch {
     return undefined
+  }
+}
+
+async function readRawTerminalMetadataFromDirectory(
+  flowsRoot: string,
+  flowId: string
+): Promise<RawFlowMetadata[]> {
+  let entries
+  try {
+    entries = await readdir(join(flowsRoot, flowId, 'terminals'), { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const terminals: RawFlowMetadata[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isSafeFlowId(entry.name)) {
+      continue
+    }
+
+    try {
+      const parsedMetadata = JSON.parse(
+        await readFile(join(flowsRoot, flowId, 'terminals', entry.name, 'meta.json'), 'utf8')
+      )
+      if (isValidTerminalSidecar(parsedMetadata, flowId, entry.name)) {
+        terminals.push(parsedMetadata)
+      }
+    } catch {
+      // Terminal sidecars are best-effort UI state; skip corrupt or partial writes.
+    }
+  }
+
+  return terminals
+}
+
+function isValidTerminalSidecar(
+  value: unknown,
+  flowId: string,
+  terminalId: string
+): value is RawFlowMetadata {
+  return isRecord(value) &&
+    value.terminal_id === terminalId &&
+    value.flow_id === flowId &&
+    isSafeFlowId(terminalId)
+}
+
+function mergeTerminalMetadata(
+  flowMetadata: RawFlowMetadata,
+  sidecarTerminals: RawFlowMetadata[]
+): RawFlowMetadata {
+  if (sidecarTerminals.length === 0) {
+    return flowMetadata
+  }
+
+  const terminals = new Map<string, unknown>()
+  if (Array.isArray(flowMetadata.terminals)) {
+    for (const terminal of flowMetadata.terminals) {
+      if (isRecord(terminal) && typeof terminal.terminal_id === 'string') {
+        terminals.set(terminal.terminal_id, terminal)
+      }
+    }
+  }
+  for (const terminal of sidecarTerminals) {
+    if (typeof terminal.terminal_id === 'string') {
+      terminals.set(terminal.terminal_id, terminal)
+    }
+  }
+
+  return {
+    ...flowMetadata,
+    terminals: [...terminals.values()]
   }
 }
 

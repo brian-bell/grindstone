@@ -15,6 +15,7 @@ import type {
   TerminalResizeRequest
 } from '@shared/workspace'
 import { buildAgentLaunchCommand } from './agentLaunch'
+import { writeJsonAtomically } from './artifactStore'
 import { toRawTerminal, type FlowStore } from './flowStore'
 
 type Disposable = {
@@ -76,7 +77,6 @@ export const nodePtyAdapter: PtyAdapter = {
 
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, ManagedTerminal>()
-  private readonly persistQueues = new Map<string, Promise<void>>()
 
   constructor(
     private readonly options: {
@@ -151,7 +151,6 @@ export class TerminalSessionManager {
 
     await writeFile(logPath, '', { flag: 'a', mode: PRIVATE_FILE_MODE })
     await this.writeTerminalMetadata(metaPath, terminal)
-    await this.persistTerminal(request.flow.id, terminal)
 
     let spawnedProcess: PtyProcess | undefined
     let managedTerminal: ManagedTerminal | undefined
@@ -194,7 +193,6 @@ export class TerminalSessionManager {
       })
       const initialPersist = managed.outputQueue.then(async () => {
         await this.writeTerminalMetadata(metaPath, managed.terminal)
-        await this.persistTerminal(request.flow.id, managed.terminal)
         this.emitState(managed)
       })
       managed.outputQueue = initialPersist.catch(() => undefined)
@@ -218,7 +216,6 @@ export class TerminalSessionManager {
         endedAt: this.now()
       }
       await this.writeTerminalMetadata(metaPath, failed)
-      await this.persistTerminal(request.flow.id, failed)
       throw error
     }
   }
@@ -276,7 +273,6 @@ export class TerminalSessionManager {
     }
     const metaPath = this.getMetaPath(dismissed)
     await this.writeTerminalMetadata(metaPath, dismissed)
-    await this.persistTerminal(dismissed.flowId, dismissed)
 
     const managed = this.sessions.get(request.terminalId)
     if (managed !== undefined && managed.terminal.flowId === flow.id) {
@@ -305,7 +301,6 @@ export class TerminalSessionManager {
     }
     await appendFile(managed.terminal.logPath ?? '', data, 'utf8')
     await this.writeTerminalMetadata(metaPath, managed.terminal)
-    await this.persistTerminal(managed.terminal.flowId, managed.terminal)
     this.options.onEvent?.({
       type: 'output',
       repositoryId: managed.flow.repositoryId,
@@ -339,7 +334,6 @@ export class TerminalSessionManager {
     }
     managed.process = null
     await this.writeTerminalMetadata(metaPath, managed.terminal)
-    await this.persistTerminal(managed.terminal.flowId, managed.terminal)
     this.emitState(managed)
   }
 
@@ -376,42 +370,6 @@ export class TerminalSessionManager {
     return flow
   }
 
-  private async persistTerminal(flowId: string, terminal: FlowTerminalSummary): Promise<void> {
-    const previous = this.persistQueues.get(flowId) ?? Promise.resolve()
-    const next = previous
-      .catch(() => undefined)
-      .then(() => this.persistTerminalNow(flowId, terminal))
-    this.persistQueues.set(flowId, next)
-
-    try {
-      await next
-    } finally {
-      if (this.persistQueues.get(flowId) === next) {
-        this.persistQueues.delete(flowId)
-      }
-    }
-  }
-
-  private async persistTerminalNow(
-    flowId: string,
-    terminal: FlowTerminalSummary
-  ): Promise<void> {
-    const flow = await this.options.store.readFlow(flowId)
-    if (flow === undefined) {
-      throw new Error(`Flow record not found: ${flowId}`)
-    }
-
-    const terminals = [
-      ...(flow.terminals ?? []).filter((candidate) => candidate.terminalId !== terminal.terminalId),
-      terminal
-    ]
-
-    await this.options.store.updateFlowRecord(flowId, {
-      terminals,
-      updatedAt: this.now()
-    })
-  }
-
   private async reconcilePersistedTerminals(flow: FlowListRow): Promise<FlowTerminalSummary[]> {
     const terminals = flow.terminals ?? []
     const reconciled = terminals.map((terminal) => {
@@ -430,10 +388,11 @@ export class TerminalSessionManager {
     })
 
     if (reconciled.some((terminal, index) => terminal !== terminals[index])) {
-      await this.options.store.updateFlowRecord(flow.id, {
-        terminals: reconciled,
-        updatedAt: this.now()
-      })
+      await Promise.all(
+        reconciled
+          .filter((terminal, index) => terminal !== terminals[index])
+          .map((terminal) => this.writeTerminalMetadata(this.getMetaPath(terminal), terminal))
+      )
     }
 
     return reconciled
@@ -444,10 +403,7 @@ export class TerminalSessionManager {
     terminal: FlowTerminalSummary
   ): Promise<void> {
     await mkdir(dirname(metaPath), { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
-    await writeFile(metaPath, `${JSON.stringify(toRawTerminal(terminal), null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: PRIVATE_FILE_MODE
-    })
+    await writeJsonAtomically(metaPath, toRawTerminal(terminal))
   }
 
   private emitState(managed: ManagedTerminal): void {
