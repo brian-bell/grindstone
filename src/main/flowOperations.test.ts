@@ -1021,6 +1021,23 @@ describe('Flow operations', () => {
 
     await expect(flows.recordHumanReview({
       flowId: 'merge-after-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:04:15.000Z'
+    })).resolves.toMatchObject({
+      status: 'blocked',
+      human_review: {
+        outcome: 'approved',
+        reviewed_at: '2026-06-15T12:04:15.000Z'
+      },
+      merge: {
+        status: 'blocked',
+        notes: 'Waiting on branch protection.',
+        updated_at: '2026-06-15T12:04:00.000Z'
+      }
+    })
+
+    await expect(flows.recordHumanReview({
+      flowId: 'merge-after-review',
       outcome: 'changes_requested',
       notes: 'Review changed after blocked merge.',
       now: '2026-06-15T12:04:30.000Z'

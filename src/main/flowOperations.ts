@@ -422,7 +422,7 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       )
       return writeFlow(withoutUndefined({
         ...flow,
-        status: humanReviewFlowStatus(input.outcome),
+        status: normalizeFlowStatus(humanReviewFlowStatus(input.outcome), reviewResult.humanReview, merge),
         human_review: reviewResult.humanReview,
         merge,
         phases: sortPersistedPhases(phases),
