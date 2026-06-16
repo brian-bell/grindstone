@@ -230,6 +230,133 @@ describe('grindstone CLI', () => {
     })
   })
 
+  it('records Human Review and merge metadata through dedicated CLI commands', async () => {
+    const root = await makeTempDir()
+    const createIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'create',
+      '--title',
+      'Human Review CLI Flow',
+      '--repo-path',
+      '/repo'
+    ], createIo)).resolves.toBe(0)
+    const flow = JSON.parse(createIo.stdout.value) as {
+      flow_id: string
+      phases: Array<Record<string, unknown>>
+    }
+    await writeFile(join(root, 'flows', flow.flow_id, 'meta.json'), JSON.stringify({
+      ...flow,
+      phases: flow.phases.map((phase) =>
+        phase.phase_id === 'pr-creation'
+          ? { ...phase, status: 'running' }
+          : phase
+      )
+    }, null, 2))
+    await runCli([
+      'flow',
+      'phase',
+      'complete',
+      '--flow-id',
+      flow.flow_id,
+      '--phase-id',
+      'pr-creation',
+      '--pr-provider',
+      'github',
+      '--pr-number',
+      '44',
+      '--pr-url',
+      'https://github.com/acme/grindstone/pull/44',
+      '--pr-head',
+      'flow/human-review-cli',
+      '--pr-base',
+      'main',
+      '--pr-status',
+      'open'
+    ], io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv))
+
+    const missingNotesIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'human-review',
+      'set',
+      '--flow-id',
+      flow.flow_id,
+      '--outcome',
+      'changes_requested'
+    ], missingNotesIo)).resolves.toBe(1)
+    expect(JSON.parse(missingNotesIo.stderr.value)).toMatchObject({
+      error: {
+        code: 'validation_error',
+        message: 'Human Review outcome changes_requested requires notes.'
+      }
+    })
+
+    const reviewIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'human-review',
+      'set',
+      '--flow-id',
+      flow.flow_id,
+      '--outcome',
+      'approved',
+      '--notes',
+      'Approved from CLI.'
+    ], reviewIo)).resolves.toBe(0)
+    expect(JSON.parse(reviewIo.stdout.value)).toMatchObject({
+      status: 'active',
+      human_review: {
+        outcome: 'approved',
+        notes: 'Approved from CLI.'
+      },
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          phase_id: 'human-review',
+          status: 'completed',
+          outcome: 'approved'
+        })
+      ])
+    })
+
+    const missingMergeNotesIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'merge',
+      'set',
+      '--flow-id',
+      flow.flow_id,
+      '--status',
+      'blocked'
+    ], missingMergeNotesIo)).resolves.toBe(1)
+    expect(JSON.parse(missingMergeNotesIo.stderr.value)).toMatchObject({
+      error: {
+        code: 'validation_error',
+        message: 'Blocked merge metadata requires notes.'
+      }
+    })
+
+    const mergeIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'merge',
+      'set',
+      '--flow-id',
+      flow.flow_id,
+      '--status',
+      'merged',
+      '--commit',
+      'ABCDEF1234567890ABCDEF1234567890ABCDEF12'
+    ], mergeIo)).resolves.toBe(0)
+    expect(JSON.parse(mergeIo.stdout.value)).toMatchObject({
+      status: 'merged',
+      merge: {
+        status: 'merged',
+        commit: 'abcdef1234567890abcdef1234567890abcdef12'
+      }
+    })
+  })
+
   it('ingests a Codex session-hook payload using env metadata aliases', async () => {
     const root = await makeTempDir()
     await runCli([

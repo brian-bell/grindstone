@@ -32,6 +32,8 @@ describe('IPC contract', () => {
     expect(ipcChannels.workspace.skipFlowPhase).toBe('workspace:skipFlowPhase')
     expect(ipcChannels.workspace.completeFlowPhase).toBe('workspace:completeFlowPhase')
     expect(ipcChannels.workspace.recordFlowPullRequest).toBe('workspace:recordFlowPullRequest')
+    expect(ipcChannels.workspace.recordFlowHumanReview).toBe('workspace:recordFlowHumanReview')
+    expect(ipcChannels.workspace.recordFlowMerge).toBe('workspace:recordFlowMerge')
     expect(ipcChannels.workspace.createRepository).toBe('workspace:createRepository')
     expect(ipcChannels.workspace.retryRepositoryRemote).toBe('workspace:retryRepositoryRemote')
     expect(ipcChannels.config.getEditableConfig).toBe('config:getEditableConfig')
@@ -131,18 +133,40 @@ describe('IPC contract', () => {
     } satisfies IpcRequestMap[RecordFlowPullRequestChannel]
     const recordPrResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[RecordFlowPullRequestChannel]
 
+    type RecordFlowHumanReviewChannel = typeof ipcChannels.workspace.recordFlowHumanReview
+    const recordReviewRequest = {
+      flowId: 'flow-one',
+      outcome: 'changes_requested',
+      notes: 'Fix the review finding.'
+    } satisfies IpcRequestMap[RecordFlowHumanReviewChannel]
+    const recordReviewResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[RecordFlowHumanReviewChannel]
+
+    type RecordFlowMergeChannel = typeof ipcChannels.workspace.recordFlowMerge
+    const recordMergeRequest = {
+      flowId: 'flow-one',
+      status: 'merged',
+      commit: 'abcdef1234567890abcdef1234567890abcdef12'
+    } satisfies IpcRequestMap[RecordFlowMergeChannel]
+    const recordMergeResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[RecordFlowMergeChannel]
+
     expect(launchRequest.phaseId).toBe('implementation')
     expect(skipRequest.notes).toBe('Covered by another slice.')
     expect(completeRequest.summary).toBe('Implementation complete.')
     expect(recordPrRequest.pr.number).toBe(12)
+    expect(recordReviewRequest.notes).toBe('Fix the review finding.')
+    expect(recordMergeRequest.commit).toBe('abcdef1234567890abcdef1234567890abcdef12')
     expect(launchResponse).toEqual(defaultInitialWorkspaceState)
     expect(skipResponse).toEqual(defaultInitialWorkspaceState)
     expect(completeResponse).toEqual(defaultInitialWorkspaceState)
     expect(recordPrResponse).toEqual(defaultInitialWorkspaceState)
+    expect(recordReviewResponse).toEqual(defaultInitialWorkspaceState)
+    expect(recordMergeResponse).toEqual(defaultInitialWorkspaceState)
     expectTypeOf(launchResponse).toEqualTypeOf<InitialWorkspaceState>()
     expectTypeOf(skipResponse).toEqualTypeOf<InitialWorkspaceState>()
     expectTypeOf(completeResponse).toEqualTypeOf<InitialWorkspaceState>()
     expectTypeOf(recordPrResponse).toEqualTypeOf<InitialWorkspaceState>()
+    expectTypeOf(recordReviewResponse).toEqualTypeOf<InitialWorkspaceState>()
+    expectTypeOf(recordMergeResponse).toEqualTypeOf<InitialWorkspaceState>()
   })
 
   it('maps workspace:retryRepositoryRemote to a stable retry id request and workspace response', () => {

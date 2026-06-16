@@ -11,6 +11,8 @@ import {
   launchFlowPhaseInWorkspace,
   loadInitialWorkspaceState,
   readLinkedFlowPlan,
+  recordFlowHumanReviewInWorkspace,
+  recordFlowMergeInWorkspace,
   recordFlowPullRequestInWorkspace,
   registerWorkspaceHandlers,
   retryRepositoryRemoteInWorkspace,
@@ -67,6 +69,7 @@ function flowRow(flowId: string, repository: RepositoryRow): FlowListRow {
     status: 'active',
     repositoryId: repository.id,
     repositoryPath: repository.id,
+    merge: { status: 'pending' },
     createdAt: '2026-06-10T10:00:00.000Z',
     updatedAt: '2026-06-10T10:00:00.000Z'
   }
@@ -1297,6 +1300,99 @@ describe('workspace main handlers', () => {
               }),
               expect.objectContaining({ id: 'human-review', status: 'ready' })
             ])
+          })
+        ]
+      }
+    })
+  })
+
+  it('records Human Review and merge metadata through selected workspace actions', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-review-merge')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-review-merge',
+      flowMeta('flow-review-merge', repoPath, {
+        pr: {
+          provider: 'github',
+          number: 13,
+          url: 'https://github.com/acme/grindstone/pull/13',
+          head: 'flow/review-merge',
+          base: 'main',
+          status: 'open'
+        },
+        phases: [
+          {
+            phase_id: 'human-review',
+            title: 'Human Review',
+            kind: 'human_review',
+            status: 'ready',
+            order: 7
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(recordFlowHumanReviewInWorkspace({
+      flowId: 'flow-review-merge',
+      outcome: 'changes_requested'
+    })).rejects.toThrow('Human Review outcome changes_requested requires notes.')
+
+    await expect(recordFlowHumanReviewInWorkspace({
+      flowId: 'flow-review-merge',
+      outcome: 'approved',
+      notes: 'Approved by reviewer.'
+    })).resolves.toMatchObject({
+      flow: {
+        flows: [
+          expect.objectContaining({
+            id: 'flow-review-merge',
+            status: 'active',
+            humanReview: expect.objectContaining({
+              outcome: 'approved',
+              notes: 'Approved by reviewer.'
+            }),
+            merge: { status: 'pending' },
+            phases: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'human-review',
+                status: 'completed',
+                outcome: 'approved'
+              })
+            ])
+          })
+        ]
+      }
+    })
+
+    await expect(recordFlowMergeInWorkspace({
+      flowId: 'flow-review-merge',
+      status: 'blocked',
+      notes: ''
+    })).rejects.toThrow('Blocked merge metadata requires notes.')
+
+    await expect(recordFlowMergeInWorkspace({
+      flowId: 'flow-review-merge',
+      status: 'merged',
+      commit: 'ABCDEF1234567890ABCDEF1234567890ABCDEF12'
+    })).resolves.toMatchObject({
+      flow: {
+        flows: [
+          expect.objectContaining({
+            id: 'flow-review-merge',
+            status: 'merged',
+            merge: expect.objectContaining({
+              status: 'merged',
+              commit: 'abcdef1234567890abcdef1234567890abcdef12'
+            })
           })
         ]
       }

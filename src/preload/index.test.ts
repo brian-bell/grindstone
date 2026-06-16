@@ -9,6 +9,8 @@ import {
   type CreateRepositoryRequest,
   type InitialWorkspaceState,
   type LaunchFlowPhaseRequest,
+  type RecordFlowHumanReviewRequest,
+  type RecordFlowMergeRequest,
   type RecordFlowPullRequestRequest,
   type RetryRepositoryRemoteRequest,
   type SkipFlowPhaseRequest,
@@ -26,6 +28,8 @@ type PreloadApi = {
     skipFlowPhase: (request: SkipFlowPhaseRequest) => Promise<InitialWorkspaceState>
     completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
     recordFlowPullRequest: (request: RecordFlowPullRequestRequest) => Promise<InitialWorkspaceState>
+    recordFlowHumanReview: (request: RecordFlowHumanReviewRequest) => Promise<InitialWorkspaceState>
+    recordFlowMerge: (request: RecordFlowMergeRequest) => Promise<InitialWorkspaceState>
     createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
     retryRepositoryRemote: (
       request: RetryRepositoryRemoteRequest
@@ -90,6 +94,8 @@ describe('preload bridge', () => {
       'skipFlowPhase',
       'completeFlowPhase',
       'recordFlowPullRequest',
+      'recordFlowHumanReview',
+      'recordFlowMerge',
       'createRepository',
       'retryRepositoryRemote'
     ])
@@ -251,6 +257,28 @@ describe('preload bridge', () => {
         base: 'main',
         status: 'open'
       }
+    })
+
+    await expect(api.workspace.recordFlowHumanReview({
+      flowId: 'flow-one',
+      outcome: 'approved',
+      notes: 'Looks good.'
+    })).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.recordFlowHumanReview, {
+      flowId: 'flow-one',
+      outcome: 'approved',
+      notes: 'Looks good.'
+    })
+
+    await expect(api.workspace.recordFlowMerge({
+      flowId: 'flow-one',
+      status: 'merged',
+      commit: 'abcdef1234567890abcdef1234567890abcdef12'
+    })).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.recordFlowMerge, {
+      flowId: 'flow-one',
+      status: 'merged',
+      commit: 'abcdef1234567890abcdef1234567890abcdef12'
     })
   })
 

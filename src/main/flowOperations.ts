@@ -1,7 +1,14 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  normalizeFlowHumanReviewMetadata,
+  normalizeFlowMergeMetadata,
+  validateFlowHumanReviewMetadata,
+  validateFlowMergeMetadata,
   validateFlowPullRequestMetadata,
+  type FlowHumanReviewMetadata,
+  type FlowHumanReviewOutcome,
+  type FlowMergeMetadata,
   type FlowPullRequestMetadata,
   type PersistedFlowMetadata,
   type PersistedFlowPhase
@@ -51,6 +58,17 @@ export type CompletePrCreationInput = {
   now?: string
 }
 
+export type RecordHumanReviewInput = {
+  flowId: string
+  outcome: FlowHumanReviewOutcome
+  notes?: string
+  now?: string
+}
+
+export type RecordMergeInput =
+  | { flowId: string; status: 'merged'; commit: string; now?: string }
+  | { flowId: string; status: 'blocked'; notes: string; now?: string }
+
 export type FlowOperations = {
   createFlow: (input: CreateFlowInput) => Promise<PersistedFlowMetadata>
   listFlows: (filter?: { repoPath?: string }) => Promise<PersistedFlowMetadata[]>
@@ -58,6 +76,8 @@ export type FlowOperations = {
   setPhase: (input: PhaseSetInput) => Promise<PersistedFlowMetadata>
   completePhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   completePrCreation: (input: CompletePrCreationInput) => Promise<PersistedFlowMetadata>
+  recordHumanReview: (input: RecordHumanReviewInput) => Promise<PersistedFlowMetadata>
+  recordMerge: (input: RecordMergeInput) => Promise<PersistedFlowMetadata>
   blockPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   needsAttentionPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   restartPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
@@ -184,6 +204,11 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       phaseKind: nextKind,
       nextStatus,
       pr: options.pr
+    })
+    validateHumanReviewStructuredMutation({
+      phaseId: input.phaseId,
+      phaseKind: nextKind,
+      requestedStatus: input.status
     })
     validateImplementationCompletion({
       phases,
@@ -357,6 +382,86 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         },
         { pr: result.pr }
       )
+    },
+
+    async recordHumanReview(input) {
+      const flow = await readFlow(input.flowId)
+      const now = input.now ?? new Date().toISOString()
+      assertMutableBeforeMerge(flow)
+      const prResult = validateFlowPullRequestMetadata(flow.pr)
+      if (!prResult.ok) {
+        throw new ArtifactStoreError('validation_error', 'Human Review requires valid pull request metadata.')
+      }
+      const reviewResult = validateFlowHumanReviewMetadata({
+        outcome: input.outcome,
+        reviewed_at: now,
+        notes: input.notes
+      })
+      if (!reviewResult.ok) {
+        throw new ArtifactStoreError('validation_error', reviewResult.message)
+      }
+      const phases = [...(flow.phases ?? [])]
+      const index = phases.findIndex((phase) => phase.phase_id === 'human-review')
+      const existing = index === -1 ? undefined : phases[index]
+      if (existing === undefined) {
+        throw new ArtifactStoreError('validation_error', 'Unknown phase: human-review', 'human-review')
+      }
+      const phaseStatus = humanReviewPhaseStatus(input.outcome)
+      const phase = withoutUndefined({
+        ...existing,
+        status: phaseStatus,
+        outcome: input.outcome,
+        notes: reviewResult.humanReview.notes,
+        updated_at: now
+      })
+      phases[index] = phase
+
+      const merge = normalizeMergeForHumanReview(
+        reviewResult.humanReview,
+        normalizeFlowMergeMetadata(flow.merge)
+      )
+      return writeFlow(withoutUndefined({
+        ...flow,
+        status: normalizeFlowStatus(humanReviewFlowStatus(input.outcome), reviewResult.humanReview, merge),
+        human_review: reviewResult.humanReview,
+        merge,
+        phases: sortPersistedPhases(phases),
+        updated_at: now
+      }))
+    },
+
+    async recordMerge(input) {
+      const flow = await readFlow(input.flowId)
+      const now = input.now ?? new Date().toISOString()
+      assertMutableBeforeMerge(flow)
+      if (flow.human_review?.outcome !== 'approved') {
+        throw new ArtifactStoreError(
+          'validation_error',
+          'Merge metadata can only be recorded after Human Review is approved.'
+        )
+      }
+
+      const mergeResult = validateFlowMergeMetadata(input.status === 'merged'
+        ? {
+            status: 'merged',
+            commit: input.commit,
+            merged_at: now
+          }
+        : {
+            status: 'blocked',
+            notes: input.notes,
+            updated_at: now
+          })
+      if (!mergeResult.ok) {
+        throw new ArtifactStoreError('validation_error', mergeResult.message)
+      }
+
+      return writeFlow({
+        ...flow,
+        status: mergeResult.merge.status === 'merged' ? 'merged' : 'blocked',
+        merge: mergeResult.merge,
+        updated_at: now
+      })
     },
 
     async blockPhase(input) {
@@ -584,21 +689,135 @@ function validatePrCreationCompletion({
   }
 }
 
+function validateHumanReviewStructuredMutation({
+  phaseId,
+  phaseKind,
+  requestedStatus
+}: {
+  phaseId: string
+  phaseKind?: string
+  requestedStatus?: string
+}): void {
+  const isHumanReviewPhase = phaseId === 'human-review' || phaseKind === 'human_review'
+  if (!isHumanReviewPhase || requestedStatus === undefined) {
+    return
+  }
+  throw new ArtifactStoreError(
+    'validation_error',
+    'Human Review must be recorded through structured Human Review metadata.'
+  )
+}
+
 function normalizePersistedFlowPrState(flow: PersistedFlowMetadata): PersistedFlowMetadata {
   const prResult = validateFlowPullRequestMetadata(flow.pr)
   const pr = prResult.ok ? prResult.pr : undefined
-  const shouldGatePrDependentPhases = !prResult.ok && hasOwnProperty(flow, 'pr')
+  const shouldGatePrDependentPhases = !prResult.ok && (
+    hasOwnProperty(flow, 'pr') ||
+    hasPrDependentPersistedPhaseState(flow.phases)
+  )
+  const humanReview = pr === undefined ? undefined : normalizeFlowHumanReviewMetadata(flow.human_review)
+  const merge = normalizeMergeForHumanReview(humanReview, normalizeFlowMergeMetadata(flow.merge))
   return withoutUndefined({
     ...flow,
     pr,
+    human_review: humanReview,
+    merge,
+    status: normalizeFlowStatus(flow.status, humanReview, merge),
     phases: shouldGatePrDependentPhases && flow.phases !== undefined
       ? gatePrDependentPersistedPhases(flow.phases)
       : flow.phases
   })
 }
 
+function assertMutableBeforeMerge(flow: PersistedFlowMetadata): void {
+  if (normalizeFlowMergeMetadata(flow.merge).status === 'merged') {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'Merged Flows cannot be changed by Human Review or merge metadata.'
+    )
+  }
+}
+
+function humanReviewPhaseStatus(outcome: FlowHumanReviewOutcome): PersistedFlowPhase['status'] {
+  if (outcome === 'approved') {
+    return 'completed'
+  }
+  if (outcome === 'changes_requested') {
+    return 'needs_attention'
+  }
+  return 'blocked'
+}
+
+function humanReviewFlowStatus(outcome: FlowHumanReviewOutcome): string {
+  if (outcome === 'changes_requested') {
+    return 'needs_attention'
+  }
+  if (outcome === 'blocked') {
+    return 'blocked'
+  }
+  return 'active'
+}
+
+function normalizeFlowStatus(
+  status: string,
+  humanReview: FlowHumanReviewMetadata | undefined,
+  merge: FlowMergeMetadata
+): string {
+  if (merge.status === 'merged') {
+    return 'merged'
+  }
+  if (merge.status === 'blocked' && humanReview?.outcome === 'approved') {
+    return 'blocked'
+  }
+  if (humanReview?.outcome === 'changes_requested') {
+    return 'needs_attention'
+  }
+  if (humanReview?.outcome === 'blocked') {
+    return 'blocked'
+  }
+  if (status === 'merged') {
+    return 'active'
+  }
+  return status
+}
+
+function normalizeMergeForHumanReview(
+  humanReview: FlowHumanReviewMetadata | undefined,
+  merge: FlowMergeMetadata
+): FlowMergeMetadata {
+  if (
+    (merge.status === 'blocked' || merge.status === 'merged') &&
+    humanReview?.outcome !== 'approved'
+  ) {
+    return { status: 'pending' }
+  }
+  return merge
+}
+
 function hasOwnProperty(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function hasPrDependentPersistedPhaseState(phases: PersistedFlowPhase[] | undefined): boolean {
+  return phases?.some((phase) =>
+    (
+      phase.phase_id === 'pr-creation' &&
+      phase.status === 'completed' &&
+      phase.outcome === 'pr_recorded'
+    ) ||
+    (
+      phase.phase_id === 'human-review' &&
+      (
+        phase.status === 'ready' ||
+        phase.status === 'running' ||
+        phase.status === 'needs_attention' ||
+        phase.status === 'completed' ||
+        phase.status === 'blocked' ||
+        phase.status === 'active' ||
+        phase.status === 'done'
+      )
+    )
+  ) ?? false
 }
 
 function gatePrDependentPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[] {
@@ -623,6 +842,7 @@ function gatePrDependentPersistedPhases(phases: PersistedFlowPhase[]): Persisted
         phase.status === 'running' ||
         phase.status === 'needs_attention' ||
         phase.status === 'completed' ||
+        phase.status === 'blocked' ||
         phase.status === 'active' ||
         phase.status === 'done'
       )

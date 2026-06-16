@@ -8,6 +8,8 @@ import type {
   CompleteFlowPhaseRequest,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  RecordFlowHumanReviewRequest,
+  RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
   RetryRepositoryRemoteRequest,
   SkipFlowPhaseRequest,
@@ -28,6 +30,12 @@ declare global {
         completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
         recordFlowPullRequest: (
           request: RecordFlowPullRequestRequest
+        ) => Promise<InitialWorkspaceState>
+        recordFlowHumanReview: (
+          request: RecordFlowHumanReviewRequest
+        ) => Promise<InitialWorkspaceState>
+        recordFlowMerge: (
+          request: RecordFlowMergeRequest
         ) => Promise<InitialWorkspaceState>
         createRepository: (request: CreateRepositoryRequest) => Promise<InitialWorkspaceState>
         retryRepositoryRemote: (

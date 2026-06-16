@@ -1,4 +1,9 @@
-import type { FlowPullRequestMetadata } from './artifacts'
+import type {
+  FlowHumanReviewMetadata,
+  FlowHumanReviewOutcome,
+  FlowMergeMetadata,
+  FlowPullRequestMetadata
+} from './artifacts'
 
 export type RepositorySource = 'scan_root' | 'explicit'
 
@@ -83,6 +88,16 @@ export type RecordFlowPullRequestRequest = {
   pr: FlowPullRequestMetadata
   summary?: string
 }
+
+export type RecordFlowHumanReviewRequest = {
+  flowId: string
+  outcome: FlowHumanReviewOutcome
+  notes?: string
+}
+
+export type RecordFlowMergeRequest =
+  | { flowId: string; status: 'merged'; commit: string }
+  | { flowId: string; status: 'blocked'; notes: string }
 
 export type RepositoryCreateError = {
   code:
@@ -197,6 +212,8 @@ export type FlowListRow = {
   planId?: string
   planPath?: string
   pr?: FlowPullRequestMetadata
+  humanReview?: FlowHumanReviewMetadata
+  merge: FlowMergeMetadata
   createdAt: string
   updatedAt: string
   phases?: FlowPhaseSummary[]

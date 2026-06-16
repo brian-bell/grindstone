@@ -16,6 +16,8 @@ import type {
   FlowListRow,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  RecordFlowHumanReviewRequest,
+  RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
   SkipFlowPhaseRequest,
   UpdateFlowPhaseRequest
@@ -133,6 +135,7 @@ const selectedCatalogState: InitialWorkspaceState = {
         status: 'active',
         repositoryId: '/repos/grindstone',
         repositoryPath: '/repos/grindstone',
+        merge: { status: 'pending' },
         branch: 'flow/list',
         planId: 'plan-flow-list',
         createdAt: '2026-06-10T10:00:00.000Z',
@@ -229,6 +232,7 @@ const alphaSelectedCatalogState: InitialWorkspaceState = {
         status: 'active',
         repositoryId: '/repos/alpha',
         repositoryPath: '/repos/alpha',
+        merge: { status: 'pending' },
         createdAt: '2026-06-10T10:00:00.000Z',
         updatedAt: '2026-06-11T10:00:00.000Z'
       }
@@ -259,6 +263,7 @@ const betaSelectedCatalogState: InitialWorkspaceState = {
         status: 'active',
         repositoryId: '/repos/beta',
         repositoryPath: '/repos/beta',
+        merge: { status: 'pending' },
         createdAt: '2026-06-10T10:00:00.000Z',
         updatedAt: '2026-06-12T10:00:00.000Z'
       }
@@ -307,7 +312,9 @@ const setWorkspaceApi = (
   launchFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
   skipFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
   completeFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
-  recordFlowPullRequest = vi.fn().mockResolvedValue(selectedCatalogState)
+  recordFlowPullRequest = vi.fn().mockResolvedValue(selectedCatalogState),
+  recordFlowHumanReview = vi.fn().mockResolvedValue(selectedCatalogState),
+  recordFlowMerge = vi.fn().mockResolvedValue(selectedCatalogState)
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -322,6 +329,8 @@ const setWorkspaceApi = (
         skipFlowPhase,
         completeFlowPhase,
         recordFlowPullRequest,
+        recordFlowHumanReview,
+        recordFlowMerge,
         createRepository,
         retryRepositoryRemote
       },
@@ -483,6 +492,7 @@ describe('App shell', () => {
       status: 'active',
       repositoryId: '/repos/grindstone',
       repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
       createdAt: '2026-06-15T10:00:00.000Z',
       updatedAt: '2026-06-15T11:00:00.000Z',
       phases: [
@@ -614,6 +624,7 @@ describe('App shell', () => {
       status: 'active',
       repositoryId: '/repos/grindstone',
       repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
       createdAt: '2026-06-15T10:00:00.000Z',
       updatedAt: '2026-06-15T11:00:00.000Z',
       phases: [
@@ -760,6 +771,7 @@ describe('App shell', () => {
       status: 'active',
       repositoryId: '/repos/grindstone',
       repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
       branch: 'flow/review-two',
       baseRef: 'main',
       createdAt: '2026-06-15T10:00:00.000Z',
@@ -899,6 +911,7 @@ describe('App shell', () => {
       status: 'active',
       repositoryId: '/repos/grindstone',
       repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
       branch: 'flow/pr-ready',
       baseRef: 'main',
       createdAt: '2026-06-15T10:00:00.000Z',
@@ -1030,6 +1043,217 @@ describe('App shell', () => {
       .toBeInTheDocument()
   })
 
+  it('records Human Review outcomes from a PR-backed Human Review phase', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'reviewable-flow',
+      title: 'Reviewable Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
+      pr: {
+        provider: 'github',
+        number: 13,
+        url: 'https://github.com/acme/grindstone/pull/13',
+        head: 'flow/human-review',
+        base: 'main',
+        status: 'open'
+      },
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'human-review',
+          title: 'Human Review',
+          status: 'ready',
+          kind: 'human_review',
+          order: 7
+        }
+      ]
+    }
+    const baseState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: { available: true, error: null },
+        flows: [flow]
+      }
+    }
+    const approvedState: InitialWorkspaceState = {
+      ...baseState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: { available: true, error: null },
+        flows: [
+          {
+            ...flow,
+            humanReview: {
+              outcome: 'approved',
+              reviewed_at: '2026-06-15T12:00:00.000Z'
+            },
+            phases: flow.phases?.map((phase) => ({ ...phase, status: 'completed', outcome: 'approved' }))
+          }
+        ]
+      }
+    }
+    const recordFlowHumanReview = vi.fn<(
+      request: RecordFlowHumanReviewRequest
+    ) => Promise<InitialWorkspaceState>>().mockResolvedValue(approvedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(baseState),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      recordFlowHumanReview
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /reviewable flow details/i }))
+    const reviewPanel = within(flowPane).getByRole('region', { name: /human review for reviewable flow/i })
+    expect(within(reviewPanel).getByText('GitHub PR #13')).toBeInTheDocument()
+    expect(within(reviewPanel).queryByRole('region', { name: /merge metadata/i })).not.toBeInTheDocument()
+
+    await user.click(within(reviewPanel).getByRole('button', { name: /request changes/i }))
+    expect(await within(reviewPanel).findByRole('alert')).toHaveTextContent('Review notes are required.')
+    expect(recordFlowHumanReview).not.toHaveBeenCalled()
+
+    await user.type(within(reviewPanel).getByLabelText(/review notes/i), 'Looks good.')
+    await user.click(within(reviewPanel).getByRole('button', { name: /approve/i }))
+    expect(recordFlowHumanReview).toHaveBeenCalledWith({
+      flowId: 'reviewable-flow',
+      outcome: 'approved',
+      notes: 'Looks good.'
+    })
+    expect(await within(flowPane).findByRole('region', { name: /merge metadata for reviewable flow/i }))
+      .toBeInTheDocument()
+  })
+
+  it('records merge metadata only after Human Review approval', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'merge-ready-flow',
+      title: 'Merge Ready Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
+      pr: {
+        provider: 'github',
+        number: 13,
+        url: 'https://github.com/acme/grindstone/pull/13',
+        head: 'flow/human-review',
+        base: 'main',
+        status: 'open'
+      },
+      humanReview: {
+        outcome: 'approved',
+        reviewed_at: '2026-06-15T12:00:00.000Z'
+      },
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'human-review',
+          title: 'Human Review',
+          status: 'completed',
+          kind: 'human_review',
+          outcome: 'approved',
+          order: 7
+        }
+      ]
+    }
+    const baseState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: { available: true, error: null },
+        flows: [flow]
+      }
+    }
+    const mergedState: InitialWorkspaceState = {
+      ...baseState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: { available: true, error: null },
+        flows: [
+          {
+            ...flow,
+            status: 'merged',
+            merge: {
+              status: 'merged',
+              commit: 'abcdef1234567890abcdef1234567890abcdef12',
+              merged_at: '2026-06-15T12:30:00.000Z'
+            }
+          }
+        ]
+      }
+    }
+    const recordFlowMerge = vi.fn<(
+      request: RecordFlowMergeRequest
+    ) => Promise<InitialWorkspaceState>>().mockResolvedValue(mergedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(baseState),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      recordFlowMerge
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /merge ready flow details/i }))
+    const mergePanel = within(flowPane).getByRole('region', { name: /merge metadata for merge ready flow/i })
+
+    await user.click(within(mergePanel).getByRole('button', { name: /record merge/i }))
+    expect(await within(mergePanel).findByRole('alert')).toHaveTextContent(
+      'Merge commit must be a full 40-character hex object id.'
+    )
+    expect(recordFlowMerge).not.toHaveBeenCalled()
+
+    await user.type(
+      within(mergePanel).getByLabelText(/merge commit/i),
+      'ABCDEF1234567890ABCDEF1234567890ABCDEF12'
+    )
+    await user.click(within(mergePanel).getByRole('button', { name: /record merge/i }))
+    expect(recordFlowMerge).toHaveBeenCalledWith({
+      flowId: 'merge-ready-flow',
+      status: 'merged',
+      commit: 'abcdef1234567890abcdef1234567890abcdef12'
+    })
+    expect(await within(flowPane).findByText('Merged')).toBeInTheDocument()
+  })
+
   it('does not show Record PR controls for custom PR creation phases', async () => {
     const user = userEvent.setup()
     const flow: FlowListRow = {
@@ -1038,6 +1262,7 @@ describe('App shell', () => {
       status: 'active',
       repositoryId: '/repos/grindstone',
       repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
       createdAt: '2026-06-15T10:00:00.000Z',
       updatedAt: '2026-06-15T11:00:00.000Z',
       phases: [
@@ -1104,6 +1329,7 @@ describe('App shell', () => {
       status: 'active',
       repositoryId: '/repos/grindstone',
       repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
       createdAt: '2026-06-15T10:00:00.000Z',
       updatedAt: '2026-06-15T11:00:00.000Z',
       phases: [
@@ -1281,6 +1507,7 @@ describe('App shell', () => {
             status: 'active',
             repositoryId: '/repos/grindstone',
             repositoryPath: '/repos/grindstone',
+            merge: { status: 'pending' },
             branch: 'flow/ship-workspace-creation',
             worktreePath: '/repos/grindstone-worktrees/flow-ship-workspace-creation',
             baseRef: 'main',
@@ -1394,6 +1621,7 @@ describe('App shell', () => {
             status: 'failed',
             repositoryId: '/repos/grindstone',
             repositoryPath: '/repos/grindstone',
+            merge: { status: 'pending' },
             branch: 'flow/broken-bootstrap',
             worktreePath: '/repos/grindstone-worktrees/flow-broken-bootstrap',
             baseRef: 'HEAD',

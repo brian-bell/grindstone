@@ -17,6 +17,8 @@ import {
   type FlowPhaseSummary,
   type InitialWorkspaceState,
   type LaunchFlowPhaseRequest,
+  type RecordFlowHumanReviewRequest,
+  type RecordFlowMergeRequest,
   type RecordFlowPullRequestRequest,
   type RepositoryCreateError,
   type RepositoryPaneState,
@@ -582,6 +584,77 @@ export async function recordFlowPullRequestInWorkspace(
   return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
 }
 
+export async function recordFlowHumanReviewInWorkspace(
+  request: RecordFlowHumanReviewRequest
+): Promise<InitialWorkspaceState> {
+  if (!isRecordFlowHumanReviewRequest(request)) {
+    throw new Error('Record Flow Human Review request is invalid.')
+  }
+  if (currentArtifactRoot === undefined) {
+    throw new Error('Flow artifact root is not configured.')
+  }
+
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  if (workspaceState.flow.status !== 'ready') {
+    throw new Error('Select a repository before recording Flow Human Review.')
+  }
+  const flow = workspaceState.flow.flows.find((candidate) => candidate.id === request.flowId)
+  if (flow === undefined) {
+    throw new Error(`Flow is not selected in this workspace: ${request.flowId}`)
+  }
+  if (flow.pr === undefined) {
+    throw new Error('Human Review requires valid pull request metadata.')
+  }
+  if (flow.merge.status === 'merged') {
+    throw new Error('Merged Flows cannot be changed by Human Review or merge metadata.')
+  }
+  const phase = flow.phases?.find((candidate) => candidate.id === 'human-review')
+  if (phase === undefined) {
+    throw new Error('Human Review phase is not selected in this workspace.')
+  }
+  if (!isHumanReviewWorkspacePhaseActionable(phase)) {
+    throw new Error('Human Review is not ready to record review metadata.')
+  }
+
+  const requestId = currentSelectionRequestId
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).recordHumanReview(request)
+  })
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
+export async function recordFlowMergeInWorkspace(
+  request: RecordFlowMergeRequest
+): Promise<InitialWorkspaceState> {
+  if (!isRecordFlowMergeRequest(request)) {
+    throw new Error('Record Flow merge request is invalid.')
+  }
+  if (currentArtifactRoot === undefined) {
+    throw new Error('Flow artifact root is not configured.')
+  }
+
+  const workspaceState = currentWorkspaceState ?? (await loadInitialWorkspaceState())
+  if (workspaceState.flow.status !== 'ready') {
+    throw new Error('Select a repository before recording Flow merge metadata.')
+  }
+  const flow = workspaceState.flow.flows.find((candidate) => candidate.id === request.flowId)
+  if (flow === undefined) {
+    throw new Error(`Flow is not selected in this workspace: ${request.flowId}`)
+  }
+  if (flow.humanReview?.outcome !== 'approved') {
+    throw new Error('Merge metadata can only be recorded after Human Review is approved.')
+  }
+  if (flow.merge.status === 'merged') {
+    throw new Error('Merged Flows cannot be changed by Human Review or merge metadata.')
+  }
+
+  const requestId = currentSelectionRequestId
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    await createFlowOperations({ artifactRoot: currentArtifactRoot as string }).recordMerge(request)
+  })
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
 async function getSelectedPhaseForAction(
   request: { flowId: string; phaseId: string },
   actionName: string
@@ -639,6 +712,16 @@ function isCompletableWorkspacePhase(phase: FlowPhaseSummary): boolean {
 
 function isSkippableImplementationChildPhase(phase: FlowPhaseSummary): boolean {
   return isImplementationChildPhase(phase)
+}
+
+function isHumanReviewWorkspacePhaseActionable(phase: FlowPhaseSummary): boolean {
+  return phase.id === 'human-review' && (
+    phase.status === 'ready' ||
+    phase.status === 'running' ||
+    phase.status === 'needs_attention' ||
+    phase.status === 'blocked' ||
+    phase.status === 'completed'
+  )
 }
 
 function isImplementationChildPhase(phase: FlowPhaseSummary): boolean {
@@ -782,6 +865,43 @@ function isRecordFlowPullRequestRequest(request: unknown): request is RecordFlow
     optionalStringField((request as { summary?: unknown }).summary)
 }
 
+function isRecordFlowHumanReviewRequest(request: unknown): request is RecordFlowHumanReviewRequest {
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof (request as { flowId?: unknown }).flowId !== 'string' ||
+    (request as { flowId: string }).flowId.trim() === ''
+  ) {
+    return false
+  }
+
+  const outcome = (request as { outcome?: unknown }).outcome
+  return (
+    (outcome === 'approved' || outcome === 'changes_requested' || outcome === 'blocked') &&
+    optionalStringField((request as { notes?: unknown }).notes)
+  )
+}
+
+function isRecordFlowMergeRequest(request: unknown): request is RecordFlowMergeRequest {
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof (request as { flowId?: unknown }).flowId !== 'string' ||
+    (request as { flowId: string }).flowId.trim() === ''
+  ) {
+    return false
+  }
+
+  const status = (request as { status?: unknown }).status
+  if (status === 'merged') {
+    return typeof (request as { commit?: unknown }).commit === 'string'
+  }
+  if (status === 'blocked') {
+    return typeof (request as { notes?: unknown }).notes === 'string'
+  }
+  return false
+}
+
 function optionalStringField(value: unknown): boolean {
   return value === undefined || typeof value === 'string'
 }
@@ -906,6 +1026,12 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.recordFlowPullRequest, (request) =>
     recordFlowPullRequestInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.recordFlowHumanReview, (request) =>
+    recordFlowHumanReviewInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.recordFlowMerge, (request) =>
+    recordFlowMergeInWorkspace(request)
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.createRepository, (request) =>
     createRepositoryInWorkspace(request)

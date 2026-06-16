@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises'
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from 'node:process'
-import type { FlowPullRequestMetadata, FlowPullRequestStatus } from '@shared/artifacts'
+import type { FlowHumanReviewOutcome, FlowPullRequestMetadata, FlowPullRequestStatus } from '@shared/artifacts'
 import { ArtifactStoreError, resolveArtifactRoot, typedErrorPayload, getErrorMessage } from '../main/artifactStore'
 import { createFlowOperations } from '../main/flowOperations'
 import { createPlanStore, validatePlanStatus } from '../main/planStore'
@@ -116,6 +116,18 @@ export async function runCli(
           writeJson(io, await flows.restartPhase(input))
           return 0
         }
+      }
+      if (command === 'human-review' && subcommand === 'set') {
+        writeJson(io, await flows.recordHumanReview({
+          flowId: flowId(parsed, io.env),
+          outcome: humanReviewOutcome(parsed),
+          notes: optionalFlag(parsed, 'notes')
+        }))
+        return 0
+      }
+      if (command === 'merge' && subcommand === 'set') {
+        writeJson(io, await flows.recordMerge(mergeMetadata(parsed, io.env)))
+        return 0
       }
       if (command === 'plan' && subcommand === 'set') {
         writeJson(io, await flows.linkPlan({
@@ -290,6 +302,40 @@ function pullRequestMetadata(parsed: ParsedArgs): FlowPullRequestMetadata {
   }
 }
 
+function humanReviewOutcome(parsed: ParsedArgs): FlowHumanReviewOutcome {
+  const outcome = requiredFlag(parsed, 'outcome')
+  if (outcome !== 'approved' && outcome !== 'changes_requested' && outcome !== 'blocked') {
+    throw new ArtifactStoreError(
+      'validation_error',
+      'Human Review outcome must be approved, changes_requested, or blocked.'
+    )
+  }
+  return outcome
+}
+
+function mergeMetadata(
+  parsed: ParsedArgs,
+  env: NodeJS.ProcessEnv
+): { flowId: string; status: 'merged'; commit: string } | { flowId: string; status: 'blocked'; notes: string } {
+  const status = requiredFlag(parsed, 'status')
+  const id = flowId(parsed, env)
+  if (status === 'merged') {
+    return {
+      flowId: id,
+      status,
+      commit: requiredFlag(parsed, 'commit')
+    }
+  }
+  if (status === 'blocked') {
+    return {
+      flowId: id,
+      status,
+      notes: optionalFlag(parsed, 'notes') ?? ''
+    }
+  }
+  throw new ArtifactStoreError('validation_error', 'Merge status must be merged or blocked.')
+}
+
 function metadata(
   parsed: ParsedArgs,
   env: NodeJS.ProcessEnv,
@@ -366,6 +412,9 @@ Usage:
   grindstone flow phase set --flow-id ID --phase-id ID --status STATUS --title TITLE --order N
   grindstone flow phase complete|block|needs-attention|restart --flow-id ID --phase-id ID
   grindstone flow phase complete --flow-id ID --phase-id pr-creation --pr-provider github --pr-number N --pr-url URL --pr-head BRANCH --pr-base BRANCH --pr-status open|closed|merged
+  grindstone flow human-review set --flow-id ID --outcome approved|changes_requested|blocked [--notes TEXT]
+  grindstone flow merge set --flow-id ID --status merged --commit SHA
+  grindstone flow merge set --flow-id ID --status blocked --notes TEXT
   grindstone flow plan set --flow-id ID --plan-id ID
   grindstone plan save --title TITLE [--plan-id ID] [--file PATH]
   grindstone plan list [--repo-path PATH] [--flow-id ID]
