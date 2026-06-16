@@ -99,6 +99,95 @@ export type RecordFlowMergeRequest =
   | { flowId: string; status: 'merged'; commit: string }
   | { flowId: string; status: 'blocked'; notes: string }
 
+export type AgentProvider = 'codex' | 'claude'
+
+export type AgentLaunchMode = 'headless' | 'interactive' | 'resume' | 'continue'
+
+export type TerminalStatus =
+  | 'starting'
+  | 'running'
+  | 'exited'
+  | 'terminated'
+  | 'failed'
+  | 'dismissed'
+
+export const RECENT_TERMINAL_OUTPUT_LIMIT = 20_000
+
+export type FlowTerminalSummary = {
+  terminalId: string
+  launchId: string
+  provider: AgentProvider
+  mode: AgentLaunchMode
+  flowId: string
+  phaseId: string
+  planId?: string
+  sessionId?: string
+  status: TerminalStatus
+  command: string
+  argv: string[]
+  cwd: string
+  logPath?: string
+  startedAt: string
+  endedAt?: string
+  exitCode?: number
+  signal?: string
+  recentOutput?: string
+}
+
+export type TerminalListRequest = {
+  repositoryId: string
+  flowId: string
+}
+
+export type TerminalInputRequest = {
+  repositoryId: string
+  flowId: string
+  terminalId: string
+  data: string
+}
+
+export type TerminalResizeRequest = {
+  repositoryId: string
+  flowId: string
+  terminalId: string
+  columns: number
+  rows: number
+}
+
+export type TerminalActionRequest = {
+  repositoryId: string
+  flowId: string
+  terminalId: string
+}
+
+export type TerminalEventSubscriptionRequest = {
+  repositoryId: string
+  flowId: string
+}
+
+export type TerminalEventSubscriptionResponse = {
+  subscriptionId: string
+}
+
+export type TerminalEventUnsubscribeRequest = {
+  subscriptionId: string
+}
+
+export type TerminalEvent =
+  | {
+      type: 'output'
+      repositoryId: string
+      flowId: string
+      terminalId: string
+      data: string
+    }
+  | {
+      type: 'state'
+      repositoryId: string
+      flowId: string
+      terminal: FlowTerminalSummary
+    }
+
 export type RepositoryCreateError = {
   code:
     | 'validation_error'
@@ -217,6 +306,7 @@ export type FlowListRow = {
   createdAt: string
   updatedAt: string
   phases?: FlowPhaseSummary[]
+  terminals?: FlowTerminalSummary[]
 }
 
 export type FlowPaneState =

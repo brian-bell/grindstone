@@ -7,14 +7,23 @@ import type {
   CreateRepositoryRequest,
   CompleteFlowPhaseRequest,
   InitialWorkspaceState,
+  FlowTerminalSummary,
   LaunchFlowPhaseRequest,
   RecordFlowHumanReviewRequest,
   RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
   RetryRepositoryRemoteRequest,
   SkipFlowPhaseRequest,
+  TerminalActionRequest,
+  TerminalEvent,
+  TerminalEventSubscriptionRequest,
+  TerminalInputRequest,
+  TerminalListRequest,
+  TerminalResizeRequest,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
+
+type TerminalEventHandler = (event: TerminalEvent) => void
 
 const grindstoneApi = {
   workspace: {
@@ -167,6 +176,105 @@ const grindstoneApi = {
         )
       } catch (error) {
         throw normalizeIpcError(error)
+      }
+    },
+    async listTerminals(request: TerminalListRequest): Promise<FlowTerminalSummary[]> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.listTerminals,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async writeTerminalInput(request: TerminalInputRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.writeTerminalInput,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async resizeTerminal(request: TerminalResizeRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.resizeTerminal,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async terminateTerminal(request: TerminalActionRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.terminateTerminal,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async dismissTerminal(request: TerminalActionRequest): Promise<FlowTerminalSummary> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.dismissTerminal,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    onTerminalEvent(
+      request: TerminalEventSubscriptionRequest,
+      handler: TerminalEventHandler
+    ): () => void {
+      let active = true
+      let subscriptionId: string | undefined
+      const listener = (_event: unknown, payload: TerminalEvent) => {
+        if (
+          active &&
+          payload.repositoryId === request.repositoryId &&
+          payload.flowId === request.flowId
+        ) {
+          handler(payload)
+        }
+      }
+      void invokeTypedIpc(
+        ipcRenderer.invoke.bind(ipcRenderer),
+        ipcChannels.workspace.subscribeTerminalEvents,
+        request
+      ).then((subscription) => {
+        if (!active) {
+          void invokeTypedIpc(
+            ipcRenderer.invoke.bind(ipcRenderer),
+            ipcChannels.workspace.unsubscribeTerminalEvents,
+            { subscriptionId: subscription.subscriptionId }
+          )
+          return
+        }
+
+        subscriptionId = subscription.subscriptionId
+      }).catch(() => undefined)
+      ipcRenderer.on(ipcChannels.events.terminal, listener)
+      return () => {
+        active = false
+        ipcRenderer.removeListener(ipcChannels.events.terminal, listener)
+        if (subscriptionId !== undefined) {
+          void invokeTypedIpc(
+            ipcRenderer.invoke.bind(ipcRenderer),
+            ipcChannels.workspace.unsubscribeTerminalEvents,
+            { subscriptionId }
+          )
+        }
       }
     }
   },

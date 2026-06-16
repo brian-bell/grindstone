@@ -386,6 +386,66 @@ describe('Flow creation engine', () => {
     })
   })
 
+  it('marks the Flow active before running launch preparation', async () => {
+    const root = await makeTempDir()
+    const repository = await makeRepository(root, 'repo-launch-active')
+    const store = await createFlowStore({ artifactRoot: join(root, 'artifacts') })
+    const launchStatuses: string[] = []
+
+    const result = await createFlow({
+      repository,
+      artifactRoot: join(root, 'artifacts'),
+      bootstrapHooks: [],
+      request: {
+        title: 'Launch active',
+        instructions: 'Start the agent after activation.'
+      },
+      store,
+      runCommand: gitRunner(),
+      prepareLaunch: async (flow) => {
+        launchStatuses.push(flow.status)
+        launchStatuses.push((await store.readFlow(flow.id))?.status ?? '')
+        await store.updateFlowRecord(flow.id, {
+          terminals: [
+            {
+              terminalId: 'terminal-plan',
+              launchId: 'launch-plan',
+              provider: 'codex',
+              mode: 'interactive',
+              flowId: flow.id,
+              phaseId: 'plan',
+              status: 'running',
+              command: 'codex',
+              argv: [],
+              cwd: flow.worktreePath ?? '',
+              startedAt: '2026-06-14T12:00:00.000Z',
+              recentOutput: 'ready\n'
+            }
+          ],
+          updatedAt: '2026-06-14T12:01:00.000Z'
+        })
+      },
+      now: () => '2026-06-14T12:00:00.000Z'
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      flow: {
+        status: 'active'
+      }
+    })
+    expect(launchStatuses).toEqual(['active', 'active'])
+    await expect(store.readFlow('launch-active')).resolves.toMatchObject({
+      status: 'active',
+      terminals: [
+        {
+          terminalId: 'terminal-plan',
+          recentOutput: 'ready\n'
+        }
+      ]
+    })
+  })
+
   it('persists quoted worktree command details when Git worktree setup fails', async () => {
     const root = await makeTempDir()
     const repository = await makeRepository(root, 'repo with spaces')

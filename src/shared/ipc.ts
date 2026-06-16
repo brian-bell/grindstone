@@ -10,6 +10,7 @@ import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   CompleteFlowPhaseRequest,
+  FlowTerminalSummary,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
   RecordFlowHumanReviewRequest,
@@ -17,6 +18,13 @@ import type {
   RecordFlowPullRequestRequest,
   RetryRepositoryRemoteRequest,
   SkipFlowPhaseRequest,
+  TerminalActionRequest,
+  TerminalInputRequest,
+  TerminalListRequest,
+  TerminalResizeRequest,
+  TerminalEventSubscriptionRequest,
+  TerminalEventSubscriptionResponse,
+  TerminalEventUnsubscribeRequest,
   UpdateFlowPhaseRequest
 } from './workspace'
 
@@ -34,11 +42,21 @@ export const ipcChannels = {
     recordFlowHumanReview: 'workspace:recordFlowHumanReview',
     recordFlowMerge: 'workspace:recordFlowMerge',
     createRepository: 'workspace:createRepository',
-    retryRepositoryRemote: 'workspace:retryRepositoryRemote'
+    retryRepositoryRemote: 'workspace:retryRepositoryRemote',
+    listTerminals: 'workspace:listTerminals',
+    writeTerminalInput: 'workspace:writeTerminalInput',
+    resizeTerminal: 'workspace:resizeTerminal',
+    terminateTerminal: 'workspace:terminateTerminal',
+    dismissTerminal: 'workspace:dismissTerminal',
+    subscribeTerminalEvents: 'workspace:subscribeTerminalEvents',
+    unsubscribeTerminalEvents: 'workspace:unsubscribeTerminalEvents'
   },
   config: {
     getEditableConfig: 'config:getEditableConfig',
     updateCommonConfig: 'config:updateCommonConfig'
+  },
+  events: {
+    terminal: 'workspace:terminalEvent'
   }
 } as const
 
@@ -64,6 +82,13 @@ export type IpcRequestMap = {
   'workspace:recordFlowMerge': RecordFlowMergeRequest
   'workspace:createRepository': CreateRepositoryRequest
   'workspace:retryRepositoryRemote': RetryRepositoryRemoteRequest
+  'workspace:listTerminals': TerminalListRequest
+  'workspace:writeTerminalInput': TerminalInputRequest
+  'workspace:resizeTerminal': TerminalResizeRequest
+  'workspace:terminateTerminal': TerminalActionRequest
+  'workspace:dismissTerminal': TerminalActionRequest
+  'workspace:subscribeTerminalEvents': TerminalEventSubscriptionRequest
+  'workspace:unsubscribeTerminalEvents': TerminalEventUnsubscribeRequest
   'config:getEditableConfig': undefined
   'config:updateCommonConfig': CommonConfigUpdateInput
 }
@@ -82,6 +107,13 @@ export type IpcResponseMap = {
   'workspace:recordFlowMerge': InitialWorkspaceState
   'workspace:createRepository': InitialWorkspaceState
   'workspace:retryRepositoryRemote': InitialWorkspaceState
+  'workspace:listTerminals': FlowTerminalSummary[]
+  'workspace:writeTerminalInput': FlowTerminalSummary
+  'workspace:resizeTerminal': FlowTerminalSummary
+  'workspace:terminateTerminal': FlowTerminalSummary
+  'workspace:dismissTerminal': FlowTerminalSummary
+  'workspace:subscribeTerminalEvents': TerminalEventSubscriptionResponse
+  'workspace:unsubscribeTerminalEvents': undefined
   'config:getEditableConfig': EditableConfigState
   'config:updateCommonConfig': ConfigUpdateResponse
 }
