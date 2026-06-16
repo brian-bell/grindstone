@@ -269,6 +269,74 @@ describe('terminal session manager', () => {
     ])
   })
 
+  it('uses a supplied launch id for terminal metadata and wtui env', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const storedFlow = await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'creating',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const spawned: Array<{ env: Record<string, string> }> = []
+    const pty: PtyAdapter = {
+      spawn(_command, _args, options) {
+        spawned.push({ env: options.env })
+        return new FakePtyProcess()
+      }
+    }
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty,
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn().mockReturnValueOnce('terminal-123')
+    })
+
+    const terminal = await manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation',
+      prompt: 'Implement the approved plan.',
+      launchId: 'phase-launch-123'
+    })
+
+    expect(terminal).toMatchObject({
+      terminalId: 'terminal-123',
+      launchId: 'phase-launch-123',
+      phaseId: 'implementation'
+    })
+    expect(spawned).toEqual([
+      {
+        env: expect.objectContaining({
+          WTUI_LAUNCH_ID: 'phase-launch-123',
+          WTUI_FLOW_PHASE_ID: 'implementation'
+        })
+      }
+    ])
+    await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+      terminals: [
+        expect.objectContaining({
+          terminalId: 'terminal-123',
+          launchId: 'phase-launch-123'
+        })
+      ]
+    })
+  })
+
   it('serializes concurrent terminal persists without dropping sibling terminals', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'repo'), { recursive: true })

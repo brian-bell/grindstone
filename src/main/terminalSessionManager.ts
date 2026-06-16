@@ -48,6 +48,7 @@ export type LaunchTerminalRequest = {
   mode: AgentLaunchMode
   phaseId: string
   prompt: string
+  launchId?: string
   sessionId?: string
 }
 
@@ -97,7 +98,7 @@ export class TerminalSessionManager {
     }
 
     const terminalId = this.createId()
-    const launchId = this.createId()
+    const launchId = request.launchId ?? this.createId()
     const terminalDir = join(
       this.options.artifactRoot,
       'flows',
@@ -495,4 +496,3 @@ function trimRecentOutput(output: string): string {
 function isTerminationSignal(signal: string | undefined): boolean {
   return signal === 'SIGTERM' || signal === 'SIGKILL' || signal === '15' || signal === '9'
 }
-

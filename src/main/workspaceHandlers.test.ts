@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { ipcChannels } from '@shared/ipc'
-import type { FlowListRow, RepositoryRow } from '@shared/workspace'
+import type { FlowListRow, FlowTerminalSummary, RepositoryRow } from '@shared/workspace'
 import {
   createFlowInWorkspace,
   createRepositoryInWorkspace,
@@ -531,6 +531,383 @@ describe('workspace main handlers', () => {
     }))
   })
 
+  it('uses an explicit phase runner instead of launching a terminal', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-explicit-runner')
+    const worktreePath = join(root, 'worktree-launch-explicit-runner')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await makeGitRepository(worktreePath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-explicit-runner',
+      flowMeta('flow-launch-explicit-runner', repoPath, {
+        branch: 'flow/launch-explicit-runner',
+        worktree_path: worktreePath,
+        commit: 'abc123',
+        start: {
+          repository_path: repoPath,
+          worktree_path: worktreePath,
+          branch: 'flow/launch-explicit-runner',
+          base_ref: 'main',
+          commit: 'abc123'
+        },
+        phases: [
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'ready',
+            order: 3
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    const runPhase = vi.fn<FlowPhaseRunner>().mockResolvedValue(undefined)
+    const terminalManager = {
+      launchTerminal: vi.fn(async () => {
+        throw new Error('terminal launch should not run')
+      }),
+      async listTerminals() {
+        return []
+      },
+      async writeInput() {
+        throw new Error('not expected')
+      },
+      async resize() {
+        throw new Error('not expected')
+      },
+      async terminate() {
+        throw new Error('not expected')
+      },
+      async dismiss() {
+        throw new Error('not expected')
+      }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-explicit-runner',
+      phaseId: 'implementation'
+    }, { runPhase, terminalManager })
+
+    expect(runPhase).toHaveBeenCalledWith(expect.objectContaining({
+      flowId: 'flow-launch-explicit-runner',
+      phaseId: 'implementation'
+    }))
+    expect(terminalManager.launchTerminal).not.toHaveBeenCalled()
+  })
+
+  it('launches the parent Implementation phase in an embedded terminal by default', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-implementation-terminal')
+    const worktreePath = join(root, 'worktree-launch-implementation-terminal')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await makeGitRepository(worktreePath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-implementation-terminal',
+      flowMeta('flow-launch-implementation-terminal', repoPath, {
+        branch: 'flow/launch-implementation-terminal',
+        worktree_path: worktreePath,
+        commit: 'abc123',
+        start: {
+          repository_path: repoPath,
+          worktree_path: worktreePath,
+          branch: 'flow/launch-implementation-terminal',
+          base_ref: 'main',
+          commit: 'abc123'
+        },
+        plan_id: 'plan-launch-terminal',
+        plan_path: join(artifactRoot, 'plans', 'plan-launch-terminal', 'plan.md'),
+        phases: [
+          {
+            phase_id: 'plan-review',
+            title: 'Plan Review',
+            kind: 'plan_review',
+            status: 'completed',
+            outcome: 'approved',
+            order: 2
+          },
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'ready',
+            order: 3
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\ndefault_agent = "claude"\nartifact_root = "${artifactRoot}"\n`)
+    const launched: Array<{
+      flow: FlowListRow
+      provider: string
+      mode: string
+      phaseId: string
+      prompt: string
+      launchId?: string
+    }> = []
+    const terminalManager = {
+      async launchTerminal(request: {
+        flow: FlowListRow
+        provider: FlowTerminalSummary['provider']
+        mode: FlowTerminalSummary['mode']
+        phaseId: string
+        prompt: string
+        launchId?: string
+      }) {
+        launched.push(request)
+        const store = await createFlowStore({ artifactRoot })
+        const terminal: FlowTerminalSummary = {
+          terminalId: 'terminal-implementation',
+          launchId: request.launchId ?? 'missing-launch-id',
+          provider: request.provider,
+          mode: request.mode,
+          flowId: request.flow.id,
+          phaseId: request.phaseId,
+          planId: request.flow.planId,
+          status: 'running',
+          command: request.provider,
+          argv: [request.prompt],
+          cwd: request.flow.worktreePath ?? '',
+          startedAt: '2026-06-14T12:10:00.000Z',
+          recentOutput: 'Implementation terminal ready.'
+        }
+        await store.updateFlowRecord(request.flow.id, {
+          terminals: [terminal],
+          updatedAt: '2026-06-14T12:10:00.000Z'
+        })
+        return terminal
+      },
+      async listTerminals(request: { flowId: string }) {
+        const store = await createFlowStore({ artifactRoot })
+        return (await store.readFlow(request.flowId))?.terminals ?? []
+      },
+      async writeInput() {
+        throw new Error('not expected')
+      },
+      async resize() {
+        throw new Error('not expected')
+      },
+      async terminate() {
+        throw new Error('not expected')
+      },
+      async dismiss() {
+        throw new Error('not expected')
+      }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const result = await launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-implementation-terminal',
+      phaseId: 'implementation'
+    }, { terminalManager })
+
+    expect(launched).toHaveLength(1)
+    const launchedRequest = launched[0]
+    expect(launchedRequest).toMatchObject({
+      flow: expect.objectContaining({
+        id: 'flow-launch-implementation-terminal',
+        start: expect.objectContaining({ commit: 'abc123' }),
+        phases: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'implementation',
+            status: 'running',
+            launchIds: [expect.stringMatching(/^phase-launch-/)]
+          })
+        ])
+      }),
+      provider: 'claude',
+      mode: 'headless',
+      phaseId: 'implementation',
+      launchId: expect.stringMatching(/^phase-launch-/)
+    })
+    expect(launchedRequest?.prompt).toContain('Implement the approved plan')
+    expect(launchedRequest?.prompt).toContain('wtui-flow')
+    const phaseLaunchId = launchedRequest?.flow.phases
+      ?.find((phase) => phase.id === 'implementation')
+      ?.launchIds?.[0]
+    expect(launchedRequest?.launchId).toBe(phaseLaunchId)
+    expect(result.flow).toMatchObject({
+      status: 'ready',
+      flows: [
+        expect.objectContaining({
+          id: 'flow-launch-implementation-terminal',
+          phases: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'implementation',
+              status: 'running',
+              launchIds: [launchedRequest?.launchId]
+            })
+          ]),
+          terminals: [
+            expect.objectContaining({
+              terminalId: 'terminal-implementation',
+              launchId: launchedRequest?.launchId,
+              phaseId: 'implementation',
+              mode: 'headless',
+              provider: 'claude',
+              status: 'running',
+              recentOutput: 'Implementation terminal ready.'
+            })
+          ]
+        })
+      ]
+    })
+  })
+
+  it('launches implementation child phases in an embedded terminal by default', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-child-terminal')
+    const worktreePath = join(root, 'worktree-launch-child-terminal')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await makeGitRepository(worktreePath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-child-terminal',
+      flowMeta('flow-launch-child-terminal', repoPath, {
+        branch: 'flow/launch-child-terminal',
+        worktree_path: worktreePath,
+        commit: 'abc123',
+        start: {
+          repository_path: repoPath,
+          worktree_path: worktreePath,
+          branch: 'flow/launch-child-terminal',
+          base_ref: 'main',
+          commit: 'abc123'
+        },
+        plan_id: 'plan-child-terminal',
+        plan_path: join(artifactRoot, 'plans', 'plan-child-terminal', 'plan.md'),
+        phases: [
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'running',
+            order: 3
+          },
+          {
+            phase_id: 'implementation-api',
+            title: 'API slice',
+            kind: 'implementation_child',
+            status: 'ready',
+            parent_phase_id: 'implementation',
+            order: 1
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    const launched: Array<{
+      flow: FlowListRow
+      mode: string
+      phaseId: string
+      prompt: string
+      launchId?: string
+    }> = []
+    const terminalManager = {
+      async launchTerminal(request: {
+        flow: FlowListRow
+        provider: FlowTerminalSummary['provider']
+        mode: FlowTerminalSummary['mode']
+        phaseId: string
+        prompt: string
+        launchId?: string
+      }) {
+        launched.push(request)
+        const store = await createFlowStore({ artifactRoot })
+        const terminal: FlowTerminalSummary = {
+          terminalId: 'terminal-child',
+          launchId: request.launchId ?? 'missing-launch-id',
+          provider: request.provider,
+          mode: request.mode,
+          flowId: request.flow.id,
+          phaseId: request.phaseId,
+          status: 'running',
+          command: request.provider,
+          argv: [request.prompt],
+          cwd: request.flow.worktreePath ?? '',
+          startedAt: '2026-06-14T12:15:00.000Z'
+        }
+        await store.updateFlowRecord(request.flow.id, {
+          terminals: [terminal],
+          updatedAt: '2026-06-14T12:15:00.000Z'
+        })
+        return terminal
+      },
+      async listTerminals(request: { flowId: string }) {
+        const store = await createFlowStore({ artifactRoot })
+        return (await store.readFlow(request.flowId))?.terminals ?? []
+      },
+      async writeInput() {
+        throw new Error('not expected')
+      },
+      async resize() {
+        throw new Error('not expected')
+      },
+      async terminate() {
+        throw new Error('not expected')
+      },
+      async dismiss() {
+        throw new Error('not expected')
+      }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const result = await launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-child-terminal',
+      phaseId: 'implementation-api'
+    }, { terminalManager })
+
+    expect(launched).toEqual([
+      expect.objectContaining({
+        mode: 'headless',
+        phaseId: 'implementation-api',
+        launchId: expect.stringMatching(/^phase-launch-/)
+      })
+    ])
+    expect(launched[0]?.prompt).toContain('API slice')
+    expect(launched[0]?.prompt).toContain('implementation-api')
+    expect(result.flow).toMatchObject({
+      flows: [
+        expect.objectContaining({
+          id: 'flow-launch-child-terminal',
+          phases: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'implementation-api',
+              status: 'running',
+              launchIds: [launched[0]?.launchId]
+            })
+          ]),
+          terminals: [
+            expect.objectContaining({
+              terminalId: 'terminal-child',
+              launchId: launched[0]?.launchId,
+              phaseId: 'implementation-api',
+              mode: 'headless'
+            })
+          ]
+        })
+      ]
+    })
+  })
+
   it('launches and completes Review Loop 2 with configured generic review behavior', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-launch-review-two')
@@ -652,6 +1029,148 @@ describe('workspace main handlers', () => {
           })
         ]
       }
+    })
+  })
+
+  it('launches review loop phases in an embedded terminal with the resolved review prompt', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-review-terminal')
+    const worktreePath = join(root, 'worktree-launch-review-terminal')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await makeGitRepository(worktreePath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-review-terminal',
+      flowMeta('flow-launch-review-terminal', repoPath, {
+        branch: 'flow/launch-review-terminal',
+        worktree_path: worktreePath,
+        commit: 'abc123',
+        start: {
+          repository_path: repoPath,
+          worktree_path: worktreePath,
+          branch: 'flow/launch-review-terminal',
+          base_ref: 'main',
+          commit: 'abc123'
+        },
+        phases: [
+          {
+            phase_id: 'review-loop-2',
+            title: 'Review Loop 2',
+            kind: 'review_loop',
+            status: 'ready',
+            order: 5
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    const launched: Array<{
+      mode: string
+      phaseId: string
+      prompt: string
+      launchId?: string
+    }> = []
+    const terminalManager = {
+      async launchTerminal(request: {
+        flow: FlowListRow
+        provider: FlowTerminalSummary['provider']
+        mode: FlowTerminalSummary['mode']
+        phaseId: string
+        prompt: string
+        launchId?: string
+      }) {
+        launched.push(request)
+        const store = await createFlowStore({ artifactRoot })
+        const terminal: FlowTerminalSummary = {
+          terminalId: 'terminal-review',
+          launchId: request.launchId ?? 'missing-launch-id',
+          provider: request.provider,
+          mode: request.mode,
+          flowId: request.flow.id,
+          phaseId: request.phaseId,
+          status: 'running',
+          command: request.provider,
+          argv: [request.prompt],
+          cwd: request.flow.worktreePath ?? '',
+          startedAt: '2026-06-14T12:20:00.000Z'
+        }
+        await store.updateFlowRecord(request.flow.id, {
+          terminals: [terminal],
+          updatedAt: '2026-06-14T12:20:00.000Z'
+        })
+        return terminal
+      },
+      async listTerminals(request: { flowId: string }) {
+        const store = await createFlowStore({ artifactRoot })
+        return (await store.readFlow(request.flowId))?.terminals ?? []
+      },
+      async writeInput() {
+        throw new Error('not expected')
+      },
+      async resize() {
+        throw new Error('not expected')
+      },
+      async terminate() {
+        throw new Error('not expected')
+      },
+      async dismiss() {
+        throw new Error('not expected')
+      }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const result = await launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-review-terminal',
+      phaseId: 'review-loop-2'
+    }, {
+      terminalManager,
+      reviewBehaviors: {
+        byPhaseId: {
+          'review-loop-2': {
+            id: 'second-review',
+            prompt: 'Run an independent terminal review.',
+            runnerHint: 'generic'
+          }
+        }
+      }
+    })
+
+    expect(launched).toEqual([
+      {
+        flow: expect.any(Object),
+        provider: 'codex',
+        mode: 'headless',
+        phaseId: 'review-loop-2',
+        prompt: 'Run an independent terminal review.',
+        launchId: expect.stringMatching(/^phase-launch-/)
+      }
+    ])
+    expect(result.flow).toMatchObject({
+      flows: [
+        expect.objectContaining({
+          id: 'flow-launch-review-terminal',
+          phases: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'review-loop-2',
+              status: 'running',
+              launchIds: [launched[0]?.launchId]
+            })
+          ]),
+          terminals: [
+            expect.objectContaining({
+              terminalId: 'terminal-review',
+              launchId: launched[0]?.launchId,
+              phaseId: 'review-loop-2',
+              mode: 'headless'
+            })
+          ]
+        })
+      ]
     })
   })
 
@@ -943,6 +1462,175 @@ describe('workspace main handlers', () => {
                   expect.stringMatching(/^phase-launch-/),
                   expect.stringMatching(/^phase-launch-/)
                 ]
+              })
+            ])
+          })
+        ]
+      }
+    })
+  })
+
+  it('returns refreshed needs-attention state when the default terminal launch fails', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-terminal-failure')
+    const worktreePath = join(root, 'worktree-launch-terminal-failure')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await makeGitRepository(worktreePath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-terminal-failure',
+      flowMeta('flow-launch-terminal-failure', repoPath, {
+        branch: 'flow/launch-terminal-failure',
+        worktree_path: worktreePath,
+        commit: 'abc123',
+        start: {
+          repository_path: repoPath,
+          worktree_path: worktreePath,
+          branch: 'flow/launch-terminal-failure',
+          base_ref: 'main',
+          commit: 'abc123'
+        },
+        phases: [
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'ready',
+            order: 3
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+    const terminalManager = {
+      async launchTerminal(request: {
+        flow: FlowListRow
+        provider: FlowTerminalSummary['provider']
+        mode: FlowTerminalSummary['mode']
+        phaseId: string
+        prompt: string
+        launchId?: string
+      }) {
+        const store = await createFlowStore({ artifactRoot })
+        const terminal: FlowTerminalSummary = {
+          terminalId: 'terminal-failed',
+          launchId: request.launchId ?? 'missing-launch-id',
+          provider: request.provider,
+          mode: request.mode,
+          flowId: request.flow.id,
+          phaseId: request.phaseId,
+          status: 'failed',
+          command: request.provider,
+          argv: [request.prompt],
+          cwd: request.flow.worktreePath ?? '',
+          startedAt: '2026-06-14T12:25:00.000Z',
+          endedAt: '2026-06-14T12:25:01.000Z'
+        }
+        await store.updateFlowRecord(request.flow.id, {
+          terminals: [terminal],
+          updatedAt: '2026-06-14T12:25:01.000Z'
+        })
+        throw new Error('terminal spawn failed')
+      },
+      async listTerminals(request: { flowId: string }) {
+        const store = await createFlowStore({ artifactRoot })
+        return (await store.readFlow(request.flowId))?.terminals ?? []
+      },
+      async writeInput() {
+        throw new Error('not expected')
+      },
+      async resize() {
+        throw new Error('not expected')
+      },
+      async terminate() {
+        throw new Error('not expected')
+      },
+      async dismiss() {
+        throw new Error('not expected')
+      }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const result = await launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-terminal-failure',
+      phaseId: 'implementation'
+    }, { terminalManager })
+    const phase = result.flow.status === 'ready'
+      ? result.flow.flows[0]?.phases?.find((candidate) => candidate.id === 'implementation')
+      : undefined
+    const launchId = phase?.launchIds?.[0]
+
+    expect(result.flow).toMatchObject({
+      flows: [
+        expect.objectContaining({
+          id: 'flow-launch-terminal-failure',
+          phases: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'implementation',
+              status: 'needs_attention',
+              notes: 'Phase launch failed: terminal spawn failed',
+              launchIds: [expect.stringMatching(/^phase-launch-/)]
+            })
+          ]),
+          terminals: [
+            expect.objectContaining({
+              terminalId: 'terminal-failed',
+              launchId,
+              phaseId: 'implementation',
+              status: 'failed'
+            })
+          ]
+        })
+      ]
+    })
+  })
+
+  it('marks a default terminal launch needs-attention when real launch validation fails', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-launch-missing-start')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-launch-missing-start',
+      flowMeta('flow-launch-missing-start', repoPath, {
+        phases: [
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'ready',
+            order: 3
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(launchFlowPhaseInWorkspace({
+      flowId: 'flow-launch-missing-start',
+      phaseId: 'implementation'
+    })).resolves.toMatchObject({
+      flow: {
+        flows: [
+          expect.objectContaining({
+            id: 'flow-launch-missing-start',
+            phases: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'implementation',
+                status: 'needs_attention',
+                notes: 'Phase launch failed: Flow start metadata is required before launching a terminal.',
+                launchIds: [expect.stringMatching(/^phase-launch-/)]
               })
             ])
           })
