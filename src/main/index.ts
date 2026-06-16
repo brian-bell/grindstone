@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
 import { registerWorkspaceHandlers } from './workspaceHandlers'
 
@@ -21,10 +21,25 @@ const createWindow = (): void => {
     }
   })
 
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isSafeExternalUrl(url)) {
+      void shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     void window.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+function isSafeExternalUrl(url: string): boolean {
+  try {
+    return new URL(url).protocol === 'https:'
+  } catch {
+    return false
   }
 }
 

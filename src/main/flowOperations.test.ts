@@ -714,7 +714,7 @@ describe('Flow operations', () => {
     ]))
   })
 
-  it('preserves completed legacy PR-dependent phases when PR metadata is absent', async () => {
+  it('locks legacy PR-dependent phases when PR metadata is absent', async () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
     await flows.createFlow({
@@ -739,8 +739,9 @@ describe('Flow operations', () => {
           phase_id: 'human-review',
           title: 'Human Review',
           kind: 'human_review',
-          status: 'completed',
-          outcome: 'approved',
+          status: 'blocked',
+          outcome: 'blocked',
+          notes: 'Blocked before structured PR metadata existed.',
           order: 7
         }
       ]
@@ -750,37 +751,25 @@ describe('Flow operations', () => {
     expect(legacyFlow.pr).toBeUndefined()
     expect(legacyFlow).toMatchObject({
       phases: expect.arrayContaining([
-        expect.objectContaining({
-          phase_id: 'pr-creation',
-          status: 'completed',
-          outcome: 'pr_recorded',
-          summary: 'Opened PR before metadata existed.'
-        }),
-        expect.objectContaining({
-          phase_id: 'human-review',
-          status: 'completed',
-          outcome: 'approved'
-        })
+        expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+        expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
       ])
     })
 
     await flows.setPhase({
       flowId: 'legacy-no-pr',
-      phaseId: 'human-review',
+      phaseId: 'review-loop-2',
+      title: 'Review Loop 2',
       status: 'running',
+      order: 5,
       now: '2026-06-15T12:01:00.000Z'
     })
     const rawFlow = JSON.parse(
       await readFile(join(root, 'flows', 'legacy-no-pr', 'meta.json'), 'utf8')
     ) as Record<string, unknown>
     expect(rawFlow.phases).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        phase_id: 'pr-creation',
-        status: 'completed',
-        outcome: 'pr_recorded',
-        summary: 'Opened PR before metadata existed.'
-      }),
-      expect.objectContaining({ phase_id: 'human-review', status: 'running' })
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
     ]))
   })
 
@@ -922,6 +911,35 @@ describe('Flow operations', () => {
     })
   })
 
+  it('rejects generic Human Review phase mutations that bypass structured review metadata', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await createPrReadyFlow(flows, root, 'human-review-structured-only')
+
+    await expect(flows.completePhase({
+      flowId: 'human-review-structured-only',
+      phaseId: 'human-review',
+      outcome: 'approved'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Human Review must be recorded through structured Human Review metadata.'
+    })
+    await expect(flows.blockPhase({
+      flowId: 'human-review-structured-only',
+      phaseId: 'human-review',
+      notes: 'Blocking through generic phase command.'
+    })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Human Review must be recorded through structured Human Review metadata.'
+    })
+
+    const unchangedFlow = await flows.readFlow('human-review-structured-only')
+    expect(unchangedFlow.human_review).toBeUndefined()
+    expect(unchangedFlow.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase_id: 'human-review', status: 'ready' })
+    ]))
+  })
+
   it('requires notes for Human Review changes requested and blocked outcomes', async () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })
@@ -1001,6 +1019,26 @@ describe('Flow operations', () => {
       }
     })
 
+    await expect(flows.recordHumanReview({
+      flowId: 'merge-after-review',
+      outcome: 'changes_requested',
+      notes: 'Review changed after blocked merge.',
+      now: '2026-06-15T12:04:30.000Z'
+    })).resolves.toMatchObject({
+      status: 'needs_attention',
+      human_review: {
+        outcome: 'changes_requested',
+        notes: 'Review changed after blocked merge.'
+      },
+      merge: { status: 'pending' }
+    })
+
+    await flows.recordHumanReview({
+      flowId: 'merge-after-review',
+      outcome: 'approved',
+      now: '2026-06-15T12:04:45.000Z'
+    })
+
     await expect(flows.recordMerge({
       flowId: 'merge-after-review',
       status: 'merged',
@@ -1030,6 +1068,35 @@ describe('Flow operations', () => {
     })).rejects.toMatchObject({
       code: 'validation_error',
       message: 'Merged Flows cannot be changed by Human Review or merge metadata.'
+    })
+  })
+
+  it('does not expose merged metadata without approved Human Review', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await createPrReadyFlow(flows, root, 'merged-without-approval')
+    await rewriteFlow(root, 'merged-without-approval', (flow) => ({
+      ...flow,
+      status: 'merged',
+      human_review: {
+        outcome: 'changes_requested',
+        reviewed_at: '2026-06-15T12:03:00.000Z',
+        notes: 'Needs changes.'
+      },
+      merge: {
+        status: 'merged',
+        commit: 'abcdef1234567890abcdef1234567890abcdef12',
+        merged_at: '2026-06-15T12:04:00.000Z'
+      }
+    }))
+
+    await expect(flows.readFlow('merged-without-approval')).resolves.toMatchObject({
+      status: 'needs_attention',
+      human_review: {
+        outcome: 'changes_requested',
+        notes: 'Needs changes.'
+      },
+      merge: { status: 'pending' }
     })
   })
 

@@ -370,8 +370,11 @@ function isHttpsUrl(value: string): boolean {
 }
 
 function isIsoTimestamp(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    return false
+  }
   const parsed = Date.parse(value)
-  return !Number.isNaN(parsed)
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString() === value
 }
 
 function normalizeFullGitObjectId(value: unknown): string | undefined {

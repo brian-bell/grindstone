@@ -5,6 +5,8 @@ import {
   normalizeFlowHumanReviewMetadata,
   normalizeFlowMergeMetadata,
   validateFlowPullRequestMetadata,
+  type FlowHumanReviewMetadata,
+  type FlowMergeMetadata,
   type PersistedFlowPhase
 } from '@shared/artifacts'
 import type {
@@ -223,12 +225,12 @@ async function mapFlowMetadata(
   const humanReview = pr === undefined
     ? undefined
     : normalizeFlowHumanReviewMetadata(metadata.human_review)
-  const merge = normalizeFlowMergeMetadata(metadata.merge)
+  const merge = normalizeMergeForHumanReview(humanReview, normalizeFlowMergeMetadata(metadata.merge))
 
   return {
     id: directoryFlowId,
     title: metadata.title,
-    status: metadata.status,
+    status: normalizeFlowStatus(metadata.status, humanReview, merge),
     repositoryId,
     repositoryPath: repositoryId,
     instructions: optionalString(metadata.instructions),
@@ -247,6 +249,42 @@ async function mapFlowMetadata(
     updatedAt: metadata.updated_at,
     phases: mapPhases(metadata.phases, shouldGatePrDependentPhases)
   }
+}
+
+function normalizeFlowStatus(
+  status: string,
+  humanReview: FlowHumanReviewMetadata | undefined,
+  merge: FlowMergeMetadata
+): string {
+  if (merge.status === 'merged') {
+    return 'merged'
+  }
+  if (merge.status === 'blocked' && humanReview?.outcome === 'approved') {
+    return 'blocked'
+  }
+  if (humanReview?.outcome === 'changes_requested') {
+    return 'needs_attention'
+  }
+  if (humanReview?.outcome === 'blocked') {
+    return 'blocked'
+  }
+  if (status === 'merged') {
+    return 'active'
+  }
+  return status
+}
+
+function normalizeMergeForHumanReview(
+  humanReview: FlowHumanReviewMetadata | undefined,
+  merge: FlowMergeMetadata
+): FlowMergeMetadata {
+  if (
+    (merge.status === 'blocked' || merge.status === 'merged') &&
+    humanReview?.outcome !== 'approved'
+  ) {
+    return { status: 'pending' }
+  }
+  return merge
 }
 
 function mapStartMetadata(value: unknown): FlowStartMetadata | undefined {
@@ -361,6 +399,7 @@ function gatePrDependentPhaseSummaries(phases: FlowPhaseSummary[]): FlowPhaseSum
         phase.status === 'running' ||
         phase.status === 'needs_attention' ||
         phase.status === 'completed' ||
+        phase.status === 'blocked' ||
         phase.status === 'active' ||
         phase.status === 'done'
       )
@@ -526,13 +565,16 @@ function applyMetadataUpdate(
   const pr = prResult.ok ? prResult.pr : undefined
   const shouldGatePrDependentPhases = pr === undefined && (
     hasOwnProperty(metadata, 'pr') ||
-    hasOwnProperty(metadata, 'human_review')
+    hasOwnProperty(metadata, 'human_review') ||
+    hasPrDependentRawPhaseState(metadata.phases)
   )
+  const humanReview = pr === undefined ? undefined : normalizeFlowHumanReviewMetadata(metadata.human_review)
+  const merge = normalizeMergeForHumanReview(humanReview, normalizeFlowMergeMetadata(metadata.merge))
   return withoutUndefined({
     ...metadata,
     pr,
-    human_review: pr === undefined ? undefined : normalizeFlowHumanReviewMetadata(metadata.human_review),
-    merge: normalizeFlowMergeMetadata(metadata.merge),
+    human_review: humanReview,
+    merge,
     phases: shouldGatePrDependentPhases
       ? gatePrDependentRawPhases(metadata.phases)
       : metadata.phases,
@@ -579,6 +621,7 @@ function gatePrDependentRawPhases(value: unknown): unknown {
         phase.status === 'running' ||
         phase.status === 'needs_attention' ||
         phase.status === 'completed' ||
+        phase.status === 'blocked' ||
         phase.status === 'active' ||
         phase.status === 'done'
       )
@@ -591,6 +634,34 @@ function gatePrDependentRawPhases(value: unknown): unknown {
       })
     }
     return phase
+  })
+}
+
+function hasPrDependentRawPhaseState(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false
+  }
+  return value.some((phase) => {
+    if (!isRecord(phase)) {
+      return false
+    }
+    return (
+      phase.phase_id === 'pr-creation' &&
+      phase.status === 'completed' &&
+      phase.outcome === 'pr_recorded'
+    ) ||
+    (
+      phase.phase_id === 'human-review' &&
+      (
+        phase.status === 'ready' ||
+        phase.status === 'running' ||
+        phase.status === 'needs_attention' ||
+        phase.status === 'completed' ||
+        phase.status === 'blocked' ||
+        phase.status === 'active' ||
+        phase.status === 'done'
+      )
+    )
   })
 }
 

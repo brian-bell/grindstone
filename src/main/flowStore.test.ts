@@ -296,8 +296,9 @@ describe('Flow artifact store', () => {
             phase_id: 'human-review',
             title: 'Human Review',
             kind: 'human_review',
-            status: 'completed',
-            outcome: 'approved',
+            status: 'blocked',
+            outcome: 'blocked',
+            notes: 'Blocked before structured PR metadata existed.',
             order: 7
           }
         ]
@@ -434,18 +435,153 @@ describe('Flow artifact store', () => {
       await readFile(join(artifactRoot, 'flows', 'without-pr', 'meta.json'), 'utf8')
     ) as Record<string, unknown>
     expect(rawLegacyFlow.phases).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        phase_id: 'pr-creation',
-        status: 'completed',
-        outcome: 'pr_recorded',
-        summary: 'Opened PR before metadata existed.'
-      }),
-      expect.objectContaining({
-        phase_id: 'human-review',
-        status: 'completed',
-        outcome: 'approved'
-      })
+      expect.objectContaining({ phase_id: 'pr-creation', status: 'ready' }),
+      expect.objectContaining({ phase_id: 'human-review', status: 'pending' })
     ]))
+  })
+
+  it('does not expose merged status without valid merged metadata', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-invalid-merge-status')
+    await writeFlowMeta(
+      artifactRoot,
+      'invalid-merge-status',
+      flowMeta('invalid-merge-status', repository.path, {
+        status: 'merged',
+        merge: {
+          status: 'merged',
+          commit: 'short',
+          merged_at: 'not-a-date'
+        }
+      })
+    )
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.readFlow('invalid-merge-status')).resolves.toMatchObject({
+      id: 'invalid-merge-status',
+      status: 'active',
+      merge: { status: 'pending' }
+    })
+    await expect(store.listFlowsForRepository(repository)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'invalid-merge-status',
+        status: 'active',
+        merge: { status: 'pending' }
+      })
+    ])
+  })
+
+  it('does not expose merged metadata without approved Human Review', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-merged-without-review')
+    const mergedMetadata = {
+      status: 'merged',
+      commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      merged_at: '2026-06-10T10:05:00.000Z'
+    }
+    await writeFlowMeta(
+      artifactRoot,
+      'merged-with-changes-requested',
+      flowMeta('merged-with-changes-requested', repository.path, {
+        status: 'merged',
+        pr: {
+          provider: 'github',
+          number: 46,
+          url: 'https://github.com/acme/grindstone/pull/46',
+          head: 'flow/changes-requested',
+          base: 'main',
+          status: 'open'
+        },
+        human_review: {
+          outcome: 'changes_requested',
+          reviewed_at: '2026-06-10T10:04:00.000Z',
+          notes: 'Needs changes.'
+        },
+        merge: mergedMetadata
+      })
+    )
+    await writeFlowMeta(
+      artifactRoot,
+      'merged-with-approval',
+      flowMeta('merged-with-approval', repository.path, {
+        status: 'merged',
+        updated_at: '2026-06-10T10:06:00.000Z',
+        pr: {
+          provider: 'github',
+          number: 47,
+          url: 'https://github.com/acme/grindstone/pull/47',
+          head: 'flow/approved',
+          base: 'main',
+          status: 'merged'
+        },
+        human_review: {
+          outcome: 'approved',
+          reviewed_at: '2026-06-10T10:04:00.000Z'
+        },
+        merge: mergedMetadata
+      })
+    )
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.readFlow('merged-with-changes-requested')).resolves.toMatchObject({
+      id: 'merged-with-changes-requested',
+      status: 'needs_attention',
+      humanReview: {
+        outcome: 'changes_requested',
+        notes: 'Needs changes.'
+      },
+      merge: { status: 'pending' }
+    })
+    await expect(store.readFlow('merged-with-approval')).resolves.toMatchObject({
+      id: 'merged-with-approval',
+      status: 'merged',
+      humanReview: { outcome: 'approved' },
+      merge: mergedMetadata
+    })
+  })
+
+  it('does not let stale blocked merge metadata override a later non-approved Human Review', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-stale-blocked-merge')
+    await writeFlowMeta(
+      artifactRoot,
+      'stale-blocked-merge',
+      flowMeta('stale-blocked-merge', repository.path, {
+        status: 'blocked',
+        pr: {
+          provider: 'github',
+          number: 45,
+          url: 'https://github.com/acme/grindstone/pull/45',
+          head: 'flow/stale-merge',
+          base: 'main',
+          status: 'open'
+        },
+        human_review: {
+          outcome: 'changes_requested',
+          reviewed_at: '2026-06-10T10:04:00.000Z',
+          notes: 'Review changed after blocked merge.'
+        },
+        merge: {
+          status: 'blocked',
+          notes: 'Older merge block.',
+          updated_at: '2026-06-10T10:03:00.000Z'
+        }
+      })
+    )
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.readFlow('stale-blocked-merge')).resolves.toMatchObject({
+      id: 'stale-blocked-merge',
+      status: 'needs_attention',
+      humanReview: {
+        outcome: 'changes_requested',
+        notes: 'Review changed after blocked merge.'
+      },
+      merge: { status: 'pending' }
+    })
   })
 
   it('creates and updates Flow records under the artifact root', async () => {

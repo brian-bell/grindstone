@@ -64,6 +64,13 @@ describe('Flow artifact metadata validators', () => {
       ok: false,
       message: 'Human Review reviewed_at must be a valid ISO timestamp.'
     })
+    expect(validateFlowHumanReviewMetadata({
+      outcome: 'approved',
+      reviewed_at: '2026-06-15'
+    })).toEqual({
+      ok: false,
+      message: 'Human Review reviewed_at must be a valid ISO timestamp.'
+    })
     expect(normalizeFlowHumanReviewMetadata({
       outcome: 'approved',
       reviewed_at: 'not-a-date'
@@ -116,6 +123,14 @@ describe('Flow artifact metadata validators', () => {
       status: 'merged',
       commit: 'abcdef1234567890abcdef1234567890abcdef12',
       merged_at: 'not-a-date'
+    })).toEqual({
+      ok: false,
+      message: 'Merge merged_at must be a valid ISO timestamp.'
+    })
+    expect(validateFlowMergeMetadata({
+      status: 'merged',
+      commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      merged_at: '2026-06-15'
     })).toEqual({
       ok: false,
       message: 'Merge merged_at must be a valid ISO timestamp.'
