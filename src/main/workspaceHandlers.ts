@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
@@ -11,6 +11,7 @@ import {
   type CompleteFlowPhaseRequest,
   type CreateFlowRequest,
   type CreateRepositoryRequest,
+  type FlowTerminalSummary,
   type FlowCreateError,
   type FlowListRow,
   type FlowPaneState,
@@ -24,6 +25,10 @@ import {
   type RepositoryPaneState,
   type RepositoryRow,
   type SkipFlowPhaseRequest,
+  type TerminalEvent,
+  type TerminalEventSubscriptionRequest,
+  type TerminalEventSubscriptionResponse,
+  type TerminalEventUnsubscribeRequest,
   type UpdateFlowPhaseRequest
 } from '@shared/workspace'
 import {
@@ -49,6 +54,7 @@ import {
 import { createFlowOperations } from './flowOperations'
 import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
+import { TerminalSessionManager, type LaunchTerminalRequest } from './terminalSessionManager'
 import {
   createRepository,
   retryRepositoryRemote,
@@ -66,8 +72,14 @@ type WorkspaceContext = {
   scanRoots: RepositoryPaneState['create']['scanRoots']
   catalog: RepositoryCatalogResult
   remoteRetries: RepositoryPaneState['create']['remoteRetries']
+  defaultAgent: GrindstoneConfigResult['defaultAgent']
   bootstrapHooks: GrindstoneConfigResult['bootstrapHooks']
 }
+
+type TerminalManagerPort = Pick<
+  TerminalSessionManager,
+  'launchTerminal' | 'listTerminals' | 'writeInput' | 'resize' | 'terminate' | 'dismiss'
+>
 
 export type LoadWorkspaceStateOptions = LoadGrindstoneConfigOptions & {
   configLoader?: ConfigLoader
@@ -80,6 +92,20 @@ let currentArtifactRoot: string | undefined
 let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
 let currentSelectionRequestId = 0
 const flowMutationQueue = new Map<string, Promise<void>>()
+
+let currentTerminalManager: TerminalManagerPort | undefined
+let currentTerminalManagerArtifactRoot: string | undefined
+
+type TerminalEventSender = {
+  id: number
+  send: (channel: string, payload: unknown) => void
+}
+
+type TerminalEventSubscription = TerminalEventSubscriptionRequest & {
+  sender: TerminalEventSender
+}
+
+const terminalEventSubscriptions = new Map<string, TerminalEventSubscription>()
 
 export async function loadInitialWorkspaceState(
   options: LoadWorkspaceStateOptions = {}
@@ -115,6 +141,7 @@ async function buildWorkspaceState(
         diagnostics: config.diagnostics
       },
       remoteRetries: [],
+      defaultAgent: null,
       bootstrapHooks: []
     }
 
@@ -141,6 +168,7 @@ async function buildWorkspaceState(
     scanRoots,
     catalog,
     remoteRetries,
+    defaultAgent: config.defaultAgent,
     bootstrapHooks: config.bootstrapHooks
   }
 
@@ -340,6 +368,7 @@ export async function createFlowInWorkspace(
   options: {
     runCommand?: FlowCommandRunner
     prepareLaunch?: LaunchPreparer
+    terminalManager?: TerminalManagerPort
   } = {}
 ): Promise<InitialWorkspaceState> {
   const context = await getWorkspaceContext()
@@ -359,9 +388,25 @@ export async function createFlowInWorkspace(
 
   const requestId = currentSelectionRequestId + 1
   currentSelectionRequestId = requestId
+  if (currentArtifactRoot === undefined || currentArtifactRoot.trim() === '') {
+    throw new Error('Flow artifact root is not configured.')
+  }
+
   const store = await currentFlowStoreFactory({
-    artifactRoot: currentArtifactRoot ?? ''
+    artifactRoot: currentArtifactRoot
   })
+  const prepareLaunch = options.prepareLaunch ??
+    createTerminalLaunchPreparer({
+      artifactRoot: currentArtifactRoot,
+      store,
+      terminalManager: options.terminalManager,
+      provider: context.defaultAgent ?? 'codex',
+      prompt: request.instructions.trim()
+    })
+  if (options.terminalManager !== undefined) {
+    currentTerminalManager = options.terminalManager
+    currentTerminalManagerArtifactRoot = currentArtifactRoot
+  }
   const result = await createFlow({
     repository: selectedRepository,
     artifactRoot: currentArtifactRoot,
@@ -369,7 +414,7 @@ export async function createFlowInWorkspace(
     request,
     store,
     runCommand: options.runCommand,
-    prepareLaunch: options.prepareLaunch
+    prepareLaunch
   })
 
   if (requestId !== currentSelectionRequestId || workspaceState !== currentWorkspaceState) {
@@ -910,6 +955,51 @@ function optionalNumberField(value: unknown): boolean {
   return value === undefined || (typeof value === 'number' && Number.isInteger(value))
 }
 
+export async function listFlowTerminals(
+  request: Parameters<TerminalManagerPort['listTerminals']>[0]
+): Promise<FlowTerminalSummary[]> {
+  const store = await createConfiguredFlowStore()
+  return getTerminalManager(store).listTerminals(request)
+}
+
+export async function writeTerminalInput(
+  request: Parameters<TerminalManagerPort['writeInput']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await createConfiguredFlowStore()
+  return getTerminalManager(store).writeInput(request)
+}
+
+export async function resizeTerminal(
+  request: Parameters<TerminalManagerPort['resize']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await createConfiguredFlowStore()
+  return getTerminalManager(store).resize(request)
+}
+
+export async function terminateTerminal(
+  request: Parameters<TerminalManagerPort['terminate']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await createConfiguredFlowStore()
+  return getTerminalManager(store).terminate(request)
+}
+
+export async function dismissTerminal(
+  request: Parameters<TerminalManagerPort['dismiss']>[0]
+): Promise<FlowTerminalSummary> {
+  const store = await createConfiguredFlowStore()
+  return getTerminalManager(store).dismiss(request)
+}
+
+async function createConfiguredFlowStore(): Promise<FlowStore> {
+  if (currentArtifactRoot === undefined || currentArtifactRoot.trim() === '') {
+    throw new Error('Flow artifact root is not configured.')
+  }
+
+  return currentFlowStoreFactory({
+    artifactRoot: currentArtifactRoot
+  })
+}
+
 export async function retryRepositoryRemoteInWorkspace(
   request: { retryId: string },
   options: { runCommand?: CommandRunner } = {}
@@ -1039,12 +1129,152 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   handleTypedIpc(ipcMain, ipcChannels.workspace.retryRepositoryRemote, (request) =>
     retryRepositoryRemoteInWorkspace(request)
   )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.listTerminals, (request) =>
+    listFlowTerminals(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.writeTerminalInput, (request) =>
+    writeTerminalInput(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.resizeTerminal, (request) =>
+    resizeTerminal(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.terminateTerminal, (request) =>
+    terminateTerminal(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.dismissTerminal, (request) =>
+    dismissTerminal(request)
+  )
+  ipcMain.handle(ipcChannels.workspace.subscribeTerminalEvents, (event, request) =>
+    subscribeTerminalEvents(event, request)
+  )
+  ipcMain.handle(ipcChannels.workspace.unsubscribeTerminalEvents, (_event, request) =>
+    unsubscribeTerminalEvents(request as TerminalEventUnsubscribeRequest)
+  )
   handleTypedIpc(ipcMain, ipcChannels.config.getEditableConfig, () =>
     getCurrentEditableConfig()
   )
   handleTypedIpc(ipcMain, ipcChannels.config.updateCommonConfig, (request) =>
     updateCommonConfig(request)
   )
+}
+
+function createTerminalLaunchPreparer({
+  artifactRoot,
+  store,
+  terminalManager,
+  provider,
+  prompt
+}: {
+  artifactRoot: string | undefined
+  store: FlowStore
+  terminalManager: TerminalManagerPort | undefined
+  provider: LaunchTerminalRequest['provider']
+  prompt: string
+}): LaunchPreparer {
+  return async (flow) => {
+    if (artifactRoot === undefined || artifactRoot.trim() === '') {
+      throw new Error('Flow artifact root is not configured.')
+    }
+
+    await (terminalManager ?? getTerminalManager(store)).launchTerminal({
+      flow,
+      provider,
+      mode: 'interactive',
+      phaseId: 'plan',
+      prompt
+    })
+  }
+}
+
+function getTerminalManager(store: FlowStore): TerminalManagerPort {
+  if (
+    currentTerminalManager === undefined ||
+    currentTerminalManagerArtifactRoot !== currentArtifactRoot
+  ) {
+    if (currentArtifactRoot === undefined || currentArtifactRoot.trim() === '') {
+      throw new Error('Flow artifact root is not configured.')
+    }
+
+    currentTerminalManager = new TerminalSessionManager({
+      artifactRoot: currentArtifactRoot,
+      store,
+      onEvent: publishTerminalEvent
+    })
+    currentTerminalManagerArtifactRoot = currentArtifactRoot
+  }
+
+  return currentTerminalManager
+}
+
+async function subscribeTerminalEvents(
+  event: unknown,
+  request: TerminalEventSubscriptionRequest
+): Promise<TerminalEventSubscriptionResponse> {
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    typeof request.repositoryId !== 'string' ||
+    request.repositoryId.trim() === '' ||
+    typeof request.flowId !== 'string' ||
+    request.flowId.trim() === ''
+  ) {
+    throw new Error('Terminal event subscription request is invalid.')
+  }
+
+  const store = await createConfiguredFlowStore()
+  const flow = await store.readFlow(request.flowId)
+  if (flow === undefined || flow.repositoryId !== request.repositoryId) {
+    throw new Error(`Flow not found for terminal event subscription: ${request.flowId}`)
+  }
+
+  const subscriptionId = randomUUID()
+  terminalEventSubscriptions.set(subscriptionId, {
+    repositoryId: request.repositoryId,
+    flowId: request.flowId,
+    sender: getTerminalEventSender(event)
+  })
+
+  return { subscriptionId }
+}
+
+function unsubscribeTerminalEvents(request: TerminalEventUnsubscribeRequest): undefined {
+  terminalEventSubscriptions.delete(request.subscriptionId)
+  return undefined
+}
+
+function publishTerminalEvent(event: TerminalEvent): void {
+  for (const [subscriptionId, subscription] of terminalEventSubscriptions) {
+    if (
+      subscription.repositoryId !== event.repositoryId ||
+      subscription.flowId !== event.flowId
+    ) {
+      continue
+    }
+
+    try {
+      subscription.sender.send(ipcChannels.events.terminal, event)
+    } catch {
+      terminalEventSubscriptions.delete(subscriptionId)
+    }
+  }
+}
+
+function getTerminalEventSender(event: unknown): TerminalEventSender {
+  if (
+    typeof event === 'object' &&
+    event !== null &&
+    'sender' in event &&
+    typeof event.sender === 'object' &&
+    event.sender !== null &&
+    'id' in event.sender &&
+    typeof event.sender.id === 'number' &&
+    'send' in event.sender &&
+    typeof event.sender.send === 'function'
+  ) {
+    return event.sender as TerminalEventSender
+  }
+
+  throw new Error('Terminal event subscription sender is unavailable.')
 }
 
 function createRepositoryReadyState({
@@ -1244,7 +1474,22 @@ async function createFlowPaneState(
     const store = await flowStoreFactory({
       artifactRoot
     })
-    const flows = await store.listFlowsForRepository(repository)
+    const terminalManager = getTerminalManager(store)
+    const flows = await Promise.all(
+      (await store.listFlowsForRepository(repository)).map(async (flow) => {
+        try {
+          return {
+            ...flow,
+            terminals: await terminalManager.listTerminals({
+              repositoryId: repository.id,
+              flowId: flow.id
+            })
+          }
+        } catch {
+          return flow
+        }
+      })
+    )
 
     if (flows.length === 0) {
       return {

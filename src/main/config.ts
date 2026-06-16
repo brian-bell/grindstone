@@ -29,6 +29,7 @@ export type GrindstoneConfigResult = {
   configPath: string | undefined
   scanRoots: ConfiguredPath[]
   repos: ConfiguredPath[]
+  defaultAgent: DefaultAgent | null
   artifactRoot: ConfiguredPath
   bootstrapHooks: RuntimeBootstrapHook[]
   diagnostics: CatalogDiagnostic[]
@@ -120,6 +121,7 @@ export async function loadGrindstoneConfig(
     repos: getConfiguredPathValues(rawConfig.repos).map((path) =>
       resolveConfiguredPath(path, configDir, homeDirectory)
     ),
+    defaultAgent: normalizeDefaultAgent(rawConfig.default_agent),
     artifactRoot,
     bootstrapHooks: normalizeRuntimeBootstrapHooks(rawConfig.bootstrap_hooks),
     diagnostics: []
@@ -349,6 +351,7 @@ function emptyConfig(
     configPath,
     scanRoots: [],
     repos: [],
+    defaultAgent: null,
     artifactRoot: resolveConfiguredPath(
       options.artifactRoot ?? getDefaultArtifactRoot(options),
       configDir,

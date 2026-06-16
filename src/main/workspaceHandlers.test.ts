@@ -9,6 +9,7 @@ import {
   createRepositoryInWorkspace,
   getCurrentEditableConfig,
   launchFlowPhaseInWorkspace,
+  listFlowTerminals,
   loadInitialWorkspaceState,
   readLinkedFlowPlan,
   recordFlowHumanReviewInWorkspace,
@@ -22,7 +23,7 @@ import {
   skipFlowPhaseInWorkspace,
   updateFlowPhaseInWorkspace
 } from './workspaceHandlers'
-import type { FlowStore } from './flowStore'
+import { createFlowStore, type FlowStore } from './flowStore'
 import type { FlowCommandRunner } from './flowCreation'
 import type { FlowPhaseRunner } from './flowPhaseActions'
 import { CommandRunError, type CommandRunner } from './repositoryCreation'
@@ -1682,7 +1683,7 @@ describe('workspace main handlers', () => {
         instructions: 'Build the end-to-end path.',
         baseRef: 'main'
       },
-      { runCommand }
+      { runCommand, prepareLaunch: async () => undefined }
     )).resolves.toMatchObject({
       flow: {
         status: 'ready',
@@ -1936,6 +1937,7 @@ describe('workspace main handlers', () => {
               resolvedPath: alphaPath
             }
           ],
+          defaultAgent: null,
           artifactRoot: {
             configuredPath: artifactRoot,
             resolvedPath: artifactRoot
@@ -2015,6 +2017,7 @@ describe('workspace main handlers', () => {
               resolvedPath: betaPath
             }
           ],
+          defaultAgent: null,
           artifactRoot: {
             configuredPath: betaArtifactRoot,
             resolvedPath: betaArtifactRoot
@@ -2211,6 +2214,231 @@ describe('workspace main handlers', () => {
     )
   })
 
+
+  it('reconciles stale persisted running terminals while selecting a repository', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-stale-terminal')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'stale-terminal-flow',
+      flowMeta('stale-terminal-flow', repoPath, {
+        terminals: [
+          {
+            terminal_id: 'terminal-stale',
+            launch_id: 'launch-stale',
+            provider: 'codex',
+            mode: 'interactive',
+            flow_id: 'stale-terminal-flow',
+            phase_id: 'plan',
+            status: 'running',
+            command: 'codex',
+            argv: ['Plan'],
+            cwd: repoPath,
+            started_at: '2026-06-14T12:00:00.000Z'
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+
+    await expect(selectRepository({ repositoryId })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          {
+            id: 'stale-terminal-flow',
+            terminals: [
+              {
+                terminalId: 'terminal-stale',
+                status: 'failed',
+                endedAt: expect.any(String)
+              }
+            ]
+          }
+        ]
+      }
+    })
+  })
+
+  it('starts a Plan terminal after Flow creation succeeds', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-flow-terminal')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\ndefault_agent = "claude"\n[artifacts]\nroot = "${artifactRoot}"\n`)
+    const runCommand: FlowCommandRunner = async (_command, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2]?.startsWith('refs/heads/')) {
+        throw new Error('branch not found')
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return { stdout: 'abc123\n' }
+      }
+      return { stdout: '' }
+    }
+    const launched: FlowListRow[] = []
+    const terminalManager = {
+      async launchTerminal(request: { flow: FlowListRow }) {
+        const flow = request.flow
+        launched.push(flow)
+        const store = await createFlowStore({ artifactRoot })
+        const terminal = {
+          terminalId: 'terminal-plan',
+          launchId: 'launch-plan',
+          provider: 'claude' as const,
+          mode: 'interactive' as const,
+          flowId: flow.id,
+          phaseId: 'plan',
+          status: 'running' as const,
+          command: 'claude',
+          argv: ['Build launch integration.'],
+          cwd: flow.worktreePath ?? '',
+          startedAt: '2026-06-14T12:10:00.000Z',
+          recentOutput: 'Plan terminal ready.'
+        }
+        await store.updateFlowRecord(flow.id, {
+          terminals: [terminal],
+          updatedAt: '2026-06-14T12:10:00.000Z'
+        })
+        return terminal
+      },
+      async listTerminals(request: { flowId: string }) {
+        const store = await createFlowStore({ artifactRoot })
+        return (await store.readFlow(request.flowId))?.terminals ?? []
+      },
+      async writeInput() {
+        throw new Error('not expected')
+      },
+      async resize() {
+        throw new Error('not expected')
+      },
+      async terminate() {
+        throw new Error('not expected')
+      },
+      async dismiss() {
+        throw new Error('not expected')
+      }
+    }
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    const result = await createFlowInWorkspace(
+      {
+        title: 'Launch integration',
+        instructions: 'Build launch integration.'
+      },
+      { runCommand, terminalManager }
+    )
+
+    expect(launched).toEqual([
+      expect.objectContaining({
+        id: 'launch-integration',
+        start: expect.objectContaining({
+          commit: 'abc123'
+        })
+      })
+    ])
+    expect(result.flow).toMatchObject({
+      status: 'ready',
+      flows: [
+        {
+          id: 'launch-integration',
+          status: 'active',
+          terminals: [
+            {
+              terminalId: 'terminal-plan',
+              provider: 'claude',
+              phaseId: 'plan',
+              status: 'running',
+              recentOutput: 'Plan terminal ready.'
+            }
+          ]
+        }
+      ]
+    })
+  })
+
+  it('rejects terminal IPC before a usable artifact root is configured', async () => {
+    const flowStoreFactory = vi.fn(async (): Promise<FlowStore> =>
+      readOnlyFlowStore(async () => [])
+    )
+    await loadInitialWorkspaceState({
+      configLoader: async () => ({
+        ok: true,
+        configPath: undefined,
+        scanRoots: [],
+        repos: [],
+        artifactRoot: {
+          configuredPath: '',
+          resolvedPath: ''
+        },
+        defaultAgent: null,
+        bootstrapHooks: [],
+        diagnostics: []
+      }),
+      flowStoreFactory
+    })
+
+    await expect(listFlowTerminals({
+      repositoryId: '/repo',
+      flowId: 'flow'
+    })).rejects.toThrow('Flow artifact root is not configured.')
+    expect(flowStoreFactory).not.toHaveBeenCalled()
+  })
+
+  it('validates terminal event subscriptions against persisted Flow ownership', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-terminal-subscription')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'subscription-flow',
+      flowMeta('subscription-flow', repoPath)
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\n[artifacts]\nroot = "${artifactRoot}"\n`)
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    const handlers = new Map<string, (event: unknown, request: unknown) => unknown>()
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (event: unknown, request: unknown) => unknown) => {
+        handlers.set(channel, handler)
+      })
+    }
+    registerWorkspaceHandlers(ipcMain)
+    const subscribe = handlers.get(ipcChannels.workspace.subscribeTerminalEvents)
+    const sender = {
+      sender: {
+        id: 1,
+        send: vi.fn()
+      }
+    }
+
+    await expect(subscribe?.(sender, {
+      repositoryId,
+      flowId: 'subscription-flow'
+    })).resolves.toEqual({
+      subscriptionId: expect.any(String)
+    })
+    await expect(subscribe?.(sender, {
+      repositoryId: '/repos/other',
+      flowId: 'subscription-flow'
+    })).rejects.toThrow('Flow not found for terminal event subscription: subscription-flow')
+    await expect(subscribe?.(sender, {
+      repositoryId,
+      flowId: 'missing-flow'
+    })).rejects.toThrow('Flow not found for terminal event subscription: missing-flow')
+  })
+
   it('registers workspace IPC handlers on shared channels', async () => {
     const ipcMain = {
       handle: vi.fn()
@@ -2252,6 +2480,34 @@ describe('workspace main handlers', () => {
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(
       ipcChannels.workspace.retryRepositoryRemote,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.listTerminals,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.writeTerminalInput,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.resizeTerminal,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.terminateTerminal,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.dismissTerminal,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.subscribeTerminalEvents,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.unsubscribeTerminalEvents,
       expect.any(Function)
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(

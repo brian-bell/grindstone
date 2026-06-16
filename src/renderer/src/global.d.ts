@@ -6,6 +6,7 @@ import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
   CompleteFlowPhaseRequest,
+  FlowTerminalSummary,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
   RecordFlowHumanReviewRequest,
@@ -13,6 +14,12 @@ import type {
   RecordFlowPullRequestRequest,
   RetryRepositoryRemoteRequest,
   SkipFlowPhaseRequest,
+  TerminalActionRequest,
+  TerminalEvent,
+  TerminalEventSubscriptionRequest,
+  TerminalInputRequest,
+  TerminalListRequest,
+  TerminalResizeRequest,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
@@ -41,6 +48,15 @@ declare global {
         retryRepositoryRemote: (
           request: RetryRepositoryRemoteRequest
         ) => Promise<InitialWorkspaceState>
+        listTerminals: (request: TerminalListRequest) => Promise<FlowTerminalSummary[]>
+        writeTerminalInput: (request: TerminalInputRequest) => Promise<FlowTerminalSummary>
+        resizeTerminal: (request: TerminalResizeRequest) => Promise<FlowTerminalSummary>
+        terminateTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
+        dismissTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
+        onTerminalEvent: (
+          request: TerminalEventSubscriptionRequest,
+          handler: (event: TerminalEvent) => void
+        ) => () => void
       }
       config: {
         getEditableConfig: () => Promise<EditableConfigState>

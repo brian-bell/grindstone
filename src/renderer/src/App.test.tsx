@@ -1,7 +1,7 @@
-import { act, render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App } from './App'
+import { App, getTerminalOutputAppend } from './App'
 import type {
   LinkedFlowPlanResponse
 } from '@shared/artifacts'
@@ -10,6 +10,7 @@ import type {
   ConfigUpdateResponse,
   EditableConfigState
 } from '@shared/config'
+import { RECENT_TERMINAL_OUTPUT_LIMIT } from '@shared/workspace'
 import type {
   CreateFlowRequest,
   CreateRepositoryRequest,
@@ -20,6 +21,7 @@ import type {
   RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
   SkipFlowPhaseRequest,
+  TerminalEvent,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
@@ -314,7 +316,19 @@ const setWorkspaceApi = (
   completeFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
   recordFlowPullRequest = vi.fn().mockResolvedValue(selectedCatalogState),
   recordFlowHumanReview = vi.fn().mockResolvedValue(selectedCatalogState),
-  recordFlowMerge = vi.fn().mockResolvedValue(selectedCatalogState)
+  recordFlowMerge = vi.fn().mockResolvedValue(selectedCatalogState),
+  terminalApi = {
+    listTerminals: vi.fn().mockResolvedValue([]),
+    writeTerminalInput: vi.fn().mockResolvedValue({}),
+    resizeTerminal: vi.fn().mockResolvedValue({}),
+    terminateTerminal: vi.fn().mockResolvedValue({}),
+    dismissTerminal: vi.fn().mockResolvedValue({}),
+    onTerminalEvent: vi.fn((request: unknown, handler: (event: TerminalEvent) => void) => {
+      void request
+      void handler
+      return () => undefined
+    })
+  }
 ): void => {
   Object.defineProperty(window, 'grindstone', {
     configurable: true,
@@ -332,7 +346,8 @@ const setWorkspaceApi = (
         recordFlowHumanReview,
         recordFlowMerge,
         createRepository,
-        retryRepositoryRemote
+        retryRepositoryRemote,
+        ...terminalApi
       },
       config: {
         getEditableConfig,
@@ -1486,6 +1501,221 @@ describe('App shell', () => {
     })
     expect(planPanel).toHaveTextContent('Plan: Linked Plan')
     expect(planPanel).toHaveTextContent('Ship the CLI.')
+  })
+
+  it('renders Flow terminal tabs and routes terminal controls through scoped preload calls', async () => {
+    const user = userEvent.setup()
+    const terminalState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            id: 'terminal-flow',
+            title: 'Terminal Flow',
+            status: 'active',
+            repositoryId: '/repos/grindstone',
+            repositoryPath: '/repos/grindstone',
+            createdAt: '2026-06-14T10:00:00.000Z',
+            updatedAt: '2026-06-14T10:01:00.000Z',
+            merge: { status: 'pending' },
+            terminals: [
+              {
+                terminalId: 'terminal-plan',
+                launchId: 'launch-plan',
+                provider: 'codex',
+                mode: 'interactive',
+                flowId: 'terminal-flow',
+                phaseId: 'plan',
+                status: 'running',
+                command: 'codex',
+                argv: ['Implement plan'],
+                cwd: '/worktree',
+                logPath: '/artifacts/flows/terminal-flow/terminals/terminal-plan/raw.log',
+                startedAt: '2026-06-14T10:00:00.000Z',
+                recentOutput: 'Plan terminal ready\n'
+              }
+            ]
+          }
+        ]
+      }
+    }
+    const terminalApi = {
+      listTerminals: vi.fn().mockResolvedValue([]),
+      writeTerminalInput: vi.fn().mockResolvedValue({}),
+      resizeTerminal: vi.fn().mockResolvedValue({}),
+      terminateTerminal: vi.fn().mockResolvedValue({}),
+      dismissTerminal: vi.fn().mockResolvedValue({}),
+      onTerminalEvent: vi.fn(() => () => undefined)
+    }
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(terminalState),
+      vi.fn().mockResolvedValue(terminalState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: terminalState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(terminalState),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      terminalApi
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    const terminalPanel = within(flowPane).getByRole('region', {
+      name: /terminal flow terminal sessions/i
+    })
+    expect(within(terminalPanel).getByRole('tab', { name: /plan running/i }))
+      .toHaveAttribute('aria-selected', 'true')
+    expect(within(terminalPanel).getByLabelText(/plan terminal output/i))
+      .toHaveTextContent('Plan terminal ready')
+    expect(within(terminalPanel).getByText('Fallback log ready')).toBeInTheDocument()
+
+    await user.type(within(terminalPanel).getByLabelText(/plan terminal input text/i), 'q')
+    await user.click(within(terminalPanel).getByRole('button', { name: /^send$/i }))
+    expect(within(terminalPanel).getByRole('button', { name: /resize plan terminal/i }))
+      .toBeDisabled()
+    await user.click(within(terminalPanel).getByRole('button', { name: /terminate plan terminal/i }))
+
+    const scopedRequest = {
+      repositoryId: '/repos/grindstone',
+      flowId: 'terminal-flow',
+      terminalId: 'terminal-plan'
+    }
+    expect(terminalApi.writeTerminalInput).toHaveBeenCalledWith({
+      ...scopedRequest,
+      data: 'q'
+    })
+    expect(terminalApi.resizeTerminal).not.toHaveBeenCalled()
+    expect(window.confirm).toHaveBeenCalledWith('Terminate codex terminal?')
+    expect(terminalApi.terminateTerminal).toHaveBeenCalledWith(scopedRequest)
+    expect(within(terminalPanel).getByRole('button', { name: /dismiss plan terminal/i }))
+      .toBeDisabled()
+  })
+
+  it('caps live terminal output events to the recent-output limit', async () => {
+    let terminalHandler: ((event: TerminalEvent) => void) | undefined
+    const terminalState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            id: 'terminal-flow',
+            title: 'Terminal Flow',
+            status: 'active',
+            repositoryId: '/repos/grindstone',
+            repositoryPath: '/repos/grindstone',
+            createdAt: '2026-06-14T10:00:00.000Z',
+            updatedAt: '2026-06-14T10:01:00.000Z',
+            merge: { status: 'pending' },
+            terminals: [
+              {
+                terminalId: 'terminal-plan',
+                launchId: 'launch-plan',
+                provider: 'codex',
+                mode: 'interactive',
+                flowId: 'terminal-flow',
+                phaseId: 'plan',
+                status: 'running',
+                command: 'codex',
+                argv: ['Implement plan'],
+                cwd: '/worktree',
+                startedAt: '2026-06-14T10:00:00.000Z',
+                recentOutput: 'seed'
+              }
+            ]
+          }
+        ]
+      }
+    }
+    const terminalApi = {
+      listTerminals: vi.fn().mockResolvedValue([]),
+      writeTerminalInput: vi.fn().mockResolvedValue({}),
+      resizeTerminal: vi.fn().mockResolvedValue({}),
+      terminateTerminal: vi.fn().mockResolvedValue({}),
+      dismissTerminal: vi.fn().mockResolvedValue({}),
+      onTerminalEvent: vi.fn((_request: unknown, handler: (event: TerminalEvent) => void) => {
+        terminalHandler = handler
+        return () => undefined
+      })
+    }
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(terminalState),
+      vi.fn().mockResolvedValue(terminalState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: terminalState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(terminalState),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      terminalApi
+    )
+
+    render(<App />)
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    const terminalOutput = within(flowPane).getByLabelText(/plan terminal output/i)
+    await waitFor(() => {
+      expect(terminalHandler).toBeDefined()
+    })
+
+    act(() => {
+      terminalHandler?.({
+        type: 'output',
+        repositoryId: '/repos/grindstone',
+        flowId: 'terminal-flow',
+        terminalId: 'terminal-plan',
+        data: 'x'.repeat(RECENT_TERMINAL_OUTPUT_LIMIT + 10)
+      })
+    })
+
+    expect(terminalOutput.textContent).toHaveLength(RECENT_TERMINAL_OUTPUT_LIMIT)
+    expect(terminalOutput.textContent?.startsWith('seed')).toBe(false)
+  })
+
+  it('computes xterm append chunks when the recent-output buffer rolls forward', () => {
+    const previousOutput = 'x'.repeat(RECENT_TERMINAL_OUTPUT_LIMIT)
+    const rolledOutput = `${'x'.repeat(RECENT_TERMINAL_OUTPUT_LIMIT - 1)}y`
+
+    expect(getTerminalOutputAppend(previousOutput, rolledOutput)).toBe('y')
+    expect(getTerminalOutputAppend('abc', 'abcdef')).toBe('def')
+    expect(getTerminalOutputAppend('abc', 'xyz')).toBe('xyz')
   })
 
   it('opens Flow creation in a modal, submits through preload, and clears after success', async () => {

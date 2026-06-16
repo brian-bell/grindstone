@@ -7,6 +7,7 @@ import {
   type CompleteFlowPhaseRequest,
   type CreateFlowRequest,
   type CreateRepositoryRequest,
+  type FlowTerminalSummary,
   type InitialWorkspaceState,
   type LaunchFlowPhaseRequest,
   type RecordFlowHumanReviewRequest,
@@ -14,6 +15,12 @@ import {
   type RecordFlowPullRequestRequest,
   type RetryRepositoryRemoteRequest,
   type SkipFlowPhaseRequest,
+  type TerminalActionRequest,
+  type TerminalEvent,
+  type TerminalEventSubscriptionRequest,
+  type TerminalInputRequest,
+  type TerminalListRequest,
+  type TerminalResizeRequest,
   type UpdateFlowPhaseRequest
 } from '@shared/workspace'
 
@@ -34,6 +41,15 @@ type PreloadApi = {
     retryRepositoryRemote: (
       request: RetryRepositoryRemoteRequest
     ) => Promise<InitialWorkspaceState>
+    listTerminals: (request: TerminalListRequest) => Promise<FlowTerminalSummary[]>
+    writeTerminalInput: (request: TerminalInputRequest) => Promise<FlowTerminalSummary>
+    resizeTerminal: (request: TerminalResizeRequest) => Promise<FlowTerminalSummary>
+    terminateTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
+    dismissTerminal: (request: TerminalActionRequest) => Promise<FlowTerminalSummary>
+    onTerminalEvent: (
+      request: TerminalEventSubscriptionRequest,
+      handler: (event: TerminalEvent) => void
+    ) => () => void
   }
   config: {
     getEditableConfig: () => Promise<EditableConfigState>
@@ -50,17 +66,26 @@ const editableConfigState: EditableConfigState = {
   bootstrap_hooks: []
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 async function loadPreload(): Promise<{
   exposeInMainWorld: ReturnType<typeof vi.fn>
   invoke: ReturnType<typeof vi.fn>
+  on: ReturnType<typeof vi.fn>
+  removeListener: ReturnType<typeof vi.fn>
   api: PreloadApi
 }> {
   const exposeInMainWorld = vi.fn()
   const invoke = vi.fn()
+  const on = vi.fn()
+  const removeListener = vi.fn()
 
   vi.doMock('electron', () => ({
     contextBridge: { exposeInMainWorld },
-    ipcRenderer: { invoke }
+    ipcRenderer: { invoke, on, removeListener }
   }))
 
   await import('./index')
@@ -68,6 +93,8 @@ async function loadPreload(): Promise<{
   return {
     exposeInMainWorld,
     invoke,
+    on,
+    removeListener,
     api: exposeInMainWorld.mock.calls[0]?.[1] as PreloadApi
   }
 }
@@ -97,7 +124,13 @@ describe('preload bridge', () => {
       'recordFlowHumanReview',
       'recordFlowMerge',
       'createRepository',
-      'retryRepositoryRemote'
+      'retryRepositoryRemote',
+      'listTerminals',
+      'writeTerminalInput',
+      'resizeTerminal',
+      'terminateTerminal',
+      'dismissTerminal',
+      'onTerminalEvent'
     ])
     expect(Object.keys(api.config)).toEqual(['getEditableConfig', 'updateCommonConfig'])
     expect('process' in api).toBe(false)
@@ -291,6 +324,105 @@ describe('preload bridge', () => {
     ).resolves.toEqual(defaultInitialWorkspaceState)
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.retryRepositoryRemote, {
       retryId: 'remote-retry:/repos/new-repo'
+    })
+  })
+
+  it('invokes terminal operations through scoped shared channels', async () => {
+    const { invoke, api } = await loadPreload()
+    const terminal: FlowTerminalSummary = {
+      terminalId: 'terminal-1',
+      launchId: 'launch-1',
+      provider: 'codex',
+      mode: 'interactive',
+      flowId: 'flow-1',
+      phaseId: 'plan',
+      status: 'running',
+      command: 'codex',
+      argv: ['Plan'],
+      cwd: '/worktree',
+      startedAt: '2026-06-14T12:00:00.000Z'
+    }
+    invoke
+      .mockResolvedValueOnce([terminal])
+      .mockResolvedValueOnce(terminal)
+      .mockResolvedValueOnce(terminal)
+      .mockResolvedValueOnce({ ...terminal, status: 'terminated' })
+      .mockResolvedValueOnce({ ...terminal, status: 'dismissed' })
+    const listRequest: TerminalListRequest = {
+      repositoryId: '/repos/grindstone',
+      flowId: 'flow-1'
+    }
+    const actionRequest: TerminalActionRequest = {
+      ...listRequest,
+      terminalId: 'terminal-1'
+    }
+
+    await expect(api.workspace.listTerminals(listRequest)).resolves.toEqual([terminal])
+    await expect(api.workspace.writeTerminalInput({
+      ...actionRequest,
+      data: 'q'
+    })).resolves.toEqual(terminal)
+    await expect(api.workspace.resizeTerminal({
+      ...actionRequest,
+      columns: 100,
+      rows: 30
+    })).resolves.toEqual(terminal)
+    await expect(api.workspace.terminateTerminal(actionRequest)).resolves.toMatchObject({
+      status: 'terminated'
+    })
+    await expect(api.workspace.dismissTerminal(actionRequest)).resolves.toMatchObject({
+      status: 'dismissed'
+    })
+
+    expect(invoke).toHaveBeenNthCalledWith(1, ipcChannels.workspace.listTerminals, listRequest)
+    expect(invoke).toHaveBeenNthCalledWith(2, ipcChannels.workspace.writeTerminalInput, {
+      ...actionRequest,
+      data: 'q'
+    })
+    expect(invoke).toHaveBeenNthCalledWith(3, ipcChannels.workspace.resizeTerminal, {
+      ...actionRequest,
+      columns: 100,
+      rows: 30
+    })
+    expect(invoke).toHaveBeenNthCalledWith(4, ipcChannels.workspace.terminateTerminal, actionRequest)
+    expect(invoke).toHaveBeenNthCalledWith(5, ipcChannels.workspace.dismissTerminal, actionRequest)
+  })
+
+  it('subscribes to terminal events and returns an unsubscribe function', async () => {
+    const { api, invoke, on, removeListener } = await loadPreload()
+    const handler = vi.fn()
+    const request = {
+      repositoryId: '/repos/grindstone',
+      flowId: 'flow-1'
+    }
+    invoke.mockResolvedValue({ subscriptionId: 'subscription-1' })
+    const unsubscribe = api.workspace.onTerminalEvent(request, handler)
+    const listener = on.mock.calls[0]?.[1] as (event: unknown, payload: TerminalEvent) => void
+    const event: TerminalEvent = {
+      type: 'output',
+      repositoryId: '/repos/grindstone',
+      flowId: 'flow-1',
+      terminalId: 'terminal-1',
+      data: 'hello'
+    }
+    const unrelatedEvent: TerminalEvent = {
+      ...event,
+      flowId: 'flow-2',
+      data: 'ignore me'
+    }
+
+    listener({}, event)
+    listener({}, unrelatedEvent)
+    await flushMicrotasks()
+    unsubscribe()
+
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.subscribeTerminalEvents, request)
+    expect(on).toHaveBeenCalledWith(ipcChannels.events.terminal, expect.any(Function))
+    expect(handler).toHaveBeenCalledWith(event)
+    expect(handler).not.toHaveBeenCalledWith(unrelatedEvent)
+    expect(removeListener).toHaveBeenCalledWith(ipcChannels.events.terminal, listener)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.unsubscribeTerminalEvents, {
+      subscriptionId: 'subscription-1'
     })
   })
 

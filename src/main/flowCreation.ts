@@ -212,6 +212,12 @@ export async function createFlow({
     }
   }
 
+  flow = await store.updateFlowRecord(allocation.flowId, {
+    status: 'active',
+    failure: null,
+    updatedAt: now()
+  })
+
   try {
     await prepareLaunch(flow)
   } catch (error) {
@@ -225,12 +231,6 @@ export async function createFlow({
     })
     return { ok: false, error: { code: 'launch_prep_failed', message: flow.failure?.message ?? 'Launch preparation failed.' }, flow }
   }
-
-  flow = await store.updateFlowRecord(allocation.flowId, {
-    status: 'active',
-    failure: null,
-    updatedAt: now()
-  })
 
   return { ok: true, flow }
 }
