@@ -65,11 +65,25 @@ const SAFE_FLOW_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 export async function createFlowStore(options: CreateFlowStoreOptions): Promise<FlowStore> {
   const artifactRoot = resolve(options.artifactRoot)
   const flowsRoot = join(artifactRoot, 'flows')
+  const updateQueues = new Map<string, Promise<unknown>>()
 
   try {
     await mkdir(flowsRoot, { recursive: true })
   } catch (error) {
     throw createFatalStoreError(error)
+  }
+
+  async function runExclusiveUpdate<T>(flowId: string, action: () => Promise<T>): Promise<T> {
+    const previous = updateQueues.get(flowId) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(action)
+    updateQueues.set(flowId, next)
+    try {
+      return await next
+    } finally {
+      if (updateQueues.get(flowId) === next) {
+        updateQueues.delete(flowId)
+      }
+    }
   }
 
   return {
@@ -151,25 +165,27 @@ export async function createFlowStore(options: CreateFlowStoreOptions): Promise<
         throw new Error(`Unsafe Flow id: ${flowId}`)
       }
 
-      const flowDir = join(flowsRoot, flowId)
-      const existing = await readRawFlowFromDirectory(flowsRoot, flowId)
-      if (existing === undefined) {
-        throw new Error(`Flow record not found: ${flowId}`)
-      }
+      return runExclusiveUpdate(flowId, async () => {
+        const flowDir = join(flowsRoot, flowId)
+        const existing = await readRawFlowFromDirectory(flowsRoot, flowId)
+        if (existing === undefined) {
+          throw new Error(`Flow record not found: ${flowId}`)
+        }
 
-      const metadata = applyMetadataUpdate(existing, update)
-      try {
-        await writeMetadataAtomically(flowDir, metadata)
-      } catch (error) {
-        throw createFatalStoreError(error)
-      }
+        const metadata = applyMetadataUpdate(existing, update)
+        try {
+          await writeMetadataAtomically(flowDir, metadata)
+        } catch (error) {
+          throw createFatalStoreError(error)
+        }
 
-      const row = await mapFlowMetadata(flowId, metadata)
-      if (row === undefined) {
-        throw new Error(`Updated Flow record is unreadable: ${flowId}`)
-      }
+        const row = await mapFlowMetadata(flowId, metadata)
+        if (row === undefined) {
+          throw new Error(`Updated Flow record is unreadable: ${flowId}`)
+        }
 
-      return row
+        return row
+      })
     }
   }
 }

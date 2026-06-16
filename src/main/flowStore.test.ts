@@ -766,6 +766,56 @@ describe('Flow artifact store', () => {
     })
   })
 
+  it('serializes concurrent record updates so neither write loses the other field', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-concurrent-update')
+    const store = await createFlowStore({ artifactRoot })
+
+    await store.createFlowRecord({
+      id: 'concurrent-flow',
+      title: 'Concurrent Flow',
+      instructions: 'Race terminal persistence against flow mutations.',
+      status: 'active',
+      repositoryPath: repository.path,
+      createdAt: '2026-06-14T10:00:00.000Z',
+      updatedAt: '2026-06-14T10:00:00.000Z'
+    })
+
+    await Promise.all([
+      store.updateFlowRecord('concurrent-flow', {
+        status: 'review',
+        updatedAt: '2026-06-14T10:01:00.000Z'
+      }),
+      store.updateFlowRecord('concurrent-flow', {
+        terminals: [
+          {
+            terminalId: 'terminal-concurrent',
+            launchId: 'launch-concurrent',
+            provider: 'claude',
+            mode: 'interactive',
+            flowId: 'concurrent-flow',
+            phaseId: 'review',
+            status: 'running',
+            command: 'claude',
+            argv: ['review'],
+            cwd: repository.path,
+            startedAt: '2026-06-14T10:01:00.000Z'
+          }
+        ],
+        updatedAt: '2026-06-14T10:02:00.000Z'
+      })
+    ])
+
+    await expect(store.readFlow('concurrent-flow')).resolves.toMatchObject({
+      id: 'concurrent-flow',
+      status: 'review',
+      terminals: [
+        expect.objectContaining({ terminalId: 'terminal-concurrent' })
+      ]
+    })
+  })
+
   it('treats artifact root and flows collection access failures as fatal', async () => {
     const root = await makeTempDir()
     const artifactRootFile = join(root, 'artifact-root-file')
