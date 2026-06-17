@@ -56,7 +56,7 @@ textarea {
   --right-pane-column: minmax(220px, 0.56fr);
 
   display: grid;
-  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.45fr) var(--right-pane-column);
+  grid-template-columns: minmax(192px, 0.624fr) minmax(360px, 1.45fr) var(--right-pane-column);
   min-height: 100vh;
   background: #f4f2ed;
 }
