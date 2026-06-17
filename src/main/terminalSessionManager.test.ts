@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, stat } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createFlowStore } from './flowStore'
 import {
   TerminalSessionManager,
+  nodePtyAdapter,
   type PtyAdapter,
   type PtyProcess
 } from './terminalSessionManager'
@@ -68,6 +69,18 @@ async function waitForExpectation(assertion: () => Promise<void> | void): Promis
   throw lastError
 }
 
+function waitForPtyExit(process: PtyProcess): Promise<{ output: string; exitCode: number; signal?: string | number }> {
+  let output = ''
+  process.onData((data) => {
+    output += data
+  })
+  return new Promise((resolve) => {
+    process.onExit((event) => {
+      resolve({ output, ...event })
+    })
+  })
+}
+
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = []
   readonly resizes: Array<{ columns: number; rows: number }> = []
@@ -107,6 +120,35 @@ class FakePtyProcess implements PtyProcess {
 }
 
 describe('terminal session manager', () => {
+  it('repairs the bundled node-pty spawn helper before launching real PTYs', async () => {
+    const helperPath = join(
+      process.cwd(),
+      'node_modules',
+      'node-pty',
+      'prebuilds',
+      `${process.platform}-${process.arch}`,
+      'spawn-helper'
+    )
+    await chmod(helperPath, 0o644)
+
+    const ptyProcess = nodePtyAdapter.spawn('/bin/zsh', ['-lc', 'printf pty-ok'], {
+      cwd: process.cwd(),
+      env: {},
+      columns: 100,
+      rows: 30
+    })
+    const result = await waitForPtyExit(ptyProcess)
+
+    expect(result).toMatchObject({
+      output: 'pty-ok',
+      exitCode: 0
+    })
+    await expect(stat(helperPath)).resolves.toMatchObject({
+      mode: expect.any(Number)
+    })
+    expect((await stat(helperPath)).mode & 0o111).not.toBe(0)
+  })
+
   it('launches a Flow terminal, persists fallback logs, and tracks lifecycle operations', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'repo'), { recursive: true })

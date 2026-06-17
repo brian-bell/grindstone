@@ -1,4 +1,6 @@
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import { chmodSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -66,9 +68,11 @@ type ManagedTerminal = {
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
+const requireFromHere = createRequire(import.meta.url)
 
 export const nodePtyAdapter: PtyAdapter = {
   spawn(command, args, options) {
+    ensureNodePtySpawnHelperExecutable()
     return nodePty.spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
@@ -76,6 +80,39 @@ export const nodePtyAdapter: PtyAdapter = {
       rows: options.rows
     })
   }
+}
+
+function ensureNodePtySpawnHelperExecutable(): void {
+  if (process.platform === 'win32') {
+    return
+  }
+
+  for (const helperPath of nodePtySpawnHelperCandidates()) {
+    try {
+      const mode = statSync(helperPath).mode
+      if ((mode & 0o111) === 0) {
+        chmodSync(helperPath, mode | 0o111)
+      }
+      return
+    } catch {
+      // Keep looking; node-pty can be installed from source or prebuilds.
+    }
+  }
+}
+
+function nodePtySpawnHelperCandidates(): string[] {
+  let nodePtyRoot: string
+  try {
+    nodePtyRoot = dirname(requireFromHere.resolve('node-pty/package.json'))
+  } catch {
+    return []
+  }
+
+  return [
+    join(nodePtyRoot, 'build', 'Release', 'spawn-helper'),
+    join(nodePtyRoot, 'build', 'Debug', 'spawn-helper'),
+    join(nodePtyRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper')
+  ]
 }
 
 export class TerminalSessionManager {
