@@ -4,6 +4,8 @@ import {
   Maximize2,
   GitBranch,
   Info,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Plus,
   RotateCcw,
@@ -20,6 +22,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
   type ReactElement
@@ -110,6 +113,7 @@ export function App(): ReactElement {
   const [flowCreateOpenRequest, setFlowCreateOpenRequest] = useState(0)
   const selectionRequestIdRef = useRef(0)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>('hints')
+  const [isRightPaneCollapsed, setIsRightPaneCollapsed] = useState(false)
   const [editableConfig, setEditableConfig] = useState<EditableConfigState | null>(null)
   const [configLoadError, setConfigLoadError] = useState<string | null>(null)
   const terminalSubscriptionKey = flowState.status === 'ready'
@@ -241,6 +245,10 @@ export function App(): ReactElement {
 
   const shellState = workspace ?? defaultInitialWorkspaceState
   const isWorkspaceLoading = workspace === null
+  const rightPaneColumn = isRightPaneCollapsed ? '52px' : 'minmax(220px, 0.63fr)'
+  const shellStyle = {
+    '--right-pane-column': rightPaneColumn
+  } as CSSProperties
 
   async function handleRepositorySelect(repository: RepositoryRow): Promise<void> {
     const requestId = selectionRequestIdRef.current + 1
@@ -323,7 +331,10 @@ export function App(): ReactElement {
   }
 
   return (
-    <div className="app-shell">
+    <div
+      className={isRightPaneCollapsed ? 'app-shell app-shell-right-collapsed' : 'app-shell'}
+      style={shellStyle}
+    >
       <section
         className="pane repository-pane"
         aria-labelledby="repository-pane-title"
@@ -336,7 +347,10 @@ export function App(): ReactElement {
           isLoading={isWorkspaceLoading}
           repository={shellState.repository}
           onSelect={handleRepositorySelect}
-          onConfigure={() => setRightPaneMode('config')}
+          onConfigure={() => {
+            setRightPaneMode('config')
+            setIsRightPaneCollapsed(false)
+          }}
           onWorkspaceUpdate={applyWorkspace}
         />
       </section>
@@ -356,25 +370,42 @@ export function App(): ReactElement {
         />
       </main>
 
-      <section
-        className="pane context-pane"
-        aria-labelledby="context-pane-title"
-      >
-        {rightPaneMode === 'config' ? (
-          <ConfigEditorPanel
-            config={editableConfig}
-            loadError={configLoadError}
-            onCancel={() => setRightPaneMode('hints')}
-            onReload={handleConfigReload}
-            onSave={handleConfigSave}
-          />
-        ) : (
-          <ContextHintsPanel
-            workspace={shellState}
-            onNewFlow={requestFlowCreate}
-          />
-        )}
-      </section>
+      {isRightPaneCollapsed ? (
+        <section className="pane context-pane context-pane-collapsed" aria-label="Right pane">
+          <button
+            aria-expanded="false"
+            aria-label="Expand right pane"
+            className="icon-button"
+            title="Expand right pane"
+            type="button"
+            onClick={() => setIsRightPaneCollapsed(false)}
+          >
+            <PanelRightOpen aria-hidden="true" size={16} />
+          </button>
+        </section>
+      ) : (
+        <section
+          className="pane context-pane"
+          aria-labelledby="context-pane-title"
+        >
+          {rightPaneMode === 'config' ? (
+            <ConfigEditorPanel
+              config={editableConfig}
+              loadError={configLoadError}
+              onCancel={() => setRightPaneMode('hints')}
+              onCollapse={() => setIsRightPaneCollapsed(true)}
+              onReload={handleConfigReload}
+              onSave={handleConfigSave}
+            />
+          ) : (
+            <ContextHintsPanel
+              workspace={shellState}
+              onCollapse={() => setIsRightPaneCollapsed(true)}
+              onNewFlow={requestFlowCreate}
+            />
+          )}
+        </section>
+      )}
     </div>
   )
 }
@@ -890,9 +921,11 @@ function CatalogDiagnosticRow({
 
 function ContextHintsPanel({
   workspace,
+  onCollapse,
   onNewFlow
 }: {
   workspace: InitialWorkspaceState
+  onCollapse: () => void
   onNewFlow: () => void
 }): ReactElement {
   return (
@@ -900,6 +933,16 @@ function ContextHintsPanel({
       <div className="pane-header">
         <Sparkles aria-hidden="true" size={18} />
         <h2 id="context-pane-title">Contextual Hints</h2>
+        <button
+          aria-expanded="true"
+          aria-label="Collapse right pane"
+          className="icon-button context-toggle-button"
+          title="Collapse right pane"
+          type="button"
+          onClick={onCollapse}
+        >
+          <PanelRightClose aria-hidden="true" size={16} />
+        </button>
       </div>
 
       <div className="hint-list">
@@ -938,12 +981,14 @@ function ConfigEditorPanel({
   config,
   loadError,
   onCancel,
+  onCollapse,
   onReload,
   onSave
 }: {
   config: EditableConfigState | null
   loadError: string | null
   onCancel: () => void
+  onCollapse: () => void
   onReload: () => Promise<void>
   onSave: (input: CommonConfigUpdateInput) => Promise<ConfigSaveResult>
 }): ReactElement {
@@ -1011,6 +1056,16 @@ function ConfigEditorPanel({
       <div className="pane-header config-header">
         <Settings aria-hidden="true" size={18} />
         <h2 id="context-pane-title">Common Config</h2>
+        <button
+          aria-expanded="true"
+          aria-label="Collapse right pane"
+          className="icon-button context-toggle-button"
+          title="Collapse right pane"
+          type="button"
+          onClick={onCollapse}
+        >
+          <PanelRightClose aria-hidden="true" size={16} />
+        </button>
         <button className="icon-button" type="button" onClick={onCancel} aria-label="Close config">
           <X aria-hidden="true" size={16} />
         </button>

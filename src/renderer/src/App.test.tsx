@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App, getTerminalOutputAppend } from './App'
+import './styles.css'
 import type {
   LinkedFlowPlanResponse
 } from '@shared/artifacts'
@@ -380,6 +381,56 @@ describe('App shell', () => {
     expect(within(repositoryPane).getByText('No repositories configured')).toBeInTheDocument()
     expect(within(flowPane).getByText('No Flow selected')).toBeInTheDocument()
     expect(within(contextPane).getByText('Select a repository')).toBeInTheDocument()
+  })
+
+  it('starts with a narrower right pane and lets users collapse it', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(vi.fn().mockResolvedValue(defaultInitialState))
+
+    const { container } = render(<App />)
+
+    const shell = container.querySelector('.app-shell')
+    expect(shell).toHaveStyle({
+      '--right-pane-column': 'minmax(220px, 0.63fr)'
+    })
+
+    const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
+    const collapseButton = within(contextPane).getByRole('button', {
+      name: /collapse right pane/i
+    })
+
+    await user.click(collapseButton)
+
+    expect(screen.queryByRole('region', { name: /contextual hints/i })).not.toBeInTheDocument()
+    expect(shell).toHaveClass('app-shell-right-collapsed')
+    expect(shell).toHaveStyle({
+      '--right-pane-column': '52px'
+    })
+    expect(screen.getByRole('button', { name: /expand right pane/i })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+
+    await user.click(screen.getByRole('button', { name: /expand right pane/i }))
+
+    expect(await screen.findByRole('region', { name: /contextual hints/i })).toBeInTheDocument()
+    expect(shell).not.toHaveClass('app-shell-right-collapsed')
+  })
+
+  it('reopens a collapsed right pane when configuration is requested', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+
+    const { container } = render(<App />)
+
+    const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
+    await user.click(within(contextPane).getByRole('button', { name: /collapse right pane/i }))
+
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
+    await user.click(within(repositoryPane).getByRole('button', { name: /configure/i }))
+
+    expect(await screen.findByRole('region', { name: /common config/i })).toBeInTheDocument()
+    expect(container.querySelector('.app-shell')).not.toHaveClass('app-shell-right-collapsed')
   })
 
   it('keeps repository loading copy out of secondary left-pane headings', () => {
