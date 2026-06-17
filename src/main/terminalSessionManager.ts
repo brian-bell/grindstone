@@ -17,6 +17,7 @@ import type {
 import { buildAgentLaunchCommand } from './agentLaunch'
 import { writeJsonAtomically } from './artifactStore'
 import { toRawTerminal, type FlowStore } from './flowStore'
+import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createFlowOperations } from './flowOperations'
 
 type Disposable = {
@@ -346,21 +347,23 @@ export class TerminalSessionManager {
       return
     }
 
-    const flowOperations = createFlowOperations({ artifactRoot: this.options.artifactRoot })
-    const flow = await flowOperations.readFlow(terminal.flowId)
-    const phase = flow.phases?.find((candidate) => candidate.phase_id === terminal.phaseId)
-    if (
-      phase?.status !== 'running' ||
-      phase.launch_ids?.[phase.launch_ids.length - 1] !== terminal.launchId
-    ) {
-      return
-    }
+    await runExclusiveFlowMutation(terminal.flowId, async () => {
+      const flowOperations = createFlowOperations({ artifactRoot: this.options.artifactRoot })
+      const flow = await flowOperations.readFlow(terminal.flowId)
+      const phase = flow.phases?.find((candidate) => candidate.phase_id === terminal.phaseId)
+      if (
+        phase?.status !== 'running' ||
+        phase.launch_ids?.[phase.launch_ids.length - 1] !== terminal.launchId
+      ) {
+        return
+      }
 
-    await flowOperations.needsAttentionPhase({
-      flowId: terminal.flowId,
-      phaseId: terminal.phaseId,
-      launchId: terminal.launchId,
-      notes: `Phase terminal failed: ${formatTerminalFailure(terminal)}.`
+      await flowOperations.needsAttentionPhase({
+        flowId: terminal.flowId,
+        phaseId: terminal.phaseId,
+        launchId: terminal.launchId,
+        notes: `Phase terminal failed: ${formatTerminalFailure(terminal)}.`
+      })
     })
   }
 

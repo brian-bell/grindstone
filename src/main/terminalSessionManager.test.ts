@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { FlowListRow, RepositoryRow } from '@shared/workspace'
+import { createFlowOperations } from './flowOperations'
+import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createFlowStore } from './flowStore'
 import {
   TerminalSessionManager,
@@ -618,6 +620,96 @@ describe('terminal session manager', () => {
             terminalId: 'terminal-123',
             status: 'terminated',
             signal: 'SIGTERM'
+          })
+        ]
+      })
+    })
+  })
+
+  it('does not overwrite newer serialized phase mutations after headless terminal failure', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      phases: [
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'running',
+          order: 3,
+          launch_ids: ['launch-123']
+        }
+      ],
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const fakeProcess = new FakePtyProcess()
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty: {
+        spawn() {
+          return fakeProcess
+        }
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn().mockReturnValueOnce('terminal-123')
+    })
+    const flowOperations = createFlowOperations({ artifactRoot })
+    let releaseCompletion!: () => void
+    const completionMayContinue = new Promise<void>((resolve) => {
+      releaseCompletion = resolve
+    })
+    const completion = runExclusiveFlowMutation('launch-terminal', async () => {
+      await completionMayContinue
+      await flowOperations.completePhase({
+        flowId: 'launch-terminal',
+        phaseId: 'implementation',
+        summary: 'Implementation finished.'
+      })
+    })
+
+    await manager.launchTerminal({
+      flow: await store.readFlow('launch-terminal') as FlowListRow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation',
+      prompt: 'Implement the approved plan.',
+      launchId: 'launch-123'
+    })
+    fakeProcess.emitExit({ exitCode: 1 })
+    releaseCompletion()
+    await completion
+
+    await waitForExpectation(async () => {
+      await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+        phases: [
+          expect.objectContaining({
+            id: 'implementation',
+            status: 'completed',
+            summary: 'Implementation finished.',
+            launchIds: ['launch-123']
+          })
+        ],
+        terminals: [
+          expect.objectContaining({
+            terminalId: 'terminal-123',
+            status: 'failed',
+            exitCode: 1
           })
         ]
       })

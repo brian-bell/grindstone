@@ -52,6 +52,7 @@ import {
   type FlowReviewBehaviorRegistry
 } from './flowPhaseActions'
 import { createFlowOperations } from './flowOperations'
+import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 import { TerminalSessionManager, type LaunchTerminalRequest } from './terminalSessionManager'
@@ -91,7 +92,6 @@ let currentWorkspaceState: InitialWorkspaceState | undefined
 let currentArtifactRoot: string | undefined
 let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
 let currentSelectionRequestId = 0
-const flowMutationQueue = new Map<string, Promise<void>>()
 
 let currentTerminalManager: TerminalManagerPort | undefined
 let currentTerminalManagerArtifactRoot: string | undefined
@@ -912,29 +912,6 @@ async function refreshSelectedRepositoryWorkspaceIfCurrent(
     return currentWorkspaceState ?? workspaceState
   }
   return refreshSelectedRepositoryWorkspace(workspaceState)
-}
-
-async function runExclusiveFlowMutation<T>(
-  flowId: string,
-  action: () => Promise<T>
-): Promise<T> {
-  const previous = flowMutationQueue.get(flowId) ?? Promise.resolve()
-  let releaseCurrent!: () => void
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve
-  })
-  const queued = previous.then(() => current)
-  flowMutationQueue.set(flowId, queued)
-
-  await previous
-  try {
-    return await action()
-  } finally {
-    releaseCurrent()
-    if (flowMutationQueue.get(flowId) === queued) {
-      flowMutationQueue.delete(flowId)
-    }
-  }
 }
 
 function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseRequest {
