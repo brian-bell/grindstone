@@ -1,4 +1,5 @@
-import { chmod, mkdir, mkdtemp, readFile, realpath, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { chmod, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -8,6 +9,7 @@ import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createFlowStore } from './flowStore'
 import {
   TerminalSessionManager,
+  ensureNodePtySpawnHelperExecutable,
   nodePtyAdapter,
   type PtyAdapter,
   type PtyProcess
@@ -81,6 +83,17 @@ function waitForPtyExit(process: PtyProcess): Promise<{ output: string; exitCode
   })
 }
 
+function bundledNodePtySpawnHelperPath(): string {
+  return join(
+    process.cwd(),
+    'node_modules',
+    'node-pty',
+    'prebuilds',
+    `${process.platform}-${process.arch}`,
+    'spawn-helper'
+  )
+}
+
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = []
   readonly resizes: Array<{ columns: number; rows: number }> = []
@@ -120,34 +133,130 @@ class FakePtyProcess implements PtyProcess {
 }
 
 describe('terminal session manager', () => {
-  it.runIf(process.platform === 'darwin')('repairs the bundled node-pty spawn helper before launching real PTYs', async () => {
-    const helperPath = join(
-      process.cwd(),
+  it('repairs the spawn helper paired with the native node-pty module that was loaded', async () => {
+    const root = await makeTempDir()
+    const nodePtyLibRoot = join(root, 'node-pty', 'lib')
+    const staleNativeDir = join(root, 'node-pty', 'build', 'Release')
+    const loadedNativeDir = join(root, 'node-pty', 'prebuilds', 'darwin-arm64')
+    await mkdir(nodePtyLibRoot, { recursive: true })
+    await mkdir(staleNativeDir, { recursive: true })
+    await mkdir(loadedNativeDir, { recursive: true })
+    const staleHelperPath = join(staleNativeDir, 'spawn-helper')
+    const loadedHelperPath = join(loadedNativeDir, 'spawn-helper')
+    const loadedNativePath = join(loadedNativeDir, 'pty.node')
+    await writeFile(staleHelperPath, '')
+    await writeFile(loadedHelperPath, '')
+    await writeFile(loadedNativePath, '')
+    await chmod(staleHelperPath, 0o644)
+    await chmod(loadedHelperPath, 0o644)
+
+    ensureNodePtySpawnHelperExecutable({
+      platform: 'darwin',
+      nodePtyLibRoot,
+      loadedNativeModulePaths: [loadedNativePath]
+    })
+
+    expect((await stat(staleHelperPath)).mode & 0o111).toBe(0)
+    expect((await stat(loadedHelperPath)).mode & 0o111).not.toBe(0)
+  })
+
+  it('ignores loaded node-pty native modules from other package copies', async () => {
+    const root = await makeTempDir()
+    const localNodePtyLibRoot = join(root, 'app', 'node_modules', 'node-pty', 'lib')
+    const otherNativeDir = join(root, 'other', 'node_modules', 'node-pty', 'prebuilds', 'darwin-arm64')
+    const localNativeDir = join(root, 'app', 'node_modules', 'node-pty', 'prebuilds', 'darwin-arm64')
+    await mkdir(localNodePtyLibRoot, { recursive: true })
+    await mkdir(otherNativeDir, { recursive: true })
+    await mkdir(localNativeDir, { recursive: true })
+    const otherHelperPath = join(otherNativeDir, 'spawn-helper')
+    const localHelperPath = join(localNativeDir, 'spawn-helper')
+    const otherNativePath = join(otherNativeDir, 'pty.node')
+    const localNativePath = join(localNativeDir, 'pty.node')
+    await writeFile(otherHelperPath, '')
+    await writeFile(localHelperPath, '')
+    await writeFile(otherNativePath, '')
+    await writeFile(localNativePath, '')
+    await chmod(otherHelperPath, 0o644)
+    await chmod(localHelperPath, 0o644)
+
+    ensureNodePtySpawnHelperExecutable({
+      platform: 'darwin',
+      nodePtyLibRoot: localNodePtyLibRoot,
+      loadedNativeModulePaths: [otherNativePath, localNativePath]
+    })
+
+    expect((await stat(otherHelperPath)).mode & 0o111).toBe(0)
+    expect((await stat(localHelperPath)).mode & 0o111).not.toBe(0)
+  })
+
+  it('keeps already-unpacked asar spawn helper paths idempotent', async () => {
+    const root = await makeTempDir()
+    const appRoot = join(root, 'Grindstone.app', 'Contents', 'Resources')
+    const packedNodePtyLibRoot = join(appRoot, 'app.asar', 'node_modules', 'node-pty', 'lib')
+    const unpackedNativeDir = join(
+      appRoot,
+      'app.asar.unpacked',
       'node_modules',
       'node-pty',
       'prebuilds',
-      `${process.platform}-${process.arch}`,
-      'spawn-helper'
+      'darwin-arm64'
     )
+    await mkdir(packedNodePtyLibRoot, { recursive: true })
+    await mkdir(unpackedNativeDir, { recursive: true })
+    const helperPath = join(unpackedNativeDir, 'spawn-helper')
+    const nativePath = join(unpackedNativeDir, 'pty.node')
+    await writeFile(helperPath, '')
+    await writeFile(nativePath, '')
     await chmod(helperPath, 0o644)
 
-    const ptyProcess = nodePtyAdapter.spawn('/bin/zsh', ['-lc', 'printf pty-ok'], {
-      cwd: process.cwd(),
-      env: {},
-      columns: 100,
-      rows: 30
+    ensureNodePtySpawnHelperExecutable({
+      platform: 'darwin',
+      nodePtyLibRoot: packedNodePtyLibRoot,
+      loadedNativeModulePaths: [nativePath]
     })
-    const result = await waitForPtyExit(ptyProcess)
 
-    expect(result).toMatchObject({
-      output: 'pty-ok',
-      exitCode: 0
-    })
-    await expect(stat(helperPath)).resolves.toMatchObject({
-      mode: expect.any(Number)
-    })
     expect((await stat(helperPath)).mode & 0o111).not.toBe(0)
+    await expect(stat(join(
+      appRoot,
+      'app.asar.unpacked.unpacked',
+      'node_modules',
+      'node-pty',
+      'prebuilds',
+      'darwin-arm64',
+      'spawn-helper'
+    ))).rejects.toThrow()
   })
+
+  it.runIf(process.platform === 'darwin' && existsSync(bundledNodePtySpawnHelperPath()))(
+    'repairs the bundled node-pty spawn helper before launching real PTYs',
+    async () => {
+      const helperPath = bundledNodePtySpawnHelperPath()
+      const originalMode = (await stat(helperPath)).mode & 0o777
+
+      try {
+        await chmod(helperPath, 0o644)
+
+        const ptyProcess = nodePtyAdapter.spawn('/bin/zsh', ['-lc', 'printf pty-ok'], {
+          cwd: process.cwd(),
+          env: {},
+          columns: 100,
+          rows: 30
+        })
+        const result = await waitForPtyExit(ptyProcess)
+
+        expect(result).toMatchObject({
+          output: 'pty-ok',
+          exitCode: 0
+        })
+        await expect(stat(helperPath)).resolves.toMatchObject({
+          mode: expect.any(Number)
+        })
+        expect((await stat(helperPath)).mode & 0o111).not.toBe(0)
+      } finally {
+        await chmod(helperPath, originalMode)
+      }
+    }
+  )
 
   it('launches a Flow terminal, persists fallback logs, and tracks lifecycle operations', async () => {
     const root = await makeTempDir()
@@ -385,68 +494,80 @@ describe('terminal session manager', () => {
   })
 
   it('adds common user CLI directories to terminal spawn PATH', async () => {
-    const root = await makeTempDir()
-    await mkdir(join(root, 'repo'), { recursive: true })
-    await mkdir(join(root, 'worktree'), { recursive: true })
-    const artifactRoot = join(root, 'artifacts')
-    const store = await createFlowStore({ artifactRoot })
-    const repo = repository(root)
-    const storedFlow = await store.createFlowRecord({
-      id: 'launch-terminal-path',
-      title: 'Launch terminal path',
-      instructions: 'Implement the plan.',
-      status: 'creating',
-      repositoryPath: repo.path,
-      branch: 'flow/launch-terminal-path',
-      worktreePath: join(root, 'worktree'),
-      baseRef: 'main',
-      commit: 'abc123',
-      start: {
-        repositoryPath: repo.path,
-        worktreePath: join(root, 'worktree'),
-        branch: 'flow/launch-terminal-path',
-        baseRef: 'main',
-        commit: 'abc123'
-      },
-      createdAt: '2026-06-14T12:00:00.000Z',
-      updatedAt: '2026-06-14T12:00:00.000Z'
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: 'darwin'
     })
-    const spawned: Array<{ env: Record<string, string> }> = []
-    const pty: PtyAdapter = {
-      spawn(_command, _args, options) {
-        spawned.push({ env: options.env })
-        return new FakePtyProcess()
+
+    try {
+      const root = await makeTempDir()
+      await mkdir(join(root, 'repo'), { recursive: true })
+      await mkdir(join(root, 'worktree'), { recursive: true })
+      const artifactRoot = join(root, 'artifacts')
+      const store = await createFlowStore({ artifactRoot })
+      const repo = repository(root)
+      const storedFlow = await store.createFlowRecord({
+        id: 'launch-terminal-path',
+        title: 'Launch terminal path',
+        instructions: 'Implement the plan.',
+        status: 'creating',
+        repositoryPath: repo.path,
+        branch: 'flow/launch-terminal-path',
+        worktreePath: join(root, 'worktree'),
+        baseRef: 'main',
+        commit: 'abc123',
+        start: {
+          repositoryPath: repo.path,
+          worktreePath: join(root, 'worktree'),
+          branch: 'flow/launch-terminal-path',
+          baseRef: 'main',
+          commit: 'abc123'
+        },
+        createdAt: '2026-06-14T12:00:00.000Z',
+        updatedAt: '2026-06-14T12:00:00.000Z'
+      })
+      const spawned: Array<{ env: Record<string, string> }> = []
+      const pty: PtyAdapter = {
+        spawn(_command, _args, options) {
+          spawned.push({ env: options.env })
+          return new FakePtyProcess()
+        }
+      }
+      const manager = new TerminalSessionManager({
+        artifactRoot,
+        store,
+        pty,
+        env: {
+          HOME: root,
+          PATH: ['/usr/bin', '/bin'].join(delimiter)
+        },
+        now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+        idFactory: vi.fn()
+          .mockReturnValueOnce('terminal-path')
+          .mockReturnValueOnce('launch-path')
+      })
+
+      await manager.launchTerminal({
+        flow: storedFlow,
+        provider: 'codex',
+        mode: 'headless',
+        phaseId: 'implementation',
+        prompt: 'Implement the approved plan.'
+      })
+
+      expect(spawned[0]?.env.PATH?.split(delimiter)).toEqual([
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        join(root, '.local', 'bin'),
+        '/usr/bin',
+        '/bin'
+      ])
+    } finally {
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
       }
     }
-    const manager = new TerminalSessionManager({
-      artifactRoot,
-      store,
-      pty,
-      env: {
-        HOME: root,
-        PATH: ['/usr/bin', '/bin'].join(delimiter)
-      },
-      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
-      idFactory: vi.fn()
-        .mockReturnValueOnce('terminal-path')
-        .mockReturnValueOnce('launch-path')
-    })
-
-    await manager.launchTerminal({
-      flow: storedFlow,
-      provider: 'codex',
-      mode: 'headless',
-      phaseId: 'implementation',
-      prompt: 'Implement the approved plan.'
-    })
-
-    expect(spawned[0]?.env.PATH?.split(delimiter)).toEqual([
-      '/opt/homebrew/bin',
-      '/usr/local/bin',
-      join(root, '.local', 'bin'),
-      '/usr/bin',
-      '/bin'
-    ])
   })
 
   it('preserves Windows Path casing when building terminal spawn environments', async () => {
@@ -514,6 +635,81 @@ describe('terminal session manager', () => {
 
       expect(spawned[0]?.env.Path).toBe('C:\\Windows\\System32')
       expect(spawned[0]?.env.PATH).toBeUndefined()
+    } finally {
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
+  })
+
+  it('does not add macOS Homebrew paths to Linux terminal spawn environments', async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: 'linux'
+    })
+
+    try {
+      const root = await makeTempDir()
+      await mkdir(join(root, 'repo'), { recursive: true })
+      await mkdir(join(root, 'worktree'), { recursive: true })
+      const artifactRoot = join(root, 'artifacts')
+      const store = await createFlowStore({ artifactRoot })
+      const repo = repository(root)
+      const storedFlow = await store.createFlowRecord({
+        id: 'launch-terminal-linux-path',
+        title: 'Launch terminal Linux path',
+        instructions: 'Implement the plan.',
+        status: 'creating',
+        repositoryPath: repo.path,
+        branch: 'flow/launch-terminal-linux-path',
+        worktreePath: join(root, 'worktree'),
+        baseRef: 'main',
+        commit: 'abc123',
+        start: {
+          repositoryPath: repo.path,
+          worktreePath: join(root, 'worktree'),
+          branch: 'flow/launch-terminal-linux-path',
+          baseRef: 'main',
+          commit: 'abc123'
+        },
+        createdAt: '2026-06-14T12:00:00.000Z',
+        updatedAt: '2026-06-14T12:00:00.000Z'
+      })
+      const spawned: Array<{ env: Record<string, string> }> = []
+      const pty: PtyAdapter = {
+        spawn(_command, _args, options) {
+          spawned.push({ env: options.env })
+          return new FakePtyProcess()
+        }
+      }
+      const manager = new TerminalSessionManager({
+        artifactRoot,
+        store,
+        pty,
+        env: {
+          HOME: root,
+          PATH: ['/usr/bin', '/bin'].join(delimiter)
+        },
+        now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+        idFactory: vi.fn()
+          .mockReturnValueOnce('terminal-linux-path')
+          .mockReturnValueOnce('launch-linux-path')
+      })
+
+      await manager.launchTerminal({
+        flow: storedFlow,
+        provider: 'codex',
+        mode: 'headless',
+        phaseId: 'implementation',
+        prompt: 'Implement the approved plan.'
+      })
+
+      expect(spawned[0]?.env.PATH?.split(delimiter)).toEqual([
+        join(root, '.local', 'bin'),
+        '/usr/bin',
+        '/bin'
+      ])
     } finally {
       if (platformDescriptor !== undefined) {
         Object.defineProperty(process, 'platform', platformDescriptor)

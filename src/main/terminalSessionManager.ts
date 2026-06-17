@@ -82,37 +82,143 @@ export const nodePtyAdapter: PtyAdapter = {
   }
 }
 
-function ensureNodePtySpawnHelperExecutable(): void {
-  if (process.platform === 'win32') {
+type NodePtySpawnHelperRepairOptions = {
+  platform?: NodeJS.Platform | string
+  arch?: string
+  loadedNativeModulePaths?: string[]
+  nodePtyLibRoot?: string
+  stat?: typeof statSync
+  chmod?: typeof chmodSync
+  requireNative?: (nativePath: string) => unknown
+}
+
+export function ensureNodePtySpawnHelperExecutable(options: NodePtySpawnHelperRepairOptions = {}): void {
+  const platform = options.platform ?? process.platform
+  if (platform === 'win32') {
     return
   }
 
-  for (const helperPath of nodePtySpawnHelperCandidates()) {
-    try {
-      const mode = statSync(helperPath).mode
-      if ((mode & 0o111) === 0) {
-        chmodSync(helperPath, mode | 0o111)
-      }
-      return
-    } catch {
-      // Keep looking; node-pty can be installed from source or prebuilds.
+  const helperPath = resolveNodePtySpawnHelperPath(options)
+  if (helperPath === undefined) {
+    return
+  }
+
+  try {
+    const stat = options.stat ?? statSync
+    const chmod = options.chmod ?? chmodSync
+    const mode = stat(helperPath).mode
+    if ((mode & 0o111) === 0) {
+      chmod(helperPath, mode | 0o111)
     }
+  } catch {
+    // Let node-pty surface the real spawn failure if the helper cannot be repaired.
   }
 }
 
-function nodePtySpawnHelperCandidates(): string[] {
-  let nodePtyRoot: string
-  try {
-    nodePtyRoot = dirname(requireFromHere.resolve('node-pty/package.json'))
-  } catch {
+function resolveNodePtySpawnHelperPath(options: NodePtySpawnHelperRepairOptions): string | undefined {
+  const loadedNativePath = nodePtyLoadedNativeModulePaths(options)
+    .find((nativePath) => isLocalNodePtyNativePath(nativePath, options))
+  if (loadedNativePath !== undefined) {
+    return spawnHelperPathForNativeModule(loadedNativePath)
+  }
+
+  for (const nativePath of nodePtyNativeModuleCandidates(options)) {
+    if (canLoadNativeModule(nativePath, options.requireNative)) {
+      return spawnHelperPathForNativeModule(nativePath)
+    }
+  }
+
+  return undefined
+}
+
+function nodePtyLoadedNativeModulePaths(options: NodePtySpawnHelperRepairOptions): string[] {
+  if (options.loadedNativeModulePaths !== undefined) {
+    return options.loadedNativeModulePaths
+  }
+
+  return Object.keys(requireFromHere.cache).filter(isNodePtyPtyNativePath)
+}
+
+function nodePtyNativeModuleCandidates(options: NodePtySpawnHelperRepairOptions): string[] {
+  const nodePtyLibRoot = resolveNodePtyLibRoot(options)
+  if (nodePtyLibRoot === undefined) {
     return []
   }
 
-  return [
-    join(nodePtyRoot, 'build', 'Release', 'spawn-helper'),
-    join(nodePtyRoot, 'build', 'Debug', 'spawn-helper'),
-    join(nodePtyRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper')
+  const platform = options.platform ?? process.platform
+  const arch = options.arch ?? process.arch
+  const dirs = [
+    join('build', 'Release'),
+    join('build', 'Debug'),
+    join('prebuilds', `${platform}-${arch}`)
   ]
+  const relativeRoots = ['..', '.']
+
+  return [...new Set(dirs.flatMap((dir) =>
+    relativeRoots.map((relativeRoot) => join(nodePtyLibRoot, relativeRoot, dir, 'pty.node'))
+  ))]
+}
+
+function canLoadNativeModule(
+  nativePath: string,
+  requireNative: (nativePath: string) => unknown = requireFromHere
+): boolean {
+  try {
+    requireNative(nativePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isNodePtyPtyNativePath(nativePath: string): boolean {
+  return getNodePtyPackageRootForNativeModule(nativePath) !== undefined
+}
+
+function isLocalNodePtyNativePath(nativePath: string, options: NodePtySpawnHelperRepairOptions): boolean {
+  const packageRoot = getNodePtyPackageRootForNativeModule(nativePath)
+  const resolvedPackageRoot = resolveNodePtyPackageRoot(options)
+  if (packageRoot === undefined || resolvedPackageRoot === undefined) {
+    return false
+  }
+
+  return normalizeAsarEquivalentPath(packageRoot) === normalizeAsarEquivalentPath(resolvedPackageRoot)
+}
+
+function resolveNodePtyPackageRoot(options: NodePtySpawnHelperRepairOptions): string | undefined {
+  const nodePtyLibRoot = resolveNodePtyLibRoot(options)
+  return nodePtyLibRoot === undefined ? undefined : dirname(nodePtyLibRoot)
+}
+
+function resolveNodePtyLibRoot(options: NodePtySpawnHelperRepairOptions): string | undefined {
+  try {
+    return options.nodePtyLibRoot ?? dirname(requireFromHere.resolve('node-pty/lib/index.js'))
+  } catch {
+    return undefined
+  }
+}
+
+function getNodePtyPackageRootForNativeModule(nativePath: string): string | undefined {
+  const normalizedPath = nativePath.replaceAll('\\', '/')
+  const match = normalizedPath.match(/^(.*\/node-pty)\/(?:build\/(?:Release|Debug)|prebuilds\/[^/]+)\/pty\.node$/)
+  return match?.[1]
+}
+
+function spawnHelperPathForNativeModule(nativePath: string): string {
+  return unpackAsarPath(join(dirname(nativePath), 'spawn-helper'))
+}
+
+function unpackAsarPath(pathValue: string): string {
+  return pathValue
+    .replace(/(^|[/\\])app\.asar(?=$|[/\\])/g, '$1app.asar.unpacked')
+    .replace(/(^|[/\\])node_modules\.asar(?=$|[/\\])/g, '$1node_modules.asar.unpacked')
+}
+
+function normalizeAsarEquivalentPath(pathValue: string): string {
+  return pathValue
+    .replaceAll('\\', '/')
+    .replace(/(^|\/)app\.asar\.unpacked(?=$|\/)/g, '$1app.asar')
+    .replace(/(^|\/)node_modules\.asar\.unpacked(?=$|\/)/g, '$1node_modules.asar')
 }
 
 export class TerminalSessionManager {
@@ -537,11 +643,15 @@ function buildTerminalPath(env: Record<string, string>): string {
 
 function agentExecutablePathAdditions(env: Record<string, string>): string[] {
   const homeDirectory = env.HOME ?? homedir()
-  return [
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    join(homeDirectory, '.local', 'bin')
-  ]
+  if (process.platform === 'darwin') {
+    return [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      join(homeDirectory, '.local', 'bin')
+    ]
+  }
+
+  return [join(homeDirectory, '.local', 'bin')]
 }
 
 function resolveLaunchMetadata(flow: FlowListRow): {
