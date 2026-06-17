@@ -1,5 +1,6 @@
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { delimiter, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import * as nodePty from 'node-pty'
 import { RECENT_TERMINAL_OUTPUT_LIMIT } from '@shared/workspace'
@@ -162,10 +163,7 @@ export class TerminalSessionManager {
         launchCommand.argv,
         {
           cwd: launchCommand.cwd,
-          env: {
-            ...processEnvToRecord(this.options.env ?? process.env),
-            ...launchCommand.env
-          },
+          env: buildTerminalSpawnEnv(this.options.env ?? process.env, launchCommand.env),
           columns: 100,
           rows: 30
         }
@@ -470,6 +468,36 @@ function processEnvToRecord(env: NodeJS.ProcessEnv): Record<string, string> {
       entry[1] !== undefined
     )
   )
+}
+
+function buildTerminalSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  launchEnv: Record<string, string>
+): Record<string, string> {
+  const normalizedBaseEnv = processEnvToRecord(baseEnv)
+  return {
+    ...normalizedBaseEnv,
+    PATH: buildTerminalPath(normalizedBaseEnv),
+    ...launchEnv
+  }
+}
+
+function buildTerminalPath(env: Record<string, string>): string {
+  const entries = [
+    ...agentExecutablePathAdditions(env),
+    ...(env.PATH ?? '').split(delimiter)
+  ].filter((entry) => entry.trim() !== '')
+
+  return [...new Set(entries)].join(delimiter)
+}
+
+function agentExecutablePathAdditions(env: Record<string, string>): string[] {
+  const homeDirectory = env.HOME ?? homedir()
+  return [
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    join(homeDirectory, '.local', 'bin')
+  ]
 }
 
 function resolveLaunchMetadata(flow: FlowListRow): {

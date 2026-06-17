@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { FlowListRow, RepositoryRow } from '@shared/workspace'
 import { createFlowOperations } from './flowOperations'
@@ -339,6 +339,71 @@ describe('terminal session manager', () => {
           WTUI_COMMIT: 'abc123'
         })
       })
+    ])
+  })
+
+  it('adds common user CLI directories to terminal spawn PATH', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const storedFlow = await store.createFlowRecord({
+      id: 'launch-terminal-path',
+      title: 'Launch terminal path',
+      instructions: 'Implement the plan.',
+      status: 'creating',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal-path',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: {
+        repositoryPath: repo.path,
+        worktreePath: join(root, 'worktree'),
+        branch: 'flow/launch-terminal-path',
+        baseRef: 'main',
+        commit: 'abc123'
+      },
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const spawned: Array<{ env: Record<string, string> }> = []
+    const pty: PtyAdapter = {
+      spawn(_command, _args, options) {
+        spawned.push({ env: options.env })
+        return new FakePtyProcess()
+      }
+    }
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty,
+      env: {
+        HOME: root,
+        PATH: ['/usr/bin', '/bin'].join(delimiter)
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn()
+        .mockReturnValueOnce('terminal-path')
+        .mockReturnValueOnce('launch-path')
+    })
+
+    await manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation',
+      prompt: 'Implement the approved plan.'
+    })
+
+    expect(spawned[0]?.env.PATH?.split(delimiter)).toEqual([
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      join(root, '.local', 'bin'),
+      '/usr/bin',
+      '/bin'
     ])
   })
 
