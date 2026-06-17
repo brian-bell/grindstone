@@ -782,6 +782,60 @@ describe('Flow artifact store', () => {
     })
   })
 
+  it('ignores incomplete terminal sidecars without replacing persisted terminal metadata', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-terminal-sidecar-partial')
+    await writeFlowMeta(artifactRoot, 'terminal-sidecar-partial-flow', flowMeta(
+      'terminal-sidecar-partial-flow',
+      repository.path,
+      {
+        terminals: [
+          {
+            terminal_id: 'terminal-sidecar-partial',
+            launch_id: 'launch-sidecar-partial',
+            provider: 'codex',
+            mode: 'interactive',
+            flow_id: 'terminal-sidecar-partial-flow',
+            phase_id: 'implementation',
+            status: 'running',
+            command: 'codex',
+            argv: ['exec', 'Implement'],
+            cwd: repository.path,
+            started_at: '2026-06-14T10:01:00.000Z',
+            recent_output: 'still running\n'
+          }
+        ]
+      }
+    ))
+    const partialSidecarDir = join(
+      artifactRoot,
+      'flows',
+      'terminal-sidecar-partial-flow',
+      'terminals',
+      'terminal-sidecar-partial'
+    )
+    await mkdir(partialSidecarDir, { recursive: true })
+    await writeFile(join(partialSidecarDir, 'meta.json'), JSON.stringify({
+      terminal_id: 'terminal-sidecar-partial',
+      flow_id: 'terminal-sidecar-partial-flow',
+      status: 'running'
+    }))
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.readFlow('terminal-sidecar-partial-flow')).resolves.toMatchObject({
+      terminals: [
+        {
+          terminalId: 'terminal-sidecar-partial',
+          launchId: 'launch-sidecar-partial',
+          flowId: 'terminal-sidecar-partial-flow',
+          recentOutput: 'still running\n'
+        }
+      ]
+    })
+  })
+
   it('reads terminal sidecars without overwriting Flow phase updates', async () => {
     const root = await makeTempDir()
     const artifactRoot = join(root, 'artifacts')

@@ -32,6 +32,20 @@ export type CreateFlowStoreOptions = {
 
 type RawFlowMetadata = Record<string, unknown>
 
+type RawTerminalMetadata = RawFlowMetadata & {
+  terminal_id: string
+  launch_id: string
+  provider: FlowTerminalSummary['provider']
+  mode: FlowTerminalSummary['mode']
+  flow_id: string
+  phase_id: string
+  status: FlowTerminalSummary['status']
+  command: string
+  argv: string[]
+  cwd: string
+  started_at: string
+}
+
 export type FlowRecordInput = {
   id: string
   title: string
@@ -251,11 +265,8 @@ function isValidTerminalSidecar(
   value: unknown,
   flowId: string,
   terminalId: string
-): value is RawFlowMetadata {
-  return isRecord(value) &&
-    value.terminal_id === terminalId &&
-    value.flow_id === flowId &&
-    isSafeFlowId(terminalId)
+): value is RawTerminalMetadata {
+  return isRawTerminalMetadata(value, flowId) && value.terminal_id === terminalId
 }
 
 function mergeTerminalMetadata(
@@ -591,24 +602,7 @@ function mapTerminals(value: unknown, flowId: string): FlowTerminalSummary[] | u
   }
 
   const terminals = value.flatMap((terminal): FlowTerminalSummary[] => {
-    if (
-      !isRecord(terminal) ||
-      typeof terminal.terminal_id !== 'string' ||
-      !isSafeFlowId(terminal.terminal_id) ||
-      typeof terminal.launch_id !== 'string' ||
-      !isAgentProvider(terminal.provider) ||
-      !isAgentLaunchMode(terminal.mode) ||
-      typeof terminal.flow_id !== 'string' ||
-      !isSafeFlowId(terminal.flow_id) ||
-      terminal.flow_id !== flowId ||
-      typeof terminal.phase_id !== 'string' ||
-      !isTerminalStatus(terminal.status) ||
-      typeof terminal.command !== 'string' ||
-      !Array.isArray(terminal.argv) ||
-      !terminal.argv.every((entry) => typeof entry === 'string') ||
-      typeof terminal.cwd !== 'string' ||
-      typeof terminal.started_at !== 'string'
-    ) {
+    if (!isRawTerminalMetadata(terminal, flowId)) {
       return []
     }
 
@@ -637,6 +631,25 @@ function mapTerminals(value: unknown, flowId: string): FlowTerminalSummary[] | u
   })
 
   return terminals.length === 0 ? undefined : terminals
+}
+
+function isRawTerminalMetadata(value: unknown, flowId: string): value is RawTerminalMetadata {
+  return isRecord(value) &&
+    typeof value.terminal_id === 'string' &&
+    isSafeFlowId(value.terminal_id) &&
+    typeof value.launch_id === 'string' &&
+    isAgentProvider(value.provider) &&
+    isAgentLaunchMode(value.mode) &&
+    typeof value.flow_id === 'string' &&
+    isSafeFlowId(value.flow_id) &&
+    value.flow_id === flowId &&
+    typeof value.phase_id === 'string' &&
+    isTerminalStatus(value.status) &&
+    typeof value.command === 'string' &&
+    Array.isArray(value.argv) &&
+    value.argv.every((entry) => typeof entry === 'string') &&
+    typeof value.cwd === 'string' &&
+    typeof value.started_at === 'string'
 }
 
 function isAgentProvider(value: unknown): value is FlowTerminalSummary['provider'] {
