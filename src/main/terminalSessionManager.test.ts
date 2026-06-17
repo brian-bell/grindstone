@@ -271,6 +271,77 @@ describe('terminal session manager', () => {
     ])
   })
 
+  it('launches terminals for legacy Flow rows without explicit start metadata', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const storedFlow = await store.createFlowRecord({
+      id: 'legacy-launch-terminal',
+      title: 'Legacy launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/legacy-launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const fakeProcess = new FakePtyProcess()
+    const spawned: Array<{ command: string; args: string[]; cwd: string; env: Record<string, string> }> = []
+    const pty: PtyAdapter = {
+      spawn(command, args, options) {
+        spawned.push({ command, args, cwd: options.cwd, env: options.env })
+        return fakeProcess
+      }
+    }
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty,
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn()
+        .mockReturnValueOnce('terminal-legacy')
+        .mockReturnValueOnce('launch-legacy')
+    })
+
+    const terminal = await manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation-api',
+      prompt: 'Implement only the API slice.'
+    })
+
+    expect(terminal).toMatchObject({
+      terminalId: 'terminal-legacy',
+      launchId: 'launch-legacy',
+      flowId: 'legacy-launch-terminal',
+      phaseId: 'implementation-api',
+      status: 'running',
+      cwd: join(root, 'worktree')
+    })
+    expect(spawned).toEqual([
+      expect.objectContaining({
+        command: 'codex',
+        args: ['exec', 'Implement only the API slice.'],
+        cwd: join(root, 'worktree'),
+        env: expect.objectContaining({
+          WTUI_FLOW_ID: 'legacy-launch-terminal',
+          WTUI_FLOW_PHASE_ID: 'implementation-api',
+          WTUI_REPO_PATH: storedFlow.repositoryPath,
+          WTUI_WORKTREE_PATH: join(root, 'worktree'),
+          WTUI_BRANCH: 'flow/legacy-launch-terminal',
+          WTUI_COMMIT: 'abc123'
+        })
+      })
+    ])
+  })
+
   it('uses a supplied launch id for terminal metadata and wtui env', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'repo'), { recursive: true })

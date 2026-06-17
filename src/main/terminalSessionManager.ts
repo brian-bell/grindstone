@@ -94,8 +94,8 @@ export class TerminalSessionManager {
   ) {}
 
   async launchTerminal(request: LaunchTerminalRequest): Promise<FlowTerminalSummary> {
-    const start = request.flow.start
-    if (start === undefined || request.flow.worktreePath === undefined) {
+    const launchMetadata = resolveLaunchMetadata(request.flow)
+    if (launchMetadata === undefined) {
       throw new Error('Flow start metadata is required before launching a terminal.')
     }
 
@@ -122,10 +122,10 @@ export class TerminalSessionManager {
       sessionId: request.sessionId,
       launchId,
       prompt: request.prompt,
-      repositoryPath: start.repositoryPath,
-      worktreePath: start.worktreePath,
-      branch: start.branch,
-      commit: start.commit,
+      repositoryPath: launchMetadata.repositoryPath,
+      worktreePath: launchMetadata.worktreePath,
+      branch: launchMetadata.branch,
+      commit: launchMetadata.commit,
       artifactRoots: {
         flowStateRoot: this.options.artifactRoot,
         planStateRoot: this.options.artifactRoot,
@@ -470,6 +470,30 @@ function processEnvToRecord(env: NodeJS.ProcessEnv): Record<string, string> {
       entry[1] !== undefined
     )
   )
+}
+
+function resolveLaunchMetadata(flow: FlowListRow): {
+  repositoryPath: string
+  worktreePath: string
+  branch: string
+  commit: string
+} | undefined {
+  const repositoryPath = flow.start?.repositoryPath ?? flow.repositoryPath
+  const worktreePath = flow.start?.worktreePath ?? flow.worktreePath
+  if (isBlank(repositoryPath) || isBlank(worktreePath)) {
+    return undefined
+  }
+
+  return {
+    repositoryPath,
+    worktreePath,
+    branch: flow.start?.branch ?? flow.branch ?? '',
+    commit: flow.start?.commit ?? flow.commit ?? ''
+  }
+}
+
+function isBlank(value: string | undefined): value is undefined {
+  return value === undefined || value.trim() === ''
 }
 
 function trimRecentOutput(output: string): string {
