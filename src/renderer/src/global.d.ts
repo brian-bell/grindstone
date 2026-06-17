@@ -9,6 +9,7 @@ import type {
   FlowTerminalSummary,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  ManualUpdateFlowPhaseRequest,
   RecordFlowHumanReviewRequest,
   RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
@@ -33,6 +34,9 @@ declare global {
         createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
         updateFlowPhase: (request: UpdateFlowPhaseRequest) => Promise<InitialWorkspaceState>
         launchFlowPhase: (request: LaunchFlowPhaseRequest) => Promise<InitialWorkspaceState>
+        manualUpdateFlowPhase: (
+          request: ManualUpdateFlowPhaseRequest
+        ) => Promise<InitialWorkspaceState>
         skipFlowPhase: (request: SkipFlowPhaseRequest) => Promise<InitialWorkspaceState>
         completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
         recordFlowPullRequest: (

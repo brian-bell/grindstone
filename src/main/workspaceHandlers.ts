@@ -18,6 +18,7 @@ import {
   type FlowPhaseSummary,
   type InitialWorkspaceState,
   type LaunchFlowPhaseRequest,
+  type ManualUpdateFlowPhaseRequest,
   type RecordFlowHumanReviewRequest,
   type RecordFlowMergeRequest,
   type RecordFlowPullRequestRequest,
@@ -51,7 +52,7 @@ import {
   type FlowPhaseRunner,
   type FlowReviewBehaviorRegistry
 } from './flowPhaseActions'
-import { createFlowOperations } from './flowOperations'
+import { createFlowOperations, getFlowPhaseManualActionAffordances } from './flowOperations'
 import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
@@ -551,6 +552,68 @@ export async function launchFlowPhaseInWorkspace(
   return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
 }
 
+export async function manualUpdateFlowPhaseInWorkspace(
+  request: ManualUpdateFlowPhaseRequest
+): Promise<InitialWorkspaceState> {
+  if (!isManualUpdateFlowPhaseRequest(request)) {
+    throw new Error('Manual Flow phase update request is invalid.')
+  }
+  const { phase, workspaceState } = await getSelectedPhaseForAction(request, 'manual updat')
+  if (!phase.manualActions?.some((action) => action.action === request.action)) {
+    throw new Error(`Manual phase action is not available: ${request.action}`)
+  }
+
+  const notes = normalizeManualPhaseActionNotes(request)
+  const requestId = currentSelectionRequestId
+  await runExclusiveFlowMutation(request.flowId, async () => {
+    const flowOperations = createFlowOperations({ artifactRoot: currentArtifactRoot as string })
+    const currentFlow = await flowOperations.readFlow(request.flowId)
+    const currentPhase = currentFlow.phases?.find((candidate) => candidate.phase_id === request.phaseId)
+    if (currentPhase === undefined) {
+      throw new Error(`Flow phase is not selected in this workspace: ${request.phaseId}`)
+    }
+    const availableActions = getFlowPhaseManualActionAffordances({
+      flow: currentFlow,
+      phase: currentPhase
+    })
+    if (!availableActions.some((action) => action.action === request.action)) {
+      throw new Error(`Manual phase action is not available: ${request.action}`)
+    }
+
+    if (request.action === 'restart') {
+      await flowOperations.restartPhase({
+        flowId: request.flowId,
+        phaseId: request.phaseId,
+        notes
+      })
+      return
+    }
+    if (request.action === 'block') {
+      await flowOperations.blockPhase({
+        flowId: request.flowId,
+        phaseId: request.phaseId,
+        notes
+      })
+      return
+    }
+    if (request.action === 'needs_attention') {
+      await flowOperations.needsAttentionPhase({
+        flowId: request.flowId,
+        phaseId: request.phaseId,
+        notes
+      })
+      return
+    }
+    await flowOperations.setPhase({
+      flowId: request.flowId,
+      phaseId: request.phaseId,
+      status: 'skipped',
+      notes
+    })
+  })
+  return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
 function createTerminalBackedFlowPhaseRunner({
   store,
   terminalManager,
@@ -809,6 +872,37 @@ function isFlowPhaseActionRequest(
     (request as { flowId: string }).flowId.trim() !== '' &&
     typeof (request as { phaseId?: unknown }).phaseId === 'string' &&
     (request as { phaseId: string }).phaseId.trim() !== ''
+}
+
+function isManualUpdateFlowPhaseRequest(request: unknown): request is ManualUpdateFlowPhaseRequest {
+  return isFlowPhaseActionRequest(request) &&
+    (
+      (request as { action?: unknown }).action === 'restart' ||
+      (request as { action?: unknown }).action === 'block' ||
+      (request as { action?: unknown }).action === 'needs_attention' ||
+      (request as { action?: unknown }).action === 'skip'
+    ) &&
+    (
+      (request as { notes?: unknown }).notes === undefined ||
+      typeof (request as { notes?: unknown }).notes === 'string'
+    )
+}
+
+function normalizeManualPhaseActionNotes(request: ManualUpdateFlowPhaseRequest): string | undefined {
+  const notes = request.notes?.trim()
+  if (request.action === 'restart') {
+    return notes === '' ? undefined : notes
+  }
+  if (notes !== undefined && notes !== '') {
+    return notes
+  }
+  if (request.action === 'block') {
+    throw new Error('Blocking a phase requires notes.')
+  }
+  if (request.action === 'needs_attention') {
+    throw new Error('Marking a phase needs_attention requires notes.')
+  }
+  throw new Error('Skipping a phase requires notes.')
 }
 
 function isLaunchableWorkspacePhase(phase: FlowPhaseSummary): boolean {
@@ -1151,6 +1245,9 @@ export function registerWorkspaceHandlers(ipcMain: Pick<IpcMain, 'handle'>): voi
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.launchFlowPhase, (request) =>
     launchFlowPhaseInWorkspace(request)
+  )
+  handleTypedIpc(ipcMain, ipcChannels.workspace.manualUpdateFlowPhase, (request) =>
+    manualUpdateFlowPhaseInWorkspace(request)
   )
   handleTypedIpc(ipcMain, ipcChannels.workspace.skipFlowPhase, (request) =>
     skipFlowPhaseInWorkspace(request)

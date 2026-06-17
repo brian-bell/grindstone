@@ -45,6 +45,8 @@ import type {
   TerminalActionRequest,
   TerminalEvent,
   FlowPaneState,
+  FlowPhaseManualAction,
+  FlowPhaseManualActionAffordance,
   FlowPhaseSummary,
   GitHubVisibility,
   InitialWorkspaceState,
@@ -1743,12 +1745,12 @@ function FlowPhaseRow({
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [pendingAction, setPendingAction] = useState<
-    'launch' | 'skip' | 'complete' | 'human-review' | 'merge' | null
+    'launch' | 'manual' | 'complete' | 'human-review' | 'merge' | null
   >(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [isSkipOpen, setIsSkipOpen] = useState(false)
-  const [skipNotes, setSkipNotes] = useState('')
-  const [skipError, setSkipError] = useState<string | null>(null)
+  const [manualAction, setManualAction] = useState<FlowPhaseManualAction | null>(null)
+  const [manualNotes, setManualNotes] = useState('')
+  const [manualError, setManualError] = useState<string | null>(null)
   const [prDraft, setPrDraft] = useState<PullRequestDraft>(() => createPullRequestDraft(flow))
   const [prError, setPrError] = useState<string | null>(null)
   const [humanReviewNotes, setHumanReviewNotes] = useState(flow.humanReview?.notes ?? '')
@@ -1765,8 +1767,7 @@ function FlowPhaseRow({
   const canComplete = isExecutablePhase &&
     phase.status === 'running' &&
     (phase.id !== 'implementation' || implementationChildrenCanComplete(flow.phases ?? []))
-  const canSkip = isImplementationChildPhase(phase) &&
-    (phase.status === 'pending' || phase.status === 'ready' || phase.status === 'running')
+  const manualActions = phase.manualActions ?? []
   const canRecordPr = isPrCreationPhase(phase) &&
     (phase.status === 'ready' || phase.status === 'running')
   const canRecordHumanReview = isHumanReviewPhase(phase) &&
@@ -1788,12 +1789,12 @@ function FlowPhaseRow({
 
   useEffect(() => {
     setActionError(null)
-    setSkipError(null)
+    setManualError(null)
     setPrError(null)
     setHumanReviewError(null)
     setMergeError(null)
-    setIsSkipOpen(false)
-    setSkipNotes('')
+    setManualAction(null)
+    setManualNotes('')
   }, [phase.id, phase.status])
 
   useEffect(() => {
@@ -1865,27 +1866,28 @@ function FlowPhaseRow({
     }
   }
 
-  async function handleSkip(): Promise<void> {
-    const trimmedNotes = skipNotes.trim()
-    if (trimmedNotes === '') {
-      setSkipError('Skip notes are required.')
+  async function handleManualAction(action: FlowPhaseManualActionAffordance): Promise<void> {
+    const trimmedNotes = manualNotes.trim()
+    if (action.requiresNotes && trimmedNotes === '') {
+      setManualError(`${action.label} notes are required.`)
       return
     }
 
-    setPendingAction('skip')
-    setSkipError(null)
+    setPendingAction('manual')
+    setManualError(null)
     setActionError(null)
     try {
-      const workspace = await window.grindstone.workspace.skipFlowPhase({
+      const workspace = await window.grindstone.workspace.manualUpdateFlowPhase({
         flowId: flow.id,
         phaseId: phase.id,
-        notes: trimmedNotes
+        action: action.action,
+        notes: trimmedNotes === '' ? undefined : trimmedNotes
       })
       onWorkspaceUpdate(workspace)
-      setIsSkipOpen(false)
-      setSkipNotes('')
-    } catch (skipActionError: unknown) {
-      setActionError(getErrorMessage(skipActionError))
+      setManualAction(null)
+      setManualNotes('')
+    } catch (manualActionError: unknown) {
+      setManualError(getErrorMessage(manualActionError))
     } finally {
       setPendingAction(null)
     }
@@ -2057,22 +2059,24 @@ function FlowPhaseRow({
               <Check aria-hidden="true" size={14} />
             </button>
           ) : null}
-          {canSkip ? (
+          {manualActions.map((action) => (
             <button
-              aria-label={`Skip ${phase.title}`}
+              aria-label={`${action.label} ${phase.title}`}
               className="icon-button phase-action-button"
               disabled={pendingAction !== null}
+              key={action.action}
               onClick={() => {
-                setIsSkipOpen((open) => !open)
-                setSkipError(null)
+                setManualAction((openAction) => openAction === action.action ? null : action.action)
+                setManualError(null)
                 setActionError(null)
+                setManualNotes('')
               }}
-              title={`Skip ${phase.title}`}
+              title={`${action.label} ${phase.title}`}
               type="button"
             >
-              <SkipForward aria-hidden="true" size={14} />
+              <ManualActionIcon action={action.action} />
             </button>
-          ) : null}
+          ))}
           {canEdit ? (
             <button
               className="secondary-button phase-edit-button"
@@ -2085,38 +2089,41 @@ function FlowPhaseRow({
           ) : null}
         </span>
       </div>
-      {isSkipOpen ? (
+      {manualAction === null ? null : (
         <form
-          aria-label={`Skip ${phase.title}`}
+          aria-label={`${getManualActionAffordance(manualActions, manualAction)?.label ?? 'Manual update'} ${phase.title}`}
           className="phase-skip-form"
           onSubmit={(event) => {
             event.preventDefault()
-            void handleSkip()
+            const action = getManualActionAffordance(manualActions, manualAction)
+            if (action !== undefined) {
+              void handleManualAction(action)
+            }
           }}
           style={{ marginLeft: `${level * 18}px` }}
         >
           <label className="phase-edit-field phase-notes-field">
-            <span>Skip notes for {phase.title}</span>
+            <span>{getManualActionAffordance(manualActions, manualAction)?.label ?? 'Manual update'} notes for {phase.title}</span>
             <textarea
-              aria-label={`Skip notes for ${phase.title}`}
-              disabled={pendingAction === 'skip'}
-              onChange={(event) => setSkipNotes(event.currentTarget.value)}
-              value={skipNotes}
+              aria-label={`${getManualActionAffordance(manualActions, manualAction)?.label ?? 'Manual update'} notes for ${phase.title}`}
+              disabled={pendingAction === 'manual'}
+              onChange={(event) => setManualNotes(event.currentTarget.value)}
+              value={manualNotes}
             />
           </label>
-          {skipError === null ? null : (
+          {manualError === null ? null : (
             <div className="phase-edit-error" role="alert">
-              {skipError}
+              {manualError}
             </div>
           )}
           <div className="phase-edit-actions">
             <button
               className="secondary-button"
-              disabled={pendingAction === 'skip'}
+              disabled={pendingAction === 'manual'}
               onClick={() => {
-                setIsSkipOpen(false)
-                setSkipError(null)
-                setSkipNotes('')
+                setManualAction(null)
+                setManualError(null)
+                setManualNotes('')
               }}
               type="button"
             >
@@ -2125,15 +2132,19 @@ function FlowPhaseRow({
             </button>
             <button
               className="primary-button"
-              disabled={pendingAction === 'skip'}
+              disabled={pendingAction === 'manual'}
               type="submit"
             >
-              <SkipForward aria-hidden="true" size={15} />
-              <span>{pendingAction === 'skip' ? 'Skipping' : 'Skip phase'}</span>
+              <ManualActionIcon action={manualAction} size={15} />
+              <span>
+                {pendingAction === 'manual'
+                  ? `${getManualActionAffordance(manualActions, manualAction)?.label ?? 'Updating'}`
+                  : `${getManualActionAffordance(manualActions, manualAction)?.label ?? 'Update'} phase`}
+              </span>
             </button>
           </div>
         </form>
-      ) : null}
+      )}
       {canRecordPr ? (
         <form
           aria-label={`Record PR for ${flow.title}`}
@@ -2368,6 +2379,32 @@ function FlowPhaseRow({
       )}
     </div>
   )
+}
+
+function ManualActionIcon({
+  action,
+  size = 14
+}: {
+  action: FlowPhaseManualAction
+  size?: number
+}): ReactElement {
+  if (action === 'restart') {
+    return <RotateCcw aria-hidden="true" size={size} />
+  }
+  if (action === 'skip') {
+    return <SkipForward aria-hidden="true" size={size} />
+  }
+  if (action === 'needs_attention') {
+    return <Info aria-hidden="true" size={size} />
+  }
+  return <X aria-hidden="true" size={size} />
+}
+
+function getManualActionAffordance(
+  actions: FlowPhaseManualActionAffordance[],
+  action: FlowPhaseManualAction
+): FlowPhaseManualActionAffordance | undefined {
+  return actions.find((candidate) => candidate.action === action)
 }
 
 function implementationChildrenCanComplete(phases: FlowPhaseSummary[]): boolean {

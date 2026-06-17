@@ -20,6 +20,7 @@ import {
   selectRepository,
   updateCommonConfig,
   completeFlowPhaseInWorkspace,
+  manualUpdateFlowPhaseInWorkspace,
   skipFlowPhaseInWorkspace,
   updateFlowPhaseInWorkspace
 } from './workspaceHandlers'
@@ -1889,6 +1890,142 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('manually updates phases through validated recovery actions and rejects stale merged Flows', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-manual-phase')
+    const artifactRoot = join(root, 'artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-manual-phase',
+      flowMeta('flow-manual-phase', repoPath, {
+        phases: [
+          {
+            phase_id: 'plan-review',
+            title: 'Plan Review',
+            kind: 'plan_review',
+            status: 'completed',
+            outcome: 'approved',
+            order: 2
+          },
+          {
+            phase_id: 'implementation',
+            title: 'Implementation',
+            kind: 'implementation',
+            status: 'blocked',
+            notes: 'Waiting on recovery.',
+            order: 3
+          }
+        ]
+      })
+    )
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-stale-merged',
+      flowMeta('flow-stale-merged', repoPath, {
+        phases: [
+          {
+            phase_id: 'review-loop-1',
+            title: 'Review Loop 1',
+            kind: 'review_loop',
+            status: 'blocked',
+            notes: 'Looks recoverable in stale state.',
+            order: 4
+          }
+        ]
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({ configPath })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+    await selectRepository({ repositoryId })
+
+    await expect(manualUpdateFlowPhaseInWorkspace({
+      flowId: 'flow-manual-phase',
+      phaseId: 'implementation',
+      action: 'restart',
+      notes: '   '
+    })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'flow-manual-phase',
+            phases: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'implementation',
+                status: 'running',
+                notes: 'Phase restarted for rerun.'
+              })
+            ])
+          })
+        ])
+      }
+    })
+    const restarted = JSON.parse(
+      await readFile(join(artifactRoot, 'flows', 'flow-manual-phase', 'meta.json'), 'utf8')
+    ) as { phases?: Array<{ phase_id?: string; note_history?: Array<{ note: string }> }> }
+    expect(restarted.phases?.find((phase) => phase.phase_id === 'implementation')?.note_history)
+      .toEqual([
+        expect.objectContaining({ note: 'Phase restarted for rerun.' })
+      ])
+
+    await expect(manualUpdateFlowPhaseInWorkspace({
+      flowId: 'flow-manual-phase',
+      phaseId: 'implementation',
+      action: 'block',
+      notes: ''
+    })).rejects.toThrow('Blocking a phase requires notes.')
+
+    await writeFlowMeta(
+      artifactRoot,
+      'flow-stale-merged',
+      flowMeta('flow-stale-merged', repoPath, {
+        pr: {
+          provider: 'github',
+          number: 14,
+          url: 'https://github.com/brian-bell/grindstone/pull/14',
+          head: 'flow/manual-phase-recovery',
+          base: 'main',
+          status: 'merged'
+        },
+        human_review: {
+          outcome: 'approved',
+          reviewed_at: '2026-06-15T12:00:00.000Z'
+        },
+        merge: {
+          status: 'merged',
+          commit: '0123456789abcdef0123456789abcdef01234567',
+          merged_at: '2026-06-15T12:05:00.000Z'
+        },
+        phases: [
+          {
+            phase_id: 'review-loop-1',
+            title: 'Review Loop 1',
+            kind: 'review_loop',
+            status: 'blocked',
+            notes: 'Must remain blocked.',
+            order: 4
+          }
+        ]
+      })
+    )
+
+    await expect(manualUpdateFlowPhaseInWorkspace({
+      flowId: 'flow-stale-merged',
+      phaseId: 'review-loop-1',
+      action: 'restart',
+      notes: 'Recover stale phase.'
+    })).rejects.toThrow('Manual phase action is not available: restart')
+    const staleMerged = JSON.parse(
+      await readFile(join(artifactRoot, 'flows', 'flow-stale-merged', 'meta.json'), 'utf8')
+    ) as { phases?: Array<{ phase_id?: string; status?: string }> }
+    expect(staleMerged.phases?.find((phase) => phase.phase_id === 'review-loop-1')?.status)
+      .toBe('blocked')
+  })
+
   it('records PR metadata through PR Creation and rejects invalid metadata before promotion', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-record-pr')
@@ -3155,6 +3292,10 @@ describe('workspace main handlers', () => {
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(
       ipcChannels.workspace.launchFlowPhase,
+      expect.any(Function)
+    )
+    expect(ipcMain.handle).toHaveBeenCalledWith(
+      ipcChannels.workspace.manualUpdateFlowPhase,
       expect.any(Function)
     )
     expect(ipcMain.handle).toHaveBeenCalledWith(

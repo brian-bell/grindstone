@@ -17,10 +17,10 @@ import type {
   FlowListRow,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  ManualUpdateFlowPhaseRequest,
   RecordFlowHumanReviewRequest,
   RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
-  SkipFlowPhaseRequest,
   TerminalEvent,
   UpdateFlowPhaseRequest
 } from '@shared/workspace'
@@ -317,6 +317,7 @@ const setWorkspaceApi = (
   recordFlowPullRequest = vi.fn().mockResolvedValue(selectedCatalogState),
   recordFlowHumanReview = vi.fn().mockResolvedValue(selectedCatalogState),
   recordFlowMerge = vi.fn().mockResolvedValue(selectedCatalogState),
+  manualUpdateFlowPhase = vi.fn().mockResolvedValue(selectedCatalogState),
   terminalApi = {
     listTerminals: vi.fn().mockResolvedValue([]),
     writeTerminalInput: vi.fn().mockResolvedValue({}),
@@ -340,6 +341,7 @@ const setWorkspaceApi = (
         createFlow,
         updateFlowPhase,
         launchFlowPhase,
+        manualUpdateFlowPhase,
         skipFlowPhase,
         completeFlowPhase,
         recordFlowPullRequest,
@@ -1362,7 +1364,14 @@ describe('App shell', () => {
           parentPhaseId: 'implementation',
           kind: 'implementation_child',
           generated: true,
-          editable: true
+          editable: true,
+          manualActions: [
+            {
+              action: 'skip',
+              label: 'Skip',
+              requiresNotes: true
+            }
+          ]
         },
         {
           id: 'review-loop-1',
@@ -1396,8 +1405,8 @@ describe('App shell', () => {
         ]
       }
     }
-    const skipFlowPhase = vi.fn<(
-      request: SkipFlowPhaseRequest
+    const manualUpdateFlowPhase = vi.fn<(
+      request: ManualUpdateFlowPhaseRequest
     ) => Promise<InitialWorkspaceState>>()
       .mockResolvedValue(skippedState)
     const state: InitialWorkspaceState = {
@@ -1428,7 +1437,12 @@ describe('App shell', () => {
       undefined,
       vi.fn().mockResolvedValue(state),
       vi.fn().mockResolvedValue(state),
-      skipFlowPhase
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      manualUpdateFlowPhase
     )
 
     render(<App />)
@@ -1442,20 +1456,150 @@ describe('App shell', () => {
     expect(await within(skipForm).findByRole('alert')).toHaveTextContent(
       'Skip notes are required.'
     )
-    expect(skipFlowPhase).not.toHaveBeenCalled()
+    expect(manualUpdateFlowPhase).not.toHaveBeenCalled()
 
     await user.type(within(skipForm).getByLabelText(/skip notes for build api/i), 'Covered by the parent slice.')
     await user.click(within(skipForm).getByRole('button', { name: /^skip phase$/i }))
 
-    expect(skipFlowPhase).toHaveBeenCalledWith({
+    expect(manualUpdateFlowPhase).toHaveBeenCalledWith({
       flowId: 'skip-child-flow',
       phaseId: 'implementation-build-api',
+      action: 'skip',
       notes: 'Covered by the parent slice.'
     })
     expect(await within(flowPane).findByText('Phase: Build API - skipped'))
       .toBeInTheDocument()
     expect(await within(flowPane).findByText('Phase: Review Loop 1 - ready'))
       .toBeInTheDocument()
+  })
+
+  it('restarts a blocked phase from backend affordances and shows manual update errors', async () => {
+    const user = userEvent.setup()
+    const flow: FlowListRow = {
+      id: 'restart-flow',
+      title: 'Restart Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
+      createdAt: '2026-06-15T10:00:00.000Z',
+      updatedAt: '2026-06-15T11:00:00.000Z',
+      phases: [
+        {
+          id: 'implementation',
+          title: 'Implementation',
+          status: 'blocked',
+          notes: 'Needs manual recovery.',
+          order: 3,
+          manualActions: [
+            {
+              action: 'restart',
+              label: 'Restart',
+              requiresNotes: false,
+              allowsBlankNotes: true
+            }
+          ]
+        },
+        {
+          id: 'human-review',
+          title: 'Human Review',
+          status: 'blocked',
+          kind: 'human_review',
+          order: 7
+        }
+      ]
+    }
+    const state: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [flow]
+      }
+    }
+    const restartedState: InitialWorkspaceState = {
+      ...state,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: true,
+          error: null
+        },
+        flows: [
+          {
+            ...flow,
+            phases: flow.phases?.map((phase) =>
+              phase.id === 'implementation'
+                ? {
+                    ...phase,
+                    status: 'running',
+                    notes: 'Phase restarted for rerun.',
+                    manualActions: undefined
+                  }
+                : phase
+            )
+          }
+        ]
+      }
+    }
+    const manualUpdateFlowPhase = vi.fn<(
+      request: ManualUpdateFlowPhaseRequest
+    ) => Promise<InitialWorkspaceState>>()
+      .mockRejectedValueOnce(new Error('Manual phase action is not available: restart'))
+      .mockResolvedValueOnce(restartedState)
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: state,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(state),
+      undefined,
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      vi.fn().mockResolvedValue(state),
+      manualUpdateFlowPhase
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(within(flowPane).getByRole('button', { name: /restart flow details/i }))
+    expect(within(flowPane).queryByRole('button', { name: /restart human review/i }))
+      .not.toBeInTheDocument()
+
+    await user.click(within(flowPane).getByRole('button', { name: /restart implementation/i }))
+    const restartForm = within(flowPane).getByRole('form', { name: /restart implementation/i })
+    await user.click(within(restartForm).getByRole('button', { name: /^restart phase$/i }))
+    expect(manualUpdateFlowPhase).toHaveBeenCalledWith({
+      flowId: 'restart-flow',
+      phaseId: 'implementation',
+      action: 'restart'
+    })
+    expect(await within(restartForm).findByRole('alert')).toHaveTextContent(
+      'Manual phase action is not available: restart'
+    )
+
+    await user.click(within(restartForm).getByRole('button', { name: /^restart phase$/i }))
+    expect(await within(flowPane).findByText('Phase: Implementation - running'))
+      .toBeInTheDocument()
+    expect(within(flowPane).getByText('Phase restarted for rerun.')).toBeInTheDocument()
   })
 
   it('opens a linked plan from selected Flow context', async () => {
@@ -1575,6 +1719,7 @@ describe('App shell', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       terminalApi
     )
 
@@ -1677,6 +1822,7 @@ describe('App shell', () => {
       vi.fn().mockResolvedValue(catalogState),
       vi.fn().mockResolvedValue(catalogState),
       vi.fn().mockResolvedValue(terminalState),
+      undefined,
       undefined,
       undefined,
       undefined,
