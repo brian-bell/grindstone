@@ -1,5 +1,8 @@
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { chmodSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
+import { delimiter, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import * as nodePty from 'node-pty'
 import { RECENT_TERMINAL_OUTPUT_LIMIT } from '@shared/workspace'
@@ -65,9 +68,11 @@ type ManagedTerminal = {
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
+const requireFromHere = createRequire(import.meta.url)
 
 export const nodePtyAdapter: PtyAdapter = {
   spawn(command, args, options) {
+    ensureNodePtySpawnHelperExecutable()
     return nodePty.spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
@@ -75,6 +80,145 @@ export const nodePtyAdapter: PtyAdapter = {
       rows: options.rows
     })
   }
+}
+
+type NodePtySpawnHelperRepairOptions = {
+  platform?: NodeJS.Platform | string
+  arch?: string
+  loadedNativeModulePaths?: string[]
+  nodePtyLibRoot?: string
+  stat?: typeof statSync
+  chmod?: typeof chmodSync
+  requireNative?: (nativePath: string) => unknown
+}
+
+export function ensureNodePtySpawnHelperExecutable(options: NodePtySpawnHelperRepairOptions = {}): void {
+  const platform = options.platform ?? process.platform
+  if (platform === 'win32') {
+    return
+  }
+
+  const helperPath = resolveNodePtySpawnHelperPath(options)
+  if (helperPath === undefined) {
+    return
+  }
+
+  try {
+    const stat = options.stat ?? statSync
+    const chmod = options.chmod ?? chmodSync
+    const mode = stat(helperPath).mode
+    if ((mode & 0o111) === 0) {
+      chmod(helperPath, mode | 0o111)
+    }
+  } catch {
+    // Let node-pty surface the real spawn failure if the helper cannot be repaired.
+  }
+}
+
+function resolveNodePtySpawnHelperPath(options: NodePtySpawnHelperRepairOptions): string | undefined {
+  const loadedNativePath = nodePtyLoadedNativeModulePaths(options)
+    .find((nativePath) => isLocalNodePtyNativePath(nativePath, options))
+  if (loadedNativePath !== undefined) {
+    return spawnHelperPathForNativeModule(loadedNativePath)
+  }
+
+  for (const nativePath of nodePtyNativeModuleCandidates(options)) {
+    if (canLoadNativeModule(nativePath, options.requireNative)) {
+      return spawnHelperPathForNativeModule(nativePath)
+    }
+  }
+
+  return undefined
+}
+
+function nodePtyLoadedNativeModulePaths(options: NodePtySpawnHelperRepairOptions): string[] {
+  if (options.loadedNativeModulePaths !== undefined) {
+    return options.loadedNativeModulePaths
+  }
+
+  return Object.keys(requireFromHere.cache).filter(isNodePtyPtyNativePath)
+}
+
+function nodePtyNativeModuleCandidates(options: NodePtySpawnHelperRepairOptions): string[] {
+  const nodePtyLibRoot = resolveNodePtyLibRoot(options)
+  if (nodePtyLibRoot === undefined) {
+    return []
+  }
+
+  const platform = options.platform ?? process.platform
+  const arch = options.arch ?? process.arch
+  const dirs = [
+    join('build', 'Release'),
+    join('build', 'Debug'),
+    join('prebuilds', `${platform}-${arch}`)
+  ]
+  const relativeRoots = ['..', '.']
+
+  return [...new Set(dirs.flatMap((dir) =>
+    relativeRoots.map((relativeRoot) => join(nodePtyLibRoot, relativeRoot, dir, 'pty.node'))
+  ))]
+}
+
+function canLoadNativeModule(
+  nativePath: string,
+  requireNative: (nativePath: string) => unknown = requireFromHere
+): boolean {
+  try {
+    requireNative(nativePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isNodePtyPtyNativePath(nativePath: string): boolean {
+  return getNodePtyPackageRootForNativeModule(nativePath) !== undefined
+}
+
+function isLocalNodePtyNativePath(nativePath: string, options: NodePtySpawnHelperRepairOptions): boolean {
+  const packageRoot = getNodePtyPackageRootForNativeModule(nativePath)
+  const resolvedPackageRoot = resolveNodePtyPackageRoot(options)
+  if (packageRoot === undefined || resolvedPackageRoot === undefined) {
+    return false
+  }
+
+  return normalizeAsarEquivalentPath(packageRoot) === normalizeAsarEquivalentPath(resolvedPackageRoot)
+}
+
+function resolveNodePtyPackageRoot(options: NodePtySpawnHelperRepairOptions): string | undefined {
+  const nodePtyLibRoot = resolveNodePtyLibRoot(options)
+  return nodePtyLibRoot === undefined ? undefined : dirname(nodePtyLibRoot)
+}
+
+function resolveNodePtyLibRoot(options: NodePtySpawnHelperRepairOptions): string | undefined {
+  try {
+    return options.nodePtyLibRoot ?? dirname(requireFromHere.resolve('node-pty/lib/index.js'))
+  } catch {
+    return undefined
+  }
+}
+
+function getNodePtyPackageRootForNativeModule(nativePath: string): string | undefined {
+  const normalizedPath = nativePath.replaceAll('\\', '/')
+  const match = normalizedPath.match(/^(.*\/node-pty)\/(?:build\/(?:Release|Debug)|prebuilds\/[^/]+)\/pty\.node$/)
+  return match?.[1]
+}
+
+function spawnHelperPathForNativeModule(nativePath: string): string {
+  return unpackAsarPath(join(dirname(nativePath), 'spawn-helper'))
+}
+
+function unpackAsarPath(pathValue: string): string {
+  return pathValue
+    .replace(/(^|[/\\])app\.asar(?=$|[/\\])/g, '$1app.asar.unpacked')
+    .replace(/(^|[/\\])node_modules\.asar(?=$|[/\\])/g, '$1node_modules.asar.unpacked')
+}
+
+function normalizeAsarEquivalentPath(pathValue: string): string {
+  return pathValue
+    .replaceAll('\\', '/')
+    .replace(/(^|\/)app\.asar\.unpacked(?=$|\/)/g, '$1app.asar')
+    .replace(/(^|\/)node_modules\.asar\.unpacked(?=$|\/)/g, '$1node_modules.asar')
 }
 
 export class TerminalSessionManager {
@@ -94,8 +238,8 @@ export class TerminalSessionManager {
   ) {}
 
   async launchTerminal(request: LaunchTerminalRequest): Promise<FlowTerminalSummary> {
-    const start = request.flow.start
-    if (start === undefined || request.flow.worktreePath === undefined) {
+    const launchMetadata = resolveLaunchMetadata(request.flow)
+    if (launchMetadata === undefined) {
       throw new Error('Flow start metadata is required before launching a terminal.')
     }
 
@@ -122,10 +266,10 @@ export class TerminalSessionManager {
       sessionId: request.sessionId,
       launchId,
       prompt: request.prompt,
-      repositoryPath: start.repositoryPath,
-      worktreePath: start.worktreePath,
-      branch: start.branch,
-      commit: start.commit,
+      repositoryPath: launchMetadata.repositoryPath,
+      worktreePath: launchMetadata.worktreePath,
+      branch: launchMetadata.branch,
+      commit: launchMetadata.commit,
       artifactRoots: {
         flowStateRoot: this.options.artifactRoot,
         planStateRoot: this.options.artifactRoot,
@@ -162,10 +306,7 @@ export class TerminalSessionManager {
         launchCommand.argv,
         {
           cwd: launchCommand.cwd,
-          env: {
-            ...processEnvToRecord(this.options.env ?? process.env),
-            ...launchCommand.env
-          },
+          env: buildTerminalSpawnEnv(this.options.env ?? process.env, launchCommand.env),
           columns: 100,
           rows: 30
         }
@@ -470,6 +611,71 @@ function processEnvToRecord(env: NodeJS.ProcessEnv): Record<string, string> {
       entry[1] !== undefined
     )
   )
+}
+
+function buildTerminalSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  launchEnv: Record<string, string>
+): Record<string, string> {
+  const normalizedBaseEnv = processEnvToRecord(baseEnv)
+  if (process.platform === 'win32') {
+    return {
+      ...normalizedBaseEnv,
+      ...launchEnv
+    }
+  }
+
+  return {
+    ...normalizedBaseEnv,
+    PATH: buildTerminalPath(normalizedBaseEnv),
+    ...launchEnv
+  }
+}
+
+function buildTerminalPath(env: Record<string, string>): string {
+  const entries = [
+    ...agentExecutablePathAdditions(env),
+    ...(env.PATH ?? '').split(delimiter)
+  ].filter((entry) => entry.trim() !== '')
+
+  return [...new Set(entries)].join(delimiter)
+}
+
+function agentExecutablePathAdditions(env: Record<string, string>): string[] {
+  const homeDirectory = env.HOME ?? homedir()
+  if (process.platform === 'darwin') {
+    return [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      join(homeDirectory, '.local', 'bin')
+    ]
+  }
+
+  return [join(homeDirectory, '.local', 'bin')]
+}
+
+function resolveLaunchMetadata(flow: FlowListRow): {
+  repositoryPath: string
+  worktreePath: string
+  branch: string
+  commit: string
+} | undefined {
+  const repositoryPath = flow.start?.repositoryPath ?? flow.repositoryPath
+  const worktreePath = flow.start?.worktreePath ?? flow.worktreePath
+  if (isBlank(repositoryPath) || isBlank(worktreePath)) {
+    return undefined
+  }
+
+  return {
+    repositoryPath,
+    worktreePath,
+    branch: flow.start?.branch ?? flow.branch ?? '',
+    commit: flow.start?.commit ?? flow.commit ?? ''
+  }
+}
+
+function isBlank(value: string | undefined): value is undefined {
+  return value === undefined || value.trim() === ''
 }
 
 function trimRecentOutput(output: string): string {
