@@ -391,13 +391,15 @@ describe('App shell', () => {
 
     const shell = container.querySelector('.app-shell')
     expect(shell).toHaveStyle({
-      '--right-pane-column': 'minmax(220px, 0.63fr)'
+      '--right-pane-column': 'minmax(220px, 0.56fr)'
     })
 
     const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
     const collapseButton = within(contextPane).getByRole('button', {
       name: /collapse right pane/i
     })
+    expect(collapseButton).toHaveAttribute('aria-controls', 'context-pane')
+    expect(collapseButton).toHaveAttribute('aria-expanded', 'true')
 
     await user.click(collapseButton)
 
@@ -406,15 +408,19 @@ describe('App shell', () => {
     expect(shell).toHaveStyle({
       '--right-pane-column': '52px'
     })
-    expect(screen.getByRole('button', { name: /expand right pane/i })).toHaveAttribute(
-      'aria-expanded',
-      'false'
-    )
+    const expandButton = screen.getByRole('button', { name: /expand right pane/i })
+    expect(expandButton).toHaveAttribute('aria-controls', 'context-pane')
+    expect(expandButton).toHaveAttribute('aria-expanded', 'false')
+    await waitFor(() => expect(expandButton).toHaveFocus())
 
-    await user.click(screen.getByRole('button', { name: /expand right pane/i }))
+    await user.click(expandButton)
 
-    expect(await screen.findByRole('region', { name: /contextual hints/i })).toBeInTheDocument()
+    const restoredContextPane = await screen.findByRole('region', { name: /contextual hints/i })
+    const restoredCollapseButton = within(restoredContextPane).getByRole('button', {
+      name: /collapse right pane/i
+    })
     expect(shell).not.toHaveClass('app-shell-right-collapsed')
+    await waitFor(() => expect(restoredCollapseButton).toHaveFocus())
   })
 
   it('reopens a collapsed right pane when configuration is requested', async () => {

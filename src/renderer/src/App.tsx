@@ -25,6 +25,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
+  type RefObject,
   type ReactElement
 } from 'react'
 import { resolveMiddlePaneRoute } from '@shared/middlePane'
@@ -62,6 +63,9 @@ import type {
 import { defaultInitialWorkspaceState } from '@shared/workspace'
 
 type RightPaneMode = 'hints' | 'config'
+type RightPaneFocusTarget = 'expand' | 'collapse'
+
+const RIGHT_PANE_ID = 'context-pane'
 
 type ConfigSaveResult = {
   errors: ConfigFieldError[]
@@ -112,6 +116,9 @@ export function App(): ReactElement {
   )
   const [flowCreateOpenRequest, setFlowCreateOpenRequest] = useState(0)
   const selectionRequestIdRef = useRef(0)
+  const rightPaneFocusTargetRef = useRef<RightPaneFocusTarget | null>(null)
+  const expandRightPaneButtonRef = useRef<HTMLButtonElement | null>(null)
+  const collapseRightPaneButtonRef = useRef<HTMLButtonElement | null>(null)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>('hints')
   const [isRightPaneCollapsed, setIsRightPaneCollapsed] = useState(false)
   const [editableConfig, setEditableConfig] = useState<EditableConfigState | null>(null)
@@ -245,10 +252,25 @@ export function App(): ReactElement {
 
   const shellState = workspace ?? defaultInitialWorkspaceState
   const isWorkspaceLoading = workspace === null
-  const rightPaneColumn = isRightPaneCollapsed ? '52px' : 'minmax(220px, 0.63fr)'
+  const rightPaneColumn = isRightPaneCollapsed ? '52px' : 'minmax(220px, 0.56fr)'
   const shellStyle = {
     '--right-pane-column': rightPaneColumn
   } as CSSProperties
+
+  useEffect(() => {
+    const focusTarget = rightPaneFocusTargetRef.current
+
+    if (focusTarget === 'expand' && isRightPaneCollapsed) {
+      rightPaneFocusTargetRef.current = null
+      expandRightPaneButtonRef.current?.focus()
+      return
+    }
+
+    if (focusTarget === 'collapse' && !isRightPaneCollapsed) {
+      rightPaneFocusTargetRef.current = null
+      collapseRightPaneButtonRef.current?.focus()
+    }
+  }, [isRightPaneCollapsed])
 
   async function handleRepositorySelect(repository: RepositoryRow): Promise<void> {
     const requestId = selectionRequestIdRef.current + 1
@@ -292,6 +314,16 @@ export function App(): ReactElement {
 
   function requestFlowCreate(): void {
     setFlowCreateOpenRequest((request) => request + 1)
+  }
+
+  function collapseRightPane(): void {
+    rightPaneFocusTargetRef.current = 'expand'
+    setIsRightPaneCollapsed(true)
+  }
+
+  function expandRightPane(): void {
+    rightPaneFocusTargetRef.current = 'collapse'
+    setIsRightPaneCollapsed(false)
   }
 
   async function handleConfigReload(): Promise<void> {
@@ -371,14 +403,20 @@ export function App(): ReactElement {
       </main>
 
       {isRightPaneCollapsed ? (
-        <section className="pane context-pane context-pane-collapsed" aria-label="Right pane">
+        <section
+          aria-label="Right pane"
+          className="pane context-pane context-pane-collapsed"
+          id={RIGHT_PANE_ID}
+        >
           <button
+            aria-controls={RIGHT_PANE_ID}
             aria-expanded="false"
             aria-label="Expand right pane"
             className="icon-button"
+            ref={expandRightPaneButtonRef}
             title="Expand right pane"
             type="button"
-            onClick={() => setIsRightPaneCollapsed(false)}
+            onClick={expandRightPane}
           >
             <PanelRightOpen aria-hidden="true" size={16} />
           </button>
@@ -386,21 +424,24 @@ export function App(): ReactElement {
       ) : (
         <section
           className="pane context-pane"
+          id={RIGHT_PANE_ID}
           aria-labelledby="context-pane-title"
         >
           {rightPaneMode === 'config' ? (
             <ConfigEditorPanel
+              collapseButtonRef={collapseRightPaneButtonRef}
               config={editableConfig}
               loadError={configLoadError}
               onCancel={() => setRightPaneMode('hints')}
-              onCollapse={() => setIsRightPaneCollapsed(true)}
+              onCollapse={collapseRightPane}
               onReload={handleConfigReload}
               onSave={handleConfigSave}
             />
           ) : (
             <ContextHintsPanel
+              collapseButtonRef={collapseRightPaneButtonRef}
               workspace={shellState}
-              onCollapse={() => setIsRightPaneCollapsed(true)}
+              onCollapse={collapseRightPane}
               onNewFlow={requestFlowCreate}
             />
           )}
@@ -920,10 +961,12 @@ function CatalogDiagnosticRow({
 }
 
 function ContextHintsPanel({
+  collapseButtonRef,
   workspace,
   onCollapse,
   onNewFlow
 }: {
+  collapseButtonRef: RefObject<HTMLButtonElement | null>
   workspace: InitialWorkspaceState
   onCollapse: () => void
   onNewFlow: () => void
@@ -934,9 +977,11 @@ function ContextHintsPanel({
         <Sparkles aria-hidden="true" size={18} />
         <h2 id="context-pane-title">Contextual Hints</h2>
         <button
+          aria-controls={RIGHT_PANE_ID}
           aria-expanded="true"
           aria-label="Collapse right pane"
           className="icon-button context-toggle-button"
+          ref={collapseButtonRef}
           title="Collapse right pane"
           type="button"
           onClick={onCollapse}
@@ -978,6 +1023,7 @@ function ContextHintsPanel({
 }
 
 function ConfigEditorPanel({
+  collapseButtonRef,
   config,
   loadError,
   onCancel,
@@ -985,6 +1031,7 @@ function ConfigEditorPanel({
   onReload,
   onSave
 }: {
+  collapseButtonRef: RefObject<HTMLButtonElement | null>
   config: EditableConfigState | null
   loadError: string | null
   onCancel: () => void
@@ -1057,9 +1104,11 @@ function ConfigEditorPanel({
         <Settings aria-hidden="true" size={18} />
         <h2 id="context-pane-title">Common Config</h2>
         <button
+          aria-controls={RIGHT_PANE_ID}
           aria-expanded="true"
           aria-label="Collapse right pane"
           className="icon-button context-toggle-button"
+          ref={collapseButtonRef}
           title="Collapse right pane"
           type="button"
           onClick={onCollapse}
