@@ -17,6 +17,7 @@ import type {
 import { buildAgentLaunchCommand } from './agentLaunch'
 import { writeJsonAtomically } from './artifactStore'
 import { toRawTerminal, type FlowStore } from './flowStore'
+import { createFlowOperations } from './flowOperations'
 
 type Disposable = {
   dispose: () => void
@@ -334,7 +335,33 @@ export class TerminalSessionManager {
     }
     managed.process = null
     await this.writeTerminalMetadata(metaPath, managed.terminal)
+    if (managed.terminal.status === 'failed') {
+      await this.markFailedPhaseNeedsAttention(managed.terminal)
+    }
     this.emitState(managed)
+  }
+
+  private async markFailedPhaseNeedsAttention(terminal: FlowTerminalSummary): Promise<void> {
+    if (terminal.mode !== 'headless') {
+      return
+    }
+
+    const flowOperations = createFlowOperations({ artifactRoot: this.options.artifactRoot })
+    const flow = await flowOperations.readFlow(terminal.flowId)
+    const phase = flow.phases?.find((candidate) => candidate.phase_id === terminal.phaseId)
+    if (
+      phase?.status !== 'running' ||
+      phase.launch_ids?.[phase.launch_ids.length - 1] !== terminal.launchId
+    ) {
+      return
+    }
+
+    await flowOperations.needsAttentionPhase({
+      flowId: terminal.flowId,
+      phaseId: terminal.phaseId,
+      launchId: terminal.launchId,
+      notes: `Phase terminal failed: ${formatTerminalFailure(terminal)}.`
+    })
   }
 
   private async getAttachedTerminal(request: TerminalActionRequest): Promise<ManagedTerminal> {
@@ -451,4 +478,14 @@ function trimRecentOutput(output: string): string {
 
 function isTerminationSignal(signal: string | undefined): boolean {
   return signal === 'SIGTERM' || signal === 'SIGKILL' || signal === '15' || signal === '9'
+}
+
+function formatTerminalFailure(terminal: FlowTerminalSummary): string {
+  if (terminal.signal !== undefined) {
+    return `${terminal.provider} exited after signal ${terminal.signal}`
+  }
+  if (terminal.exitCode !== undefined) {
+    return `${terminal.provider} exited with status ${terminal.exitCode}`
+  }
+  return `${terminal.provider} exited unsuccessfully`
 }
