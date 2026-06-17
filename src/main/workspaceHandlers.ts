@@ -583,7 +583,10 @@ function resolveFlowPhaseLaunchMode(): LaunchTerminalRequest['mode'] {
 
 function createFlowPhaseLaunchPrompt(launchContext: FlowPhaseLaunchContext): string {
   if (launchContext.phaseKind === 'review_loop') {
-    return launchContext.reviewBehavior?.prompt ?? DEFAULT_REVIEW_BEHAVIOR.prompt
+    return [
+      launchContext.reviewBehavior?.prompt ?? DEFAULT_REVIEW_BEHAVIOR.prompt,
+      'Use wtui-flow to record the Review Loop result before finishing; the phase is not done until the result is persisted.'
+    ].join('\n')
   }
 
   if (launchContext.phaseId === 'implementation') {

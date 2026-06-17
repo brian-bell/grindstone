@@ -1146,7 +1146,10 @@ describe('workspace main handlers', () => {
         provider: 'codex',
         mode: 'headless',
         phaseId: 'review-loop-2',
-        prompt: 'Run an independent terminal review.',
+        prompt: [
+          'Run an independent terminal review.',
+          'Use wtui-flow to record the Review Loop result before finishing; the phase is not done until the result is persisted.'
+        ].join('\n'),
         launchId: expect.stringMatching(/^phase-launch-/)
       }
     ])
