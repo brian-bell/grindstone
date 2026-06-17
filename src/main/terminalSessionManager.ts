@@ -335,13 +335,13 @@ export class TerminalSessionManager {
     }
     managed.process = null
     await this.writeTerminalMetadata(metaPath, managed.terminal)
-    if (managed.terminal.status === 'failed') {
-      await this.markFailedPhaseNeedsAttention(managed.terminal)
+    if (managed.terminal.status === 'failed' || managed.terminal.status === 'terminated') {
+      await this.markUnsuccessfulPhaseNeedsAttention(managed.terminal)
     }
     this.emitState(managed)
   }
 
-  private async markFailedPhaseNeedsAttention(terminal: FlowTerminalSummary): Promise<void> {
+  private async markUnsuccessfulPhaseNeedsAttention(terminal: FlowTerminalSummary): Promise<void> {
     if (terminal.mode !== 'headless') {
       return
     }
@@ -414,12 +414,14 @@ export class TerminalSessionManager {
       return terminal
     })
 
-    if (reconciled.some((terminal, index) => terminal !== terminals[index])) {
+    const changedTerminals = reconciled.filter((terminal, index) => terminal !== terminals[index])
+    if (changedTerminals.length > 0) {
       await Promise.all(
-        reconciled
-          .filter((terminal, index) => terminal !== terminals[index])
-          .map((terminal) => this.writeTerminalMetadata(this.getMetaPath(terminal), terminal))
+        changedTerminals.map((terminal) => this.writeTerminalMetadata(this.getMetaPath(terminal), terminal))
       )
+      for (const terminal of changedTerminals) {
+        await this.markUnsuccessfulPhaseNeedsAttention(terminal)
+      }
     }
 
     return reconciled
