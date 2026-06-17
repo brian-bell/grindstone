@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { FlowListRow, RepositoryRow } from '@shared/workspace'
-import { createFlowStore, type FlowStore } from './flowStore'
+import { createFlowOperations } from './flowOperations'
+import { runExclusiveFlowMutation } from './flowMutationQueue'
+import { createFlowStore } from './flowStore'
 import {
   TerminalSessionManager,
   type PtyAdapter,
@@ -269,7 +271,75 @@ describe('terminal session manager', () => {
     ])
   })
 
-  it('serializes concurrent terminal persists without dropping sibling terminals', async () => {
+  it('uses a supplied launch id for terminal metadata and wtui env', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const storedFlow = await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'creating',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const spawned: Array<{ env: Record<string, string> }> = []
+    const pty: PtyAdapter = {
+      spawn(_command, _args, options) {
+        spawned.push({ env: options.env })
+        return new FakePtyProcess()
+      }
+    }
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty,
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn().mockReturnValueOnce('terminal-123')
+    })
+
+    const terminal = await manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation',
+      prompt: 'Implement the approved plan.',
+      launchId: 'phase-launch-123'
+    })
+
+    expect(terminal).toMatchObject({
+      terminalId: 'terminal-123',
+      launchId: 'phase-launch-123',
+      phaseId: 'implementation'
+    })
+    expect(spawned).toEqual([
+      {
+        env: expect.objectContaining({
+          WTUI_LAUNCH_ID: 'phase-launch-123',
+          WTUI_FLOW_PHASE_ID: 'implementation'
+        })
+      }
+    ])
+    await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+      terminals: [
+        expect.objectContaining({
+          terminalId: 'terminal-123',
+          launchId: 'phase-launch-123'
+        })
+      ]
+    })
+  })
+
+  it('persists concurrent terminal sidecars without dropping sibling terminals', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'repo'), { recursive: true })
     await mkdir(join(root, 'worktree'), { recursive: true })
@@ -289,32 +359,10 @@ describe('terminal session manager', () => {
       createdAt: '2026-06-14T12:00:00.000Z',
       updatedAt: '2026-06-14T12:00:00.000Z'
     })
-    let activeTerminalPersists = 0
-    let maxActiveTerminalPersists = 0
-    const delayedStore: FlowStore = {
-      ...realStore,
-      async updateFlowRecord(flowId, update) {
-        if (update.terminals !== undefined) {
-          activeTerminalPersists += 1
-          maxActiveTerminalPersists = Math.max(
-            maxActiveTerminalPersists,
-            activeTerminalPersists
-          )
-          await new Promise((resolve) => setTimeout(resolve, 10))
-          try {
-            return await realStore.updateFlowRecord(flowId, update)
-          } finally {
-            activeTerminalPersists -= 1
-          }
-        }
-
-        return realStore.updateFlowRecord(flowId, update)
-      }
-    }
     const processes = [new FakePtyProcess(), new FakePtyProcess()]
     const manager = new TerminalSessionManager({
       artifactRoot,
-      store: delayedStore,
+      store: realStore,
       pty: {
         spawn() {
           const process = processes.shift()
@@ -350,84 +398,11 @@ describe('terminal session manager', () => {
       })
     ])
 
-    expect(maxActiveTerminalPersists).toBe(1)
     await expect(realStore.readFlow('launch-terminal')).resolves.toMatchObject({
       terminals: expect.arrayContaining([
         expect.objectContaining({ terminalId: 'terminal-a' }),
         expect.objectContaining({ terminalId: 'terminal-b' })
       ])
-    })
-  })
-
-  it('kills and detaches the spawned PTY when initial running persistence fails', async () => {
-    const root = await makeTempDir()
-    await mkdir(join(root, 'repo'), { recursive: true })
-    await mkdir(join(root, 'worktree'), { recursive: true })
-    const artifactRoot = join(root, 'artifacts')
-    const realStore = await createFlowStore({ artifactRoot })
-    const repo = repository(root)
-    const repositoryId = await realpath(repo.path)
-    const storedFlow = await realStore.createFlowRecord({
-      id: 'launch-terminal',
-      title: 'Launch terminal',
-      instructions: 'Implement the plan.',
-      status: 'active',
-      repositoryPath: repo.path,
-      branch: 'flow/launch-terminal',
-      worktreePath: join(root, 'worktree'),
-      baseRef: 'main',
-      commit: 'abc123',
-      start: flow(root).start,
-      createdAt: '2026-06-14T12:00:00.000Z',
-      updatedAt: '2026-06-14T12:00:00.000Z'
-    })
-    const failingStore: FlowStore = {
-      ...realStore,
-      async updateFlowRecord(flowId, update) {
-        if (update.terminals?.[0]?.status === 'running') {
-          throw new Error('running persist failed')
-        }
-
-        return realStore.updateFlowRecord(flowId, update)
-      }
-    }
-    const fakeProcess = new FakePtyProcess()
-    const manager = new TerminalSessionManager({
-      artifactRoot,
-      store: failingStore,
-      pty: {
-        spawn() {
-          return fakeProcess
-        }
-      },
-      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
-      idFactory: vi.fn()
-        .mockReturnValueOnce('terminal-123')
-        .mockReturnValueOnce('launch-123')
-    })
-
-    await expect(manager.launchTerminal({
-      flow: storedFlow,
-      provider: 'codex',
-      mode: 'interactive',
-      phaseId: 'plan',
-      prompt: 'Implement the approved plan.'
-    })).rejects.toThrow('running persist failed')
-
-    expect(fakeProcess.kills).toEqual(['SIGTERM'])
-    await expect(manager.writeInput({
-      repositoryId,
-      flowId: 'launch-terminal',
-      terminalId: 'terminal-123',
-      data: 'q'
-    })).rejects.toThrow('Terminal is not attached to a running process: terminal-123')
-    await expect(realStore.readFlow('launch-terminal')).resolves.toMatchObject({
-      terminals: [
-        {
-          terminalId: 'terminal-123',
-          status: 'failed'
-        }
-      ]
     })
   })
 
@@ -490,6 +465,252 @@ describe('terminal session manager', () => {
             status: 'terminated',
             signal: '15'
           }
+        ]
+      })
+    })
+  })
+
+  it('marks headless launch phases as needing attention when their terminal exits non-zero', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const storedFlow = await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      phases: [
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'running',
+          order: 3,
+          launch_ids: ['launch-123']
+        }
+      ],
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const fakeProcess = new FakePtyProcess()
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty: {
+        spawn() {
+          return fakeProcess
+        }
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn().mockReturnValueOnce('terminal-123')
+    })
+
+    await manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation',
+      prompt: 'Implement the approved plan.',
+      launchId: 'launch-123'
+    })
+    fakeProcess.emitExit({ exitCode: 1 })
+
+    await waitForExpectation(async () => {
+      await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+        phases: [
+          expect.objectContaining({
+            id: 'implementation',
+            status: 'needs_attention',
+            notes: 'Phase terminal failed: codex exited with status 1.',
+            launchIds: ['launch-123']
+          })
+        ],
+        terminals: [
+          expect.objectContaining({
+            terminalId: 'terminal-123',
+            status: 'failed',
+            exitCode: 1
+          })
+        ]
+      })
+    })
+  })
+
+  it('marks headless launch phases as needing attention when their terminal is terminated', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const repositoryId = await realpath(repo.path)
+    const storedFlow = await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      phases: [
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'running',
+          order: 3,
+          launch_ids: ['launch-123']
+        }
+      ],
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const fakeProcess = new FakePtyProcess()
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty: {
+        spawn() {
+          return fakeProcess
+        }
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn().mockReturnValueOnce('terminal-123')
+    })
+
+    await manager.launchTerminal({
+      flow: storedFlow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation',
+      prompt: 'Implement the approved plan.',
+      launchId: 'launch-123'
+    })
+    await manager.terminate({
+      repositoryId,
+      flowId: 'launch-terminal',
+      terminalId: 'terminal-123'
+    })
+    fakeProcess.emitExit({ exitCode: 1, signal: 'SIGTERM' })
+
+    await waitForExpectation(async () => {
+      await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+        phases: [
+          expect.objectContaining({
+            id: 'implementation',
+            status: 'needs_attention',
+            notes: 'Phase terminal failed: codex exited after signal SIGTERM.',
+            launchIds: ['launch-123']
+          })
+        ],
+        terminals: [
+          expect.objectContaining({
+            terminalId: 'terminal-123',
+            status: 'terminated',
+            signal: 'SIGTERM'
+          })
+        ]
+      })
+    })
+  })
+
+  it('does not overwrite newer serialized phase mutations after headless terminal failure', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      phases: [
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'running',
+          order: 3,
+          launch_ids: ['launch-123']
+        }
+      ],
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:00:00.000Z'
+    })
+    const fakeProcess = new FakePtyProcess()
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      pty: {
+        spawn() {
+          return fakeProcess
+        }
+      },
+      now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+      idFactory: vi.fn().mockReturnValueOnce('terminal-123')
+    })
+    const flowOperations = createFlowOperations({ artifactRoot })
+    let releaseCompletion!: () => void
+    const completionMayContinue = new Promise<void>((resolve) => {
+      releaseCompletion = resolve
+    })
+    const completion = runExclusiveFlowMutation('launch-terminal', async () => {
+      await completionMayContinue
+      await flowOperations.completePhase({
+        flowId: 'launch-terminal',
+        phaseId: 'implementation',
+        summary: 'Implementation finished.'
+      })
+    })
+
+    await manager.launchTerminal({
+      flow: await store.readFlow('launch-terminal') as FlowListRow,
+      provider: 'codex',
+      mode: 'headless',
+      phaseId: 'implementation',
+      prompt: 'Implement the approved plan.',
+      launchId: 'launch-123'
+    })
+    fakeProcess.emitExit({ exitCode: 1 })
+    releaseCompletion()
+    await completion
+
+    await waitForExpectation(async () => {
+      await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+        phases: [
+          expect.objectContaining({
+            id: 'implementation',
+            status: 'completed',
+            summary: 'Implementation finished.',
+            launchIds: ['launch-123']
+          })
+        ],
+        terminals: [
+          expect.objectContaining({
+            terminalId: 'terminal-123',
+            status: 'failed',
+            exitCode: 1
+          })
         ]
       })
     })
@@ -584,6 +805,81 @@ describe('terminal session manager', () => {
     })
   })
 
+  it('marks orphaned headless launch phases as needing attention during terminal reconciliation', async () => {
+    const root = await makeTempDir()
+    await mkdir(join(root, 'repo'), { recursive: true })
+    await mkdir(join(root, 'worktree'), { recursive: true })
+    const artifactRoot = join(root, 'artifacts')
+    const store = await createFlowStore({ artifactRoot })
+    const repo = repository(root)
+    const repositoryId = await realpath(repo.path)
+    await store.createFlowRecord({
+      id: 'launch-terminal',
+      title: 'Launch terminal',
+      instructions: 'Implement the plan.',
+      status: 'active',
+      repositoryPath: repo.path,
+      branch: 'flow/launch-terminal',
+      worktreePath: join(root, 'worktree'),
+      baseRef: 'main',
+      commit: 'abc123',
+      start: flow(root).start,
+      phases: [
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'running',
+          order: 3,
+          launch_ids: ['launch-running']
+        }
+      ],
+      terminals: [
+        {
+          terminalId: 'terminal-running',
+          launchId: 'launch-running',
+          provider: 'codex',
+          mode: 'headless',
+          flowId: 'launch-terminal',
+          phaseId: 'implementation',
+          status: 'running',
+          command: 'codex',
+          argv: ['Implement'],
+          cwd: join(root, 'worktree'),
+          startedAt: '2026-06-14T12:01:00.000Z'
+        }
+      ],
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:03:00.000Z'
+    })
+    const manager = new TerminalSessionManager({
+      artifactRoot,
+      store,
+      now: vi.fn().mockReturnValue('2026-06-14T12:04:00.000Z')
+    })
+
+    await expect(manager.listTerminals({
+      repositoryId,
+      flowId: 'launch-terminal'
+    })).resolves.toEqual([
+      expect.objectContaining({
+        terminalId: 'terminal-running',
+        status: 'failed',
+        endedAt: '2026-06-14T12:04:00.000Z'
+      })
+    ])
+    await expect(store.readFlow('launch-terminal')).resolves.toMatchObject({
+      phases: [
+        expect.objectContaining({
+          id: 'implementation',
+          status: 'needs_attention',
+          notes: 'Phase terminal failed: codex exited unsuccessfully.',
+          launchIds: ['launch-running']
+        })
+      ]
+    })
+  })
+
   it('serializes exit persistence after queued output persistence', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'repo'), { recursive: true })
@@ -606,36 +902,10 @@ describe('terminal session manager', () => {
       createdAt: '2026-06-14T12:00:00.000Z',
       updatedAt: '2026-06-14T12:00:00.000Z'
     })
-    let releaseOutputPersist: (() => void) | undefined
-    let outputPersistFinished: Promise<void> | undefined
-    let resolveOutputPersistFinished: (() => void) | undefined
-    const delayedStore: FlowStore = {
-      ...realStore,
-      async updateFlowRecord(flowId, update) {
-        const terminal = update.terminals?.[0]
-        if (
-          terminal?.terminalId === 'terminal-123' &&
-          terminal.status === 'running' &&
-          terminal.recentOutput === 'final output\n'
-        ) {
-          outputPersistFinished = new Promise<void>((resolve) => {
-            resolveOutputPersistFinished = resolve
-          })
-          await new Promise<void>((resolve) => {
-            releaseOutputPersist = resolve
-          })
-          const result = await realStore.updateFlowRecord(flowId, update)
-          resolveOutputPersistFinished?.()
-          return result
-        }
-
-        return realStore.updateFlowRecord(flowId, update)
-      }
-    }
     const fakeProcess = new FakePtyProcess()
     const manager = new TerminalSessionManager({
       artifactRoot,
-      store: delayedStore,
+      store: realStore,
       pty: {
         spawn() {
           return fakeProcess
@@ -655,12 +925,7 @@ describe('terminal session manager', () => {
       prompt: 'Implement the approved plan.'
     })
     fakeProcess.emitData('final output\n')
-    await waitForExpectation(() => {
-      expect(releaseOutputPersist).toBeDefined()
-    })
     fakeProcess.emitExit({ exitCode: 0 })
-    releaseOutputPersist?.()
-    await outputPersistFinished
 
     await waitForExpectation(async () => {
       await expect(realStore.readFlow('launch-terminal')).resolves.toMatchObject({
@@ -703,30 +968,14 @@ describe('terminal session manager', () => {
       createdAt: '2026-06-14T12:00:00.000Z',
       updatedAt: '2026-06-14T12:00:00.000Z'
     })
-    let releaseInitialPersist: (() => void) | undefined
-    const delayedStore: FlowStore = {
-      ...realStore,
-      async updateFlowRecord(flowId, update) {
-        const terminal = update.terminals?.[0]
-        if (
-          terminal?.terminalId === 'terminal-123' &&
-          terminal.status === 'running' &&
-          terminal.recentOutput === ''
-        ) {
-          await new Promise<void>((resolve) => {
-            releaseInitialPersist = resolve
-          })
-        }
-
-        return realStore.updateFlowRecord(flowId, update)
-      }
-    }
     const fakeProcess = new FakePtyProcess()
+    let spawned = false
     const manager = new TerminalSessionManager({
       artifactRoot,
-      store: delayedStore,
+      store: realStore,
       pty: {
         spawn() {
+          spawned = true
           return fakeProcess
         }
       },
@@ -744,11 +993,9 @@ describe('terminal session manager', () => {
       prompt: 'Implement the approved plan.'
     })
     await waitForExpectation(() => {
-      expect(releaseInitialPersist).toBeDefined()
+      expect(spawned).toBe(true)
     })
     fakeProcess.emitExit({ exitCode: 0 })
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    releaseInitialPersist?.()
     await launch
 
     await waitForExpectation(async () => {

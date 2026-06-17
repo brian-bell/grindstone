@@ -43,15 +43,16 @@ import { createFlow, type FlowCommandRunner, type LaunchPreparer } from './flowC
 import { createFlowStore, type CreateFlowStoreOptions, type FlowStore } from './flowStore'
 import { ArtifactStoreError } from './artifactStore'
 import {
+  DEFAULT_REVIEW_BEHAVIOR,
   createFlowPhaseLaunchId,
   createFlowPhaseLaunchRecord,
-  noopFlowPhaseRunner,
   resolveFlowReviewBehavior,
   type FlowPhaseLaunchContext,
   type FlowPhaseRunner,
   type FlowReviewBehaviorRegistry
 } from './flowPhaseActions'
 import { createFlowOperations } from './flowOperations'
+import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
 import { TerminalSessionManager, type LaunchTerminalRequest } from './terminalSessionManager'
@@ -91,7 +92,6 @@ let currentWorkspaceState: InitialWorkspaceState | undefined
 let currentArtifactRoot: string | undefined
 let currentFlowStoreFactory: FlowStoreFactory = createFlowStore
 let currentSelectionRequestId = 0
-const flowMutationQueue = new Map<string, Promise<void>>()
 
 let currentTerminalManager: TerminalManagerPort | undefined
 let currentTerminalManagerArtifactRoot: string | undefined
@@ -469,6 +469,7 @@ export async function launchFlowPhaseInWorkspace(
   options: {
     runPhase?: FlowPhaseRunner
     reviewBehaviors?: FlowReviewBehaviorRegistry
+    terminalManager?: TerminalManagerPort
   } = {}
 ): Promise<InitialWorkspaceState> {
   const { flow, phase, workspaceState } = await getSelectedPhaseForAction(
@@ -484,6 +485,19 @@ export async function launchFlowPhaseInWorkspace(
 
   const requestId = currentSelectionRequestId
   const flowOperations = createFlowOperations({ artifactRoot: currentArtifactRoot as string })
+  let runPhase = options.runPhase
+  if (runPhase === undefined) {
+    const store = await currentFlowStoreFactory({ artifactRoot: currentArtifactRoot as string })
+    if (options.terminalManager !== undefined) {
+      currentTerminalManager = options.terminalManager
+      currentTerminalManagerArtifactRoot = currentArtifactRoot
+    }
+    runPhase = createTerminalBackedFlowPhaseRunner({
+      store,
+      terminalManager: options.terminalManager,
+      provider: (await getWorkspaceContext()).defaultAgent ?? 'codex'
+    })
+  }
   const launchContext = createFlowPhaseLaunchContext({
     artifactRoot: currentArtifactRoot as string,
     flow,
@@ -516,7 +530,7 @@ export async function launchFlowPhaseInWorkspace(
   })
 
   try {
-    await (options.runPhase ?? noopFlowPhaseRunner)(launchContext)
+    await runPhase(launchContext)
   } catch (error) {
     try {
       await runExclusiveFlowMutation(request.flowId, async () => {
@@ -535,6 +549,59 @@ export async function launchFlowPhaseInWorkspace(
   }
 
   return refreshSelectedRepositoryWorkspaceIfCurrent(workspaceState, requestId)
+}
+
+function createTerminalBackedFlowPhaseRunner({
+  store,
+  terminalManager,
+  provider
+}: {
+  store: FlowStore
+  terminalManager: TerminalManagerPort | undefined
+  provider: LaunchTerminalRequest['provider']
+}): FlowPhaseRunner {
+  return async (launchContext) => {
+    const flow = await store.readFlow(launchContext.flowId)
+    if (flow === undefined) {
+      throw new Error(`Flow record not found: ${launchContext.flowId}`)
+    }
+
+    await (terminalManager ?? getTerminalManager(store)).launchTerminal({
+      flow,
+      provider,
+      mode: resolveFlowPhaseLaunchMode(),
+      phaseId: launchContext.phaseId,
+      prompt: createFlowPhaseLaunchPrompt(launchContext),
+      launchId: launchContext.launchId
+    })
+  }
+}
+
+function resolveFlowPhaseLaunchMode(): LaunchTerminalRequest['mode'] {
+  return 'headless'
+}
+
+function createFlowPhaseLaunchPrompt(launchContext: FlowPhaseLaunchContext): string {
+  if (launchContext.phaseKind === 'review_loop') {
+    return [
+      launchContext.reviewBehavior?.prompt ?? DEFAULT_REVIEW_BEHAVIOR.prompt,
+      'Use wtui-flow to record the Review Loop result before finishing; the phase is not done until the result is persisted.'
+    ].join('\n')
+  }
+
+  if (launchContext.phaseId === 'implementation') {
+    return [
+      'Implement the approved plan for this Flow phase.',
+      'Read the saved wtui plan before editing code.',
+      'Use TDD, run targeted tests, and update this phase through wtui-flow when complete.'
+    ].join('\n')
+  }
+
+  return [
+    `Implement only the approved slice for phase "${launchContext.phaseTitle}" (${launchContext.phaseId}).`,
+    'Read the saved wtui plan before editing code.',
+    'Use TDD, run targeted tests, and update this child phase through wtui-flow when complete.'
+  ].join('\n')
 }
 
 export async function skipFlowPhaseInWorkspace(
@@ -848,29 +915,6 @@ async function refreshSelectedRepositoryWorkspaceIfCurrent(
     return currentWorkspaceState ?? workspaceState
   }
   return refreshSelectedRepositoryWorkspace(workspaceState)
-}
-
-async function runExclusiveFlowMutation<T>(
-  flowId: string,
-  action: () => Promise<T>
-): Promise<T> {
-  const previous = flowMutationQueue.get(flowId) ?? Promise.resolve()
-  let releaseCurrent!: () => void
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve
-  })
-  const queued = previous.then(() => current)
-  flowMutationQueue.set(flowId, queued)
-
-  await previous
-  try {
-    return await action()
-  } finally {
-    releaseCurrent()
-    if (flowMutationQueue.get(flowId) === queued) {
-      flowMutationQueue.delete(flowId)
-    }
-  }
 }
 
 function isUpdateFlowPhaseRequest(request: unknown): request is UpdateFlowPhaseRequest {

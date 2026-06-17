@@ -940,6 +940,79 @@ describe('Flow operations', () => {
     ]))
   })
 
+  it('guards needs_attention updates by the current phase launch', async () => {
+    const root = await makeTempDir()
+    const flows = createFlowOperations({ artifactRoot: root })
+    await flows.createFlow({
+      id: 'guard-current-launch',
+      title: 'Guard current launch',
+      repoPath: '/repo',
+      now: '2026-06-15T12:00:00.000Z'
+    })
+    await rewriteFlow(root, 'guard-current-launch', (flow) => ({
+      ...flow,
+      phases: [
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'running',
+          order: 3,
+          launch_ids: ['launch-123']
+        }
+      ]
+    }))
+
+    await expect(flows.needsAttentionPhaseIfCurrent({
+      flowId: 'guard-current-launch',
+      phaseId: 'implementation',
+      launchId: 'launch-123',
+      notes: 'Phase terminal failed.'
+    }, {
+      status: 'running',
+      launchId: 'launch-123'
+    })).resolves.toMatchObject({
+      phases: [
+        expect.objectContaining({
+          phase_id: 'implementation',
+          status: 'needs_attention',
+          notes: 'Phase terminal failed.',
+          launch_ids: ['launch-123']
+        })
+      ]
+    })
+
+    await flows.restartPhase({
+      flowId: 'guard-current-launch',
+      phaseId: 'implementation',
+      launchId: 'launch-456'
+    })
+    await flows.completePhase({
+      flowId: 'guard-current-launch',
+      phaseId: 'implementation',
+      summary: 'Finished by wtui-flow.'
+    })
+
+    await expect(flows.needsAttentionPhaseIfCurrent({
+      flowId: 'guard-current-launch',
+      phaseId: 'implementation',
+      launchId: 'launch-456',
+      notes: 'Late terminal failure.'
+    }, {
+      status: 'running',
+      launchId: 'launch-456'
+    })).resolves.toMatchObject({
+      phases: [
+        expect.objectContaining({
+          phase_id: 'implementation',
+          status: 'completed',
+          summary: 'Finished by wtui-flow.',
+          launch_ids: ['launch-123', 'launch-456']
+        })
+      ]
+    })
+  })
+
   it('requires notes for Human Review changes requested and blocked outcomes', async () => {
     const root = await makeTempDir()
     const flows = createFlowOperations({ artifactRoot: root })

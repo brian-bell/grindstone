@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { RepositoryRow } from '@shared/workspace'
+import { createFlowOperations } from './flowOperations'
 import { createFlowStore } from './flowStore'
 
 async function makeTempDir(): Promise<string> {
@@ -752,6 +753,21 @@ describe('Flow artifact store', () => {
         }
       ]
     }))
+    const invalidSidecarDir = join(artifactRoot, 'flows', 'terminal-id-flow', 'terminals', 'terminal-safe')
+    await mkdir(invalidSidecarDir, { recursive: true })
+    await writeFile(join(invalidSidecarDir, 'meta.json'), JSON.stringify({
+      terminal_id: 'terminal-safe',
+      launch_id: 'launch-invalid-sidecar',
+      provider: 'codex',
+      mode: 'interactive',
+      flow_id: 'other-flow',
+      phase_id: 'plan',
+      status: 'failed',
+      command: 'codex',
+      argv: [],
+      cwd: repository.path,
+      started_at: '2026-06-14T10:02:00.000Z'
+    }))
 
     const store = await createFlowStore({ artifactRoot })
 
@@ -762,6 +778,140 @@ describe('Flow artifact store', () => {
           flowId: 'terminal-id-flow',
           recentOutput: 'ready\n'
         }
+      ]
+    })
+  })
+
+  it('ignores incomplete terminal sidecars without replacing persisted terminal metadata', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-terminal-sidecar-partial')
+    await writeFlowMeta(artifactRoot, 'terminal-sidecar-partial-flow', flowMeta(
+      'terminal-sidecar-partial-flow',
+      repository.path,
+      {
+        terminals: [
+          {
+            terminal_id: 'terminal-sidecar-partial',
+            launch_id: 'launch-sidecar-partial',
+            provider: 'codex',
+            mode: 'interactive',
+            flow_id: 'terminal-sidecar-partial-flow',
+            phase_id: 'implementation',
+            status: 'running',
+            command: 'codex',
+            argv: ['exec', 'Implement'],
+            cwd: repository.path,
+            started_at: '2026-06-14T10:01:00.000Z',
+            recent_output: 'still running\n'
+          }
+        ]
+      }
+    ))
+    const partialSidecarDir = join(
+      artifactRoot,
+      'flows',
+      'terminal-sidecar-partial-flow',
+      'terminals',
+      'terminal-sidecar-partial'
+    )
+    await mkdir(partialSidecarDir, { recursive: true })
+    await writeFile(join(partialSidecarDir, 'meta.json'), JSON.stringify({
+      terminal_id: 'terminal-sidecar-partial',
+      flow_id: 'terminal-sidecar-partial-flow',
+      status: 'running'
+    }))
+
+    const store = await createFlowStore({ artifactRoot })
+
+    await expect(store.readFlow('terminal-sidecar-partial-flow')).resolves.toMatchObject({
+      terminals: [
+        {
+          terminalId: 'terminal-sidecar-partial',
+          launchId: 'launch-sidecar-partial',
+          flowId: 'terminal-sidecar-partial-flow',
+          recentOutput: 'still running\n'
+        }
+      ]
+    })
+  })
+
+  it('reads terminal sidecars without overwriting Flow phase updates', async () => {
+    const root = await makeTempDir()
+    const artifactRoot = join(root, 'artifacts')
+    const repository = await makeRepository(root, 'repo-terminal-sidecar')
+    await writeFlowMeta(artifactRoot, 'sidecar-flow', flowMeta('sidecar-flow', repository.path, {
+      phases: [
+        {
+          phase_id: 'implementation',
+          title: 'Implementation',
+          kind: 'implementation',
+          status: 'running',
+          order: 3,
+          launch_ids: ['phase-launch-123']
+        },
+        {
+          phase_id: 'review-loop-1',
+          title: 'Review Loop 1',
+          kind: 'review_loop',
+          status: 'pending',
+          order: 4
+        }
+      ]
+    }))
+    const terminalDir = join(artifactRoot, 'flows', 'sidecar-flow', 'terminals', 'terminal-sidecar')
+    await mkdir(terminalDir, { recursive: true })
+    await writeFile(join(terminalDir, 'meta.json'), JSON.stringify({
+      terminal_id: 'terminal-sidecar',
+      launch_id: 'phase-launch-123',
+      provider: 'codex',
+      mode: 'headless',
+      flow_id: 'sidecar-flow',
+      phase_id: 'implementation',
+      status: 'running',
+      command: 'codex',
+      argv: ['exec', 'Implement'],
+      cwd: repository.path,
+      started_at: '2026-06-14T10:01:00.000Z'
+    }))
+
+    await createFlowOperations({ artifactRoot }).completePhase({
+      flowId: 'sidecar-flow',
+      phaseId: 'implementation',
+      summary: 'Implementation complete.',
+      now: '2026-06-14T10:02:00.000Z'
+    })
+    await writeFile(join(terminalDir, 'meta.json'), JSON.stringify({
+      terminal_id: 'terminal-sidecar',
+      launch_id: 'phase-launch-123',
+      provider: 'codex',
+      mode: 'headless',
+      flow_id: 'sidecar-flow',
+      phase_id: 'implementation',
+      status: 'exited',
+      command: 'codex',
+      argv: ['exec', 'Implement'],
+      cwd: repository.path,
+      started_at: '2026-06-14T10:01:00.000Z',
+      ended_at: '2026-06-14T10:03:00.000Z',
+      exit_code: 0
+    }))
+
+    const store = await createFlowStore({ artifactRoot })
+    await expect(store.readFlow('sidecar-flow')).resolves.toMatchObject({
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'implementation',
+          status: 'completed',
+          summary: 'Implementation complete.'
+        })
+      ]),
+      terminals: [
+        expect.objectContaining({
+          terminalId: 'terminal-sidecar',
+          status: 'exited',
+          exitCode: 0
+        })
       ]
     })
   })

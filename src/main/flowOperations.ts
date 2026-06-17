@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   normalizeFlowHumanReviewMetadata,
@@ -80,6 +80,10 @@ export type FlowOperations = {
   recordMerge: (input: RecordMergeInput) => Promise<PersistedFlowMetadata>
   blockPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   needsAttentionPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
+  needsAttentionPhaseIfCurrent: (
+    input: Omit<PhaseSetInput, 'status'>,
+    expected: { status: string; launchId: string }
+  ) => Promise<PersistedFlowMetadata>
   restartPhase: (input: Omit<PhaseSetInput, 'status'>) => Promise<PersistedFlowMetadata>
   linkPlan: (input: { flowId: string; planId: string; now?: string }) => Promise<PersistedFlowMetadata>
   updatePhase: (input: PhaseEditInput) => Promise<PersistedFlowMetadata>
@@ -136,37 +140,87 @@ const DEFAULT_PHASE_COMPLETION_PROMOTIONS = new Map([
 const PHASE_STATUSES_REQUIRING_NOTES = new Set(['blocked', 'needs_attention', 'skipped'])
 const SAFE_PHASE_OUTCOME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
+type FlowFileVersion = {
+  mtimeMs: number
+  size: number
+}
+
 export function createFlowOperations(options: { artifactRoot: string }): FlowOperations {
   const flowsRoot = join(options.artifactRoot, 'flows')
   const planStore = createPlanStore(options)
+
+  function flowMetaPath(flowId: string): string {
+    return join(flowsRoot, flowId, 'meta.json')
+  }
 
   async function writeFlow(flow: PersistedFlowMetadata): Promise<PersistedFlowMetadata> {
     assertSafeArtifactId('Flow', flow.flow_id)
     const flowDir = join(flowsRoot, flow.flow_id)
     await ensurePrivateDirectory(flowDir)
-    await writeJsonAtomically(join(flowDir, 'meta.json'), flow)
+    await writeJsonAtomically(flowMetaPath(flow.flow_id), flow)
     return flow
   }
 
   async function readFlow(flowId: string): Promise<PersistedFlowMetadata> {
     assertSafeArtifactId('Flow', flowId)
-    const flow = await readJsonArtifact(join(flowsRoot, flowId, 'meta.json'), flowId, isPersistedFlowMetadata)
+    const flow = await readJsonArtifact(flowMetaPath(flowId), flowId, isPersistedFlowMetadata)
     if (flow.flow_id !== flowId) {
       throw new ArtifactStoreError('corrupt_artifact', `Flow id mismatch: ${flowId}`, flowId)
     }
     return normalizePersistedFlowPrState(flow)
   }
 
+  async function readFlowWithStableVersion(flowId: string): Promise<{
+    flow: PersistedFlowMetadata
+    version: FlowFileVersion
+  }> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = await readFlowVersion(flowId)
+      const flow = await readFlow(flowId)
+      const after = await readFlowVersion(flowId)
+      if (sameFlowVersion(before, after)) {
+        return { flow, version: after }
+      }
+    }
+
+    const flow = await readFlow(flowId)
+    return { flow, version: await readFlowVersion(flowId) }
+  }
+
+  async function readFlowVersion(flowId: string): Promise<FlowFileVersion> {
+    assertSafeArtifactId('Flow', flowId)
+    const metadata = await stat(flowMetaPath(flowId))
+    return {
+      mtimeMs: metadata.mtimeMs,
+      size: metadata.size
+    }
+  }
+
   async function setPhaseInternal(
     input: PhaseSetInput,
-    options: { pr?: FlowPullRequestMetadata } = {}
+    options: {
+      pr?: FlowPullRequestMetadata
+      expectedCurrent?: { status: string; launchId: string }
+    } = {}
   ): Promise<PersistedFlowMetadata> {
     assertSafeArtifactId('phase', input.phaseId)
-    const flow = await readFlow(input.flowId)
+    const versionedFlow = options.expectedCurrent === undefined
+      ? undefined
+      : await readFlowWithStableVersion(input.flowId)
+    const flow = versionedFlow?.flow ?? await readFlow(input.flowId)
     const now = input.now ?? new Date().toISOString()
     const phases = [...(flow.phases ?? [])]
     const index = phases.findIndex((phase) => phase.phase_id === input.phaseId)
     const existing = index === -1 ? undefined : phases[index]
+
+    if (options.expectedCurrent !== undefined) {
+      if (
+        existing?.status !== options.expectedCurrent.status ||
+        existing.launch_ids?.[existing.launch_ids.length - 1] !== options.expectedCurrent.launchId
+      ) {
+        return flow
+      }
+    }
 
     if (existing === undefined && (
       input.title === undefined ||
@@ -298,12 +352,20 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
       nextPhases = promotePhase(nextPhases, 'review-loop-1', 'ready', now)
     }
 
-    return writeFlow(withoutUndefined({
+    const nextFlow = withoutUndefined({
       ...flow,
       pr: options.pr ?? flow.pr,
       phases: sortPersistedPhases(nextPhases),
       updated_at: now
-    }))
+    })
+    if (versionedFlow !== undefined) {
+      const latestVersion = await readFlowVersion(input.flowId)
+      if (!sameFlowVersion(versionedFlow.version, latestVersion)) {
+        return setPhaseInternal(input, options)
+      }
+    }
+
+    return writeFlow(nextFlow)
   }
 
   return {
@@ -478,6 +540,17 @@ export function createFlowOperations(options: { artifactRoot: string }): FlowOpe
         throw new ArtifactStoreError('validation_error', 'Marking a phase needs_attention requires notes.')
       }
       return setPhaseInternal({ ...input, status: 'needs_attention' })
+    },
+
+    async needsAttentionPhaseIfCurrent(input, expected) {
+      await assertPhaseExists(readFlow, input.flowId, input.phaseId)
+      if (input.notes === undefined || input.notes.trim() === '') {
+        throw new ArtifactStoreError('validation_error', 'Marking a phase needs_attention requires notes.')
+      }
+      return setPhaseInternal(
+        { ...input, status: 'needs_attention' },
+        { expectedCurrent: expected }
+      )
     },
 
     async restartPhase(input) {
@@ -1049,6 +1122,10 @@ function sortPersistedPhases(phases: PersistedFlowPhase[]): PersistedFlowPhase[]
     .filter((phase) => !emitted.has(phase.phase_id))
     .sort((left, right) => left.order - right.order)
   return [...sorted, ...orphans]
+}
+
+function sameFlowVersion(left: FlowFileVersion, right: FlowFileVersion): boolean {
+  return left.mtimeMs === right.mtimeMs && left.size === right.size
 }
 
 function validateAgentPhaseStatus(status: string | undefined): void {
