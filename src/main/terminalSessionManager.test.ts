@@ -120,7 +120,7 @@ class FakePtyProcess implements PtyProcess {
 }
 
 describe('terminal session manager', () => {
-  it('repairs the bundled node-pty spawn helper before launching real PTYs', async () => {
+  it.runIf(process.platform === 'darwin')('repairs the bundled node-pty spawn helper before launching real PTYs', async () => {
     const helperPath = join(
       process.cwd(),
       'node_modules',
@@ -447,6 +447,78 @@ describe('terminal session manager', () => {
       '/usr/bin',
       '/bin'
     ])
+  })
+
+  it('preserves Windows Path casing when building terminal spawn environments', async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: 'win32'
+    })
+
+    try {
+      const root = await makeTempDir()
+      await mkdir(join(root, 'repo'), { recursive: true })
+      await mkdir(join(root, 'worktree'), { recursive: true })
+      const artifactRoot = join(root, 'artifacts')
+      const store = await createFlowStore({ artifactRoot })
+      const repo = repository(root)
+      const storedFlow = await store.createFlowRecord({
+        id: 'launch-terminal-windows-path',
+        title: 'Launch terminal Windows path',
+        instructions: 'Implement the plan.',
+        status: 'creating',
+        repositoryPath: repo.path,
+        branch: 'flow/launch-terminal-windows-path',
+        worktreePath: join(root, 'worktree'),
+        baseRef: 'main',
+        commit: 'abc123',
+        start: {
+          repositoryPath: repo.path,
+          worktreePath: join(root, 'worktree'),
+          branch: 'flow/launch-terminal-windows-path',
+          baseRef: 'main',
+          commit: 'abc123'
+        },
+        createdAt: '2026-06-14T12:00:00.000Z',
+        updatedAt: '2026-06-14T12:00:00.000Z'
+      })
+      const spawned: Array<{ env: Record<string, string> }> = []
+      const pty: PtyAdapter = {
+        spawn(_command, _args, options) {
+          spawned.push({ env: options.env })
+          return new FakePtyProcess()
+        }
+      }
+      const manager = new TerminalSessionManager({
+        artifactRoot,
+        store,
+        pty,
+        env: {
+          HOME: root,
+          Path: 'C:\\Windows\\System32'
+        },
+        now: vi.fn().mockReturnValue('2026-06-14T12:02:00.000Z'),
+        idFactory: vi.fn()
+          .mockReturnValueOnce('terminal-windows-path')
+          .mockReturnValueOnce('launch-windows-path')
+      })
+
+      await manager.launchTerminal({
+        flow: storedFlow,
+        provider: 'codex',
+        mode: 'headless',
+        phaseId: 'implementation',
+        prompt: 'Implement the approved plan.'
+      })
+
+      expect(spawned[0]?.env.Path).toBe('C:\\Windows\\System32')
+      expect(spawned[0]?.env.PATH).toBeUndefined()
+    } finally {
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
   })
 
   it('uses a supplied launch id for terminal metadata and wtui env', async () => {

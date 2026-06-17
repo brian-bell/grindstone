@@ -512,6 +512,13 @@ function buildTerminalSpawnEnv(
   launchEnv: Record<string, string>
 ): Record<string, string> {
   const normalizedBaseEnv = processEnvToRecord(baseEnv)
+  if (process.platform === 'win32') {
+    return {
+      ...normalizedBaseEnv,
+      ...launchEnv
+    }
+  }
+
   return {
     ...normalizedBaseEnv,
     PATH: buildTerminalPath(normalizedBaseEnv),
