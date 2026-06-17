@@ -53,10 +53,16 @@ textarea {
 }
 
 .app-shell {
+  --right-pane-column: minmax(220px, 0.56fr);
+
   display: grid;
-  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.45fr) minmax(260px, 0.9fr);
+  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.45fr) var(--right-pane-column);
   min-height: 100vh;
   background: #f4f2ed;
+}
+
+.app-shell-right-collapsed {
+  --right-pane-column: 52px;
 }
 
 .pane {
@@ -81,6 +87,12 @@ textarea {
   background: #eef3f4;
 }
 
+.context-pane-collapsed {
+  display: flex;
+  justify-content: center;
+  padding: 12px 8px;
+}
+
 .pane-header {
   display: flex;
   align-items: center;
@@ -92,9 +104,18 @@ textarea {
 .pane-header h1,
 .pane-header h2 {
   margin: 0;
+  min-width: 0;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.context-pane .pane-header h2 {
+  flex: 1 1 auto;
+}
+
+.context-toggle-button {
+  margin-left: auto;
 }
 
 .repository-summary,
@@ -1000,7 +1021,7 @@ textarea {
 
 .config-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
 }
 
 .config-panel {
@@ -1083,6 +1104,10 @@ textarea {
 
 @media (max-width: 900px) {
   .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .app-shell-right-collapsed {
     grid-template-columns: 1fr;
   }
 
