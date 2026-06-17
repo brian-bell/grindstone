@@ -2124,9 +2124,23 @@ function FlowPhaseRow({
   return (
     <div className="phase-row-wrap">
       <div
-        className="phase-tree-row"
+        className={canLaunch
+          ? 'phase-tree-row phase-tree-row-with-leading-action'
+          : 'phase-tree-row'}
         style={{ marginLeft: `${level * 18}px` }}
       >
+        {canLaunch ? (
+          <button
+            aria-label={`Launch ${phase.title}`}
+            className="icon-button phase-action-button"
+            disabled={pendingAction !== null}
+            onClick={() => void handleLaunch()}
+            title={`Launch ${phase.title}`}
+            type="button"
+          >
+            <Play aria-hidden="true" size={14} />
+          </button>
+        ) : null}
         <span className="phase-tree-copy">
           <span>{formatPhaseDetail(phase)}</span>
           {phase.notes === undefined ? null : (
@@ -2134,18 +2148,6 @@ function FlowPhaseRow({
           )}
         </span>
         <span className="phase-tree-actions">
-          {canLaunch ? (
-            <button
-              aria-label={`Launch ${phase.title}`}
-              className="icon-button phase-action-button"
-              disabled={pendingAction !== null}
-              onClick={() => void handleLaunch()}
-              title={`Launch ${phase.title}`}
-              type="button"
-            >
-              <Play aria-hidden="true" size={14} />
-            </button>
-          ) : null}
           {canComplete ? (
             <button
               aria-label={`Complete ${phase.title}`}

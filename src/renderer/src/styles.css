@@ -480,6 +480,10 @@ textarea {
   background: #fffdf8;
 }
 
+.phase-tree-row-with-leading-action {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
 .phase-row-wrap {
   display: grid;
   gap: 5px;

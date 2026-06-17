@@ -814,8 +814,13 @@ describe('App shell', () => {
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
     await user.click(within(flowPane).getByRole('button', { name: /launchable flow details/i }))
-    expect(within(flowPane).getByRole('button', { name: /launch repair api/i }))
-      .toBeInTheDocument()
+    const repairLaunchButton = within(flowPane).getByRole('button', { name: /launch repair api/i })
+    const repairPhaseLabel = within(flowPane).getByText('Phase: Repair API - needs_attention')
+    expect(repairLaunchButton).toBeInTheDocument()
+    expect(
+      repairLaunchButton.compareDocumentPosition(repairPhaseLabel) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
     await user.click(within(flowPane).getByRole('button', { name: /launch implementation/i }))
 
     expect(launchFlowPhase).toHaveBeenCalledWith({
