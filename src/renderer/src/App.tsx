@@ -1,9 +1,10 @@
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   CirclePlus,
   Maximize2,
   GitBranch,
-  Info,
   PanelRightClose,
   PanelRightOpen,
   Play,
@@ -1618,7 +1619,6 @@ function FlowRecordTable({
             <th scope="col">Branch</th>
             <th scope="col">Plan</th>
             <th scope="col">Phases</th>
-            <th scope="col">Details</th>
           </tr>
         </thead>
         <tbody>
@@ -1633,7 +1633,24 @@ function FlowRecordTable({
               <Fragment key={flow.id}>
                 <tr>
                   <td>
-                    <span className="flow-title">{flow.title}</span>
+                    <span className="flow-title-cell">
+                      <button
+                        aria-controls={detailsId}
+                        aria-expanded={isExpanded}
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${flow.title} details`}
+                        className="flow-disclosure-button"
+                        onClick={() => setExpandedFlowId(isExpanded ? null : flow.id)}
+                        title={details}
+                        type="button"
+                      >
+                        {isExpanded ? (
+                          <ChevronDown aria-hidden="true" size={14} />
+                        ) : (
+                          <ChevronRight aria-hidden="true" size={14} />
+                        )}
+                      </button>
+                      <span className="flow-title">{flow.title}</span>
+                    </span>
                   </td>
                   <td>
                     <span className="flow-status">{flow.status}</span>
@@ -1664,23 +1681,10 @@ function FlowRecordTable({
                   <td>
                     {formatPhaseSummary(flow)}
                   </td>
-                  <td>
-                    <button
-                      aria-controls={detailsId}
-                      aria-expanded={isExpanded}
-                      aria-label={`${flow.title} details`}
-                      className="flow-details-button"
-                      onClick={() => setExpandedFlowId(isExpanded ? null : flow.id)}
-                      title={details}
-                      type="button"
-                    >
-                      <Info aria-hidden="true" size={14} />
-                    </button>
-                  </td>
                 </tr>
                 {isExpanded ? (
                   <tr className="flow-detail-row">
-                    <td colSpan={7}>
+                    <td colSpan={6}>
                       <div
                         className="flow-detail-panel"
                         id={detailsId}
@@ -1698,7 +1702,7 @@ function FlowRecordTable({
                 ) : null}
                 {planView === undefined ? null : (
                   <tr className="flow-detail-row">
-                    <td colSpan={7}>
+                    <td colSpan={6}>
                       <FlowPlanPanel
                         flow={flow}
                         id={planDetailsId}
@@ -1709,7 +1713,7 @@ function FlowRecordTable({
                 )}
                 {flow.terminals !== undefined && flow.terminals.length > 0 ? (
                   <tr className="flow-terminal-row">
-                    <td colSpan={7}>
+                    <td colSpan={6}>
                       <FlowTerminalTabs
                         flow={flow}
                       />
@@ -2120,9 +2124,23 @@ function FlowPhaseRow({
   return (
     <div className="phase-row-wrap">
       <div
-        className="phase-tree-row"
+        className={canLaunch
+          ? 'phase-tree-row phase-tree-row-with-leading-action'
+          : 'phase-tree-row'}
         style={{ marginLeft: `${level * 18}px` }}
       >
+        {canLaunch ? (
+          <button
+            aria-label={`Launch ${phase.title}`}
+            className="icon-button phase-action-button"
+            disabled={pendingAction !== null}
+            onClick={() => void handleLaunch()}
+            title={`Launch ${phase.title}`}
+            type="button"
+          >
+            <Play aria-hidden="true" size={14} />
+          </button>
+        ) : null}
         <span className="phase-tree-copy">
           <span>{formatPhaseDetail(phase)}</span>
           {phase.notes === undefined ? null : (
@@ -2130,18 +2148,6 @@ function FlowPhaseRow({
           )}
         </span>
         <span className="phase-tree-actions">
-          {canLaunch ? (
-            <button
-              aria-label={`Launch ${phase.title}`}
-              className="icon-button phase-action-button"
-              disabled={pendingAction !== null}
-              onClick={() => void handleLaunch()}
-              title={`Launch ${phase.title}`}
-              type="button"
-            >
-              <Play aria-hidden="true" size={14} />
-            </button>
-          ) : null}
           {canComplete ? (
             <button
               aria-label={`Complete ${phase.title}`}
