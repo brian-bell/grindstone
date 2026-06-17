@@ -22,7 +22,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
   type RefObject,
@@ -66,6 +65,7 @@ type RightPaneMode = 'hints' | 'config'
 type RightPaneFocusTarget = 'expand' | 'collapse'
 
 const RIGHT_PANE_ID = 'context-pane'
+const RIGHT_PANE_CONTENT_ID = 'context-pane-content'
 
 type ConfigSaveResult = {
   errors: ConfigFieldError[]
@@ -252,10 +252,6 @@ export function App(): ReactElement {
 
   const shellState = workspace ?? defaultInitialWorkspaceState
   const isWorkspaceLoading = workspace === null
-  const rightPaneColumn = isRightPaneCollapsed ? '52px' : 'minmax(220px, 0.56fr)'
-  const shellStyle = {
-    '--right-pane-column': rightPaneColumn
-  } as CSSProperties
 
   useEffect(() => {
     const focusTarget = rightPaneFocusTargetRef.current
@@ -365,7 +361,6 @@ export function App(): ReactElement {
   return (
     <div
       className={isRightPaneCollapsed ? 'app-shell app-shell-right-collapsed' : 'app-shell'}
-      style={shellStyle}
     >
       <section
         className="pane repository-pane"
@@ -402,14 +397,17 @@ export function App(): ReactElement {
         />
       </main>
 
-      {isRightPaneCollapsed ? (
-        <section
-          aria-label="Right pane"
-          className="pane context-pane context-pane-collapsed"
-          id={RIGHT_PANE_ID}
-        >
+      <section
+        aria-label={isRightPaneCollapsed ? 'Right pane' : undefined}
+        aria-labelledby={isRightPaneCollapsed ? undefined : 'context-pane-title'}
+        className={isRightPaneCollapsed
+          ? 'pane context-pane context-pane-collapsed'
+          : 'pane context-pane'}
+        id={RIGHT_PANE_ID}
+      >
+        {isRightPaneCollapsed ? (
           <button
-            aria-controls={RIGHT_PANE_ID}
+            aria-controls={RIGHT_PANE_CONTENT_ID}
             aria-expanded="false"
             aria-label="Expand right pane"
             className="icon-button"
@@ -420,13 +418,8 @@ export function App(): ReactElement {
           >
             <PanelRightOpen aria-hidden="true" size={16} />
           </button>
-        </section>
-      ) : (
-        <section
-          className="pane context-pane"
-          id={RIGHT_PANE_ID}
-          aria-labelledby="context-pane-title"
-        >
+        ) : null}
+        <div id={RIGHT_PANE_CONTENT_ID} hidden={isRightPaneCollapsed}>
           {rightPaneMode === 'config' ? (
             <ConfigEditorPanel
               collapseButtonRef={collapseRightPaneButtonRef}
@@ -445,8 +438,8 @@ export function App(): ReactElement {
               onNewFlow={requestFlowCreate}
             />
           )}
-        </section>
-      )}
+        </div>
+      </section>
     </div>
   )
 }
@@ -977,7 +970,7 @@ function ContextHintsPanel({
         <Sparkles aria-hidden="true" size={18} />
         <h2 id="context-pane-title">Contextual Hints</h2>
         <button
-          aria-controls={RIGHT_PANE_ID}
+          aria-controls={RIGHT_PANE_CONTENT_ID}
           aria-expanded="true"
           aria-label="Collapse right pane"
           className="icon-button context-toggle-button"
@@ -1104,7 +1097,7 @@ function ConfigEditorPanel({
         <Settings aria-hidden="true" size={18} />
         <h2 id="context-pane-title">Common Config</h2>
         <button
-          aria-controls={RIGHT_PANE_ID}
+          aria-controls={RIGHT_PANE_CONTENT_ID}
           aria-expanded="true"
           aria-label="Collapse right pane"
           className="icon-button context-toggle-button"

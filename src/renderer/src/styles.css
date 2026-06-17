@@ -53,14 +53,16 @@ textarea {
 }
 
 .app-shell {
+  --right-pane-column: minmax(220px, 0.56fr);
+
   display: grid;
-  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.45fr) var(--right-pane-column, minmax(220px, 0.56fr));
+  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.45fr) var(--right-pane-column);
   min-height: 100vh;
   background: #f4f2ed;
 }
 
 .app-shell-right-collapsed {
-  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.45fr) var(--right-pane-column, 52px);
+  --right-pane-column: 52px;
 }
 
 .pane {
@@ -1019,7 +1021,7 @@ textarea {
 
 .config-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
 }
 
 .config-panel {

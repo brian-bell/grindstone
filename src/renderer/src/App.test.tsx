@@ -390,26 +390,22 @@ describe('App shell', () => {
     const { container } = render(<App />)
 
     const shell = container.querySelector('.app-shell')
-    expect(shell).toHaveStyle({
-      '--right-pane-column': 'minmax(220px, 0.56fr)'
-    })
+    expect(shell).not.toHaveAttribute('style')
 
     const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
     const collapseButton = within(contextPane).getByRole('button', {
       name: /collapse right pane/i
     })
-    expect(collapseButton).toHaveAttribute('aria-controls', 'context-pane')
+    expect(collapseButton).toHaveAttribute('aria-controls', 'context-pane-content')
     expect(collapseButton).toHaveAttribute('aria-expanded', 'true')
 
     await user.click(collapseButton)
 
     expect(screen.queryByRole('region', { name: /contextual hints/i })).not.toBeInTheDocument()
     expect(shell).toHaveClass('app-shell-right-collapsed')
-    expect(shell).toHaveStyle({
-      '--right-pane-column': '52px'
-    })
+    expect(shell).not.toHaveAttribute('style')
     const expandButton = screen.getByRole('button', { name: /expand right pane/i })
-    expect(expandButton).toHaveAttribute('aria-controls', 'context-pane')
+    expect(expandButton).toHaveAttribute('aria-controls', 'context-pane-content')
     expect(expandButton).toHaveAttribute('aria-expanded', 'false')
     await waitFor(() => expect(expandButton).toHaveFocus())
 
@@ -2379,6 +2375,27 @@ describe('App shell', () => {
     expect(screen.getByLabelText('Artifact root')).toHaveValue('./artifacts')
     expect(screen.getByLabelText('Hook 1 command')).toHaveValue('npm install')
     expect(screen.getByLabelText('Hook 1 environment')).toHaveValue('NODE_ENV=test')
+  })
+
+  it('preserves unsaved common config edits when collapsing and expanding the right pane', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /configure/i }))
+    await user.clear(await screen.findByLabelText('Artifact root'))
+    await user.type(screen.getByLabelText('Artifact root'), './draft-artifacts')
+
+    const configPane = screen.getByRole('region', { name: /common config/i })
+    await user.click(within(configPane).getByRole('button', { name: /collapse right pane/i }))
+
+    expect(screen.queryByRole('region', { name: /common config/i })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /expand right pane/i }))
+
+    expect(await screen.findByRole('region', { name: /common config/i })).toBeInTheDocument()
+    expect(screen.getByLabelText('Artifact root')).toHaveValue('./draft-artifacts')
   })
 
   it('does not save an empty draft when editable config fails to load', async () => {
