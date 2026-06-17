@@ -521,6 +521,7 @@ describe('App shell', () => {
     expect(within(flowTable).getByRole('columnheader', { name: /branch/i })).toBeInTheDocument()
     expect(within(flowTable).getByRole('columnheader', { name: /plan/i })).toBeInTheDocument()
     expect(within(flowTable).getByRole('columnheader', { name: /phases/i })).toBeInTheDocument()
+    expect(within(flowTable).queryByRole('columnheader', { name: /details/i })).not.toBeInTheDocument()
 
     const rows = within(flowTable).getAllByRole('row')
     expect(rows).toHaveLength(2)
@@ -532,9 +533,12 @@ describe('App shell', () => {
     expect(rows[1]).toHaveTextContent('1/2 done, 1 active')
     expect(rows[1]).not.toHaveTextContent('/repos/grindstone')
     expect(rows[1]).not.toHaveTextContent('Render list')
+    const cells = within(rows[1]).getAllByRole('cell')
     const detailsButton = within(rows[1]).getByRole('button', {
-      name: /artifact backed flow details/i
+      name: /expand artifact backed flow details/i
     })
+    expect(cells[0]).toContainElement(detailsButton)
+    expect(cells[0]).toHaveTextContent('Artifact backed Flow')
     expect(detailsButton).toHaveAttribute('aria-expanded', 'false')
     expect(detailsButton).toHaveAttribute(
       'title',
@@ -548,6 +552,7 @@ describe('App shell', () => {
     await user.click(detailsButton)
 
     expect(detailsButton).toHaveAttribute('aria-expanded', 'true')
+    expect(detailsButton).toHaveAccessibleName(/collapse artifact backed flow details/i)
     expect(await within(flowTable).findByRole('region', { name: /artifact backed flow details/i }))
       .toHaveTextContent('Phase: Launch workspace - active')
   })
