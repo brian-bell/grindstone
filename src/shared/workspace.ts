@@ -71,6 +71,13 @@ export type LaunchFlowPhaseRequest = {
   phaseId: string
 }
 
+export type ManualUpdateFlowPhaseRequest = {
+  flowId: string
+  phaseId: string
+  action: FlowPhaseManualAction
+  notes?: string
+}
+
 export type SkipFlowPhaseRequest = {
   flowId: string
   phaseId: string
@@ -282,7 +289,17 @@ export type FlowPhaseSummary = {
   generated?: boolean
   editable?: boolean
   sourcePlanId?: string
+  manualActions?: FlowPhaseManualActionAffordance[]
   updatedAt?: string
+}
+
+export type FlowPhaseManualAction = 'restart' | 'block' | 'needs_attention' | 'skip'
+
+export type FlowPhaseManualActionAffordance = {
+  action: FlowPhaseManualAction
+  label: string
+  requiresNotes: boolean
+  allowsBlankNotes?: boolean
 }
 
 export type FlowListRow = {

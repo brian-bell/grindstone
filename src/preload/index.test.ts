@@ -10,6 +10,7 @@ import {
   type FlowTerminalSummary,
   type InitialWorkspaceState,
   type LaunchFlowPhaseRequest,
+  type ManualUpdateFlowPhaseRequest,
   type RecordFlowHumanReviewRequest,
   type RecordFlowMergeRequest,
   type RecordFlowPullRequestRequest,
@@ -32,6 +33,7 @@ type PreloadApi = {
     createFlow: (request: CreateFlowRequest) => Promise<InitialWorkspaceState>
     updateFlowPhase: (request: UpdateFlowPhaseRequest) => Promise<InitialWorkspaceState>
     launchFlowPhase: (request: LaunchFlowPhaseRequest) => Promise<InitialWorkspaceState>
+    manualUpdateFlowPhase: (request: ManualUpdateFlowPhaseRequest) => Promise<InitialWorkspaceState>
     skipFlowPhase: (request: SkipFlowPhaseRequest) => Promise<InitialWorkspaceState>
     completeFlowPhase: (request: CompleteFlowPhaseRequest) => Promise<InitialWorkspaceState>
     recordFlowPullRequest: (request: RecordFlowPullRequestRequest) => Promise<InitialWorkspaceState>
@@ -118,6 +120,7 @@ describe('preload bridge', () => {
       'createFlow',
       'updateFlowPhase',
       'launchFlowPhase',
+      'manualUpdateFlowPhase',
       'skipFlowPhase',
       'completeFlowPhase',
       'recordFlowPullRequest',
@@ -245,6 +248,19 @@ describe('preload bridge', () => {
     expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.launchFlowPhase, {
       flowId: 'flow-one',
       phaseId: 'implementation'
+    })
+
+    await expect(api.workspace.manualUpdateFlowPhase({
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      action: 'restart',
+      notes: 'Retry after fixing state.'
+    })).resolves.toEqual(defaultInitialWorkspaceState)
+    expect(invoke).toHaveBeenCalledWith(ipcChannels.workspace.manualUpdateFlowPhase, {
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      action: 'restart',
+      notes: 'Retry after fixing state.'
     })
 
     await expect(api.workspace.skipFlowPhase({

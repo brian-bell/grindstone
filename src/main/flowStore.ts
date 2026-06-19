@@ -7,6 +7,7 @@ import {
   validateFlowPullRequestMetadata,
   type FlowHumanReviewMetadata,
   type FlowMergeMetadata,
+  type PersistedFlowMetadata,
   type PersistedFlowPhase
 } from '@shared/artifacts'
 import type {
@@ -17,6 +18,7 @@ import type {
   FlowStartMetadata,
   RepositoryRow
 } from '@shared/workspace'
+import { getFlowPhaseManualActionAffordances } from './flowOperations'
 
 export type FlowStore = {
   listFlowsForRepository: (repository: RepositoryRow) => Promise<FlowListRow[]>
@@ -328,6 +330,18 @@ async function mapFlowMetadata(
     ? undefined
     : normalizeFlowHumanReviewMetadata(metadata.human_review)
   const merge = normalizeMergeForHumanReview(humanReview, normalizeFlowMergeMetadata(metadata.merge))
+  const flowForPhaseActions: PersistedFlowMetadata = {
+    schema_version: 1,
+    flow_id: directoryFlowId,
+    title: metadata.title,
+    status: metadata.status,
+    repo_path: metadata.repo_path,
+    pr,
+    human_review: humanReview,
+    merge,
+    created_at: metadata.created_at,
+    updated_at: metadata.updated_at
+  }
 
   return {
     id: directoryFlowId,
@@ -349,7 +363,7 @@ async function mapFlowMetadata(
     merge,
     createdAt: metadata.created_at,
     updatedAt: metadata.updated_at,
-    phases: mapPhases(metadata.phases, shouldGatePrDependentPhases),
+    phases: mapPhases(metadata.phases, shouldGatePrDependentPhases, flowForPhaseActions),
     terminals: mapTerminals(metadata.terminals, directoryFlowId)
   }
 }
@@ -435,7 +449,11 @@ function isFailureStage(value: unknown): value is FlowFailureSummary['stage'] {
     value === 'launch_prep'
 }
 
-function mapPhases(value: unknown, shouldGatePrDependentPhases: boolean): FlowPhaseSummary[] | undefined {
+function mapPhases(
+  value: unknown,
+  shouldGatePrDependentPhases: boolean,
+  flow: PersistedFlowMetadata
+): FlowPhaseSummary[] | undefined {
   if (!Array.isArray(value)) {
     return undefined
   }
@@ -451,23 +469,45 @@ function mapPhases(value: unknown, shouldGatePrDependentPhases: boolean): FlowPh
       return []
     }
 
+    const persistedPhase: PersistedFlowPhase = {
+      phase_id: phase.phase_id,
+      title: phase.title,
+      status: phase.status,
+      order: phase.order,
+      parent_phase_id: optionalString(phase.parent_phase_id),
+      kind: normalizedPhaseKind(phase),
+      outcome: optionalString(phase.outcome),
+      summary: optionalString(phase.summary),
+      notes: optionalString(phase.notes),
+      generated: optionalBoolean(phase.generated),
+      editable: optionalBoolean(phase.editable),
+      source_plan_id: optionalString(phase.source_plan_id),
+      launch_ids: launchIdsFromPhase(phase),
+      updated_at: optionalString(phase.updated_at)
+    }
+    const manualActions = getFlowPhaseManualActionAffordances({
+      flow,
+      phase: persistedPhase
+    })
+
     return [
-      {
-        id: phase.phase_id,
-        title: phase.title,
-        status: phase.status,
-        order: phase.order,
-        parentPhaseId: optionalString(phase.parent_phase_id),
-        kind: normalizedPhaseKind(phase),
-        outcome: optionalString(phase.outcome),
-        summary: optionalString(phase.summary),
-        notes: optionalString(phase.notes),
-        launchIds: launchIdsFromPhase(phase),
-        generated: optionalBoolean(phase.generated),
-        editable: optionalBoolean(phase.editable),
-        sourcePlanId: optionalString(phase.source_plan_id),
-        updatedAt: optionalString(phase.updated_at)
-      }
+      withoutUndefined({
+        id: persistedPhase.phase_id,
+        title: persistedPhase.title,
+        status: persistedPhase.status,
+        order: persistedPhase.order,
+        parentPhaseId: persistedPhase.parent_phase_id,
+        kind: persistedPhase.kind,
+        outcome: persistedPhase.outcome,
+        summary: persistedPhase.summary,
+        notes: persistedPhase.notes,
+        launchIds: persistedPhase.launch_ids,
+        generated: persistedPhase.generated,
+        editable: persistedPhase.editable,
+        sourcePlanId: persistedPhase.source_plan_id,
+        manualActions: manualActions.length === 0 ? undefined : manualActions,
+        updatedAt: persistedPhase.updated_at
+      })
     ]
   })
 

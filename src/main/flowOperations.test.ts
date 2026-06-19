@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createFlowOperations } from './flowOperations'
+import { createFlowOperations, getFlowPhaseManualActionAffordances } from './flowOperations'
 import { createPlanStore } from './planStore'
 
 async function makeTempDir(): Promise<string> {
@@ -10,6 +10,81 @@ async function makeTempDir(): Promise<string> {
 }
 
 describe('Flow operations', () => {
+  it('computes manual phase affordances from the persisted transition rules', () => {
+    const baseFlow = {
+      schema_version: 1 as const,
+      flow_id: 'manual-actions',
+      title: 'Manual actions',
+      status: 'active',
+      repo_path: '/repo',
+      created_at: '2026-06-15T12:00:00.000Z',
+      updated_at: '2026-06-15T12:00:00.000Z',
+      phases: []
+    }
+    const phase = (status: string, overrides: Record<string, unknown> = {}) => ({
+      phase_id: `phase-${status}`,
+      title: `Phase ${status}`,
+      status,
+      order: 1,
+      ...overrides
+    })
+    const actionIds = (status: string, overrides: Record<string, unknown> = {}) =>
+      getFlowPhaseManualActionAffordances({
+        flow: baseFlow,
+        phase: phase(status, overrides)
+      }).map((action) => action.action)
+
+    expect(actionIds('blocked')).toEqual(['restart'])
+    expect(actionIds('needs_attention')).toEqual(['restart'])
+    expect(actionIds('completed')).toEqual(['restart'])
+    expect(actionIds('skipped')).toEqual(['restart'])
+    expect(actionIds('active')).toEqual(['restart', 'block', 'needs_attention'])
+    expect(actionIds('done')).toEqual(['restart'])
+    expect(actionIds('ready')).toEqual(['block', 'needs_attention'])
+    expect(actionIds('running')).toEqual(['block', 'needs_attention'])
+    expect(actionIds('pending')).toEqual([])
+
+    expect(actionIds('pending', {
+      parent_phase_id: 'implementation',
+      kind: 'implementation_child',
+      generated: true,
+      editable: true
+    })).toEqual(['skip'])
+    expect(actionIds('ready', {
+      parent_phase_id: 'implementation',
+      kind: 'implementation_child',
+      generated: true,
+      editable: true
+    })).toEqual(['block', 'needs_attention', 'skip'])
+    expect(actionIds('blocked', {
+      parent_phase_id: 'implementation',
+      kind: 'implementation_child',
+      generated: true,
+      editable: true
+    })).toEqual(['restart', 'skip'])
+    expect(actionIds('completed', {
+      parent_phase_id: 'implementation',
+      kind: 'implementation_child',
+      generated: true,
+      editable: true
+    })).toEqual(['restart'])
+
+    expect(actionIds('ready', { phase_id: 'pr-creation', kind: 'pr_creation' })).toEqual([])
+    expect(actionIds('blocked', { phase_id: 'human-review', kind: 'human_review' })).toEqual([])
+    expect(actionIds('running', { phase_id: 'merge', kind: 'merge' })).toEqual([])
+    expect(getFlowPhaseManualActionAffordances({
+      flow: {
+        ...baseFlow,
+        merge: {
+          status: 'merged',
+          commit: '0123456789abcdef0123456789abcdef01234567',
+          merged_at: '2026-06-15T12:05:00.000Z'
+        }
+      },
+      phase: phase('blocked')
+    })).toEqual([])
+  })
+
   it('creates new Flows with the default Grindstone phase graph', async () => {
     const flows = createFlowOperations({ artifactRoot: await makeTempDir() })
 

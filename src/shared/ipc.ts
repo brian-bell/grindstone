@@ -13,6 +13,7 @@ import type {
   FlowTerminalSummary,
   InitialWorkspaceState,
   LaunchFlowPhaseRequest,
+  ManualUpdateFlowPhaseRequest,
   RecordFlowHumanReviewRequest,
   RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
@@ -36,6 +37,7 @@ export const ipcChannels = {
     createFlow: 'workspace:createFlow',
     updateFlowPhase: 'workspace:updateFlowPhase',
     launchFlowPhase: 'workspace:launchFlowPhase',
+    manualUpdateFlowPhase: 'workspace:manualUpdateFlowPhase',
     skipFlowPhase: 'workspace:skipFlowPhase',
     completeFlowPhase: 'workspace:completeFlowPhase',
     recordFlowPullRequest: 'workspace:recordFlowPullRequest',
@@ -75,6 +77,7 @@ export type IpcRequestMap = {
   'workspace:createFlow': CreateFlowRequest
   'workspace:updateFlowPhase': UpdateFlowPhaseRequest
   'workspace:launchFlowPhase': LaunchFlowPhaseRequest
+  'workspace:manualUpdateFlowPhase': ManualUpdateFlowPhaseRequest
   'workspace:skipFlowPhase': SkipFlowPhaseRequest
   'workspace:completeFlowPhase': CompleteFlowPhaseRequest
   'workspace:recordFlowPullRequest': RecordFlowPullRequestRequest
@@ -100,6 +103,7 @@ export type IpcResponseMap = {
   'workspace:createFlow': InitialWorkspaceState
   'workspace:updateFlowPhase': InitialWorkspaceState
   'workspace:launchFlowPhase': InitialWorkspaceState
+  'workspace:manualUpdateFlowPhase': InitialWorkspaceState
   'workspace:skipFlowPhase': InitialWorkspaceState
   'workspace:completeFlowPhase': InitialWorkspaceState
   'workspace:recordFlowPullRequest': InitialWorkspaceState

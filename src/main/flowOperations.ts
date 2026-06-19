@@ -25,6 +25,7 @@ import {
 } from './artifactStore'
 import { createPlanStore } from './planStore'
 import { extractImplementationPhaseDrafts, type ImplementationPhaseDraft } from './planPhaseExtraction'
+import type { FlowPhaseManualAction, FlowPhaseManualActionAffordance } from '@shared/workspace'
 
 export type CreateFlowInput = {
   id?: string
@@ -139,10 +140,102 @@ const DEFAULT_PHASE_COMPLETION_PROMOTIONS = new Map([
 ])
 const PHASE_STATUSES_REQUIRING_NOTES = new Set(['blocked', 'needs_attention', 'skipped'])
 const SAFE_PHASE_OUTCOME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+const MANUAL_RESTART_FROM_STATUSES = new Set(['blocked', 'needs_attention', 'completed', 'skipped', 'active', 'done'])
+const MANUAL_MARK_FROM_STATUSES = new Set(['ready', 'running', 'active'])
+const MANUAL_SKIP_IMPLEMENTATION_CHILD_FROM_STATUSES = new Set([
+  'pending',
+  'ready',
+  'running',
+  'needs_attention',
+  'blocked'
+])
 
 type FlowFileVersion = {
   mtimeMs: number
   size: number
+}
+
+export function getFlowPhaseManualActionAffordances({
+  flow,
+  phase
+}: {
+  flow: PersistedFlowMetadata
+  phase: PersistedFlowPhase
+}): FlowPhaseManualActionAffordance[] {
+  if (normalizeFlowMergeMetadata(flow.merge).status === 'merged' || isStructuredManualPhase(phase)) {
+    return []
+  }
+
+  const actions: FlowPhaseManualActionAffordance[] = []
+  if (
+    MANUAL_RESTART_FROM_STATUSES.has(phase.status) &&
+    canTransition(phase.status, 'running')
+  ) {
+    actions.push(manualActionAffordance('restart'))
+  }
+  if (
+    MANUAL_MARK_FROM_STATUSES.has(phase.status) &&
+    canTransition(phase.status, 'blocked')
+  ) {
+    actions.push(manualActionAffordance('block'))
+  }
+  if (
+    MANUAL_MARK_FROM_STATUSES.has(phase.status) &&
+    canTransition(phase.status, 'needs_attention')
+  ) {
+    actions.push(manualActionAffordance('needs_attention'))
+  }
+  if (
+    isImplementationChildPhase(phase) &&
+    MANUAL_SKIP_IMPLEMENTATION_CHILD_FROM_STATUSES.has(phase.status) &&
+    canTransition(phase.status, 'skipped')
+  ) {
+    actions.push(manualActionAffordance('skip'))
+  }
+  return actions
+}
+
+function manualActionAffordance(action: FlowPhaseManualAction): FlowPhaseManualActionAffordance {
+  if (action === 'restart') {
+    return {
+      action,
+      label: 'Restart',
+      requiresNotes: false,
+      allowsBlankNotes: true
+    }
+  }
+  if (action === 'block') {
+    return {
+      action,
+      label: 'Block',
+      requiresNotes: true
+    }
+  }
+  if (action === 'needs_attention') {
+    return {
+      action,
+      label: 'Needs attention',
+      requiresNotes: true
+    }
+  }
+  return {
+    action,
+    label: 'Skip',
+    requiresNotes: true
+  }
+}
+
+function canTransition(currentStatus: string, nextStatus: string): boolean {
+  return ALLOWED_PHASE_TRANSITIONS.get(currentStatus)?.has(nextStatus) ?? false
+}
+
+function isStructuredManualPhase(phase: PersistedFlowPhase): boolean {
+  return phase.phase_id === 'pr-creation' ||
+    phase.phase_id === 'human-review' ||
+    phase.phase_id === 'merge' ||
+    phase.kind === 'pr_creation' ||
+    phase.kind === 'human_review' ||
+    phase.kind === 'merge'
 }
 
 export function createFlowOperations(options: { artifactRoot: string }): FlowOperations {
