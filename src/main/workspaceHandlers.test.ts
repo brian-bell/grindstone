@@ -206,6 +206,50 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it('loads repository Flow rows only from the configured Grindstone artifact root', async () => {
+    const root = await makeTempDir()
+    const repoPath = join(root, 'repo-separated')
+    const grindstoneRoot = join(root, 'grindstone-artifacts')
+    const wtuiRoot = join(root, 'wtui-artifacts')
+    await makeGitRepository(repoPath)
+    await writeFlowMeta(
+      wtuiRoot,
+      'wtui-flow',
+      flowMeta('wtui-flow', repoPath, {
+        title: 'wtui Flow',
+        updated_at: '2026-06-12T10:00:00.000Z'
+      })
+    )
+    await writeFlowMeta(
+      grindstoneRoot,
+      'grindstone-flow',
+      flowMeta('grindstone-flow', repoPath, {
+        title: 'Grindstone Flow',
+        updated_at: '2026-06-11T10:00:00.000Z'
+      })
+    )
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${grindstoneRoot}"\n`)
+
+    const state = await loadInitialWorkspaceState({
+      configPath,
+      env: { WTUI_FLOW_STATE_ROOT: wtuiRoot } as NodeJS.ProcessEnv
+    })
+    const repositoryId = state.repository.repositories[0]?.id ?? ''
+
+    await expect(selectRepository({ repositoryId })).resolves.toMatchObject({
+      flow: {
+        status: 'ready',
+        flows: [
+          {
+            id: 'grindstone-flow',
+            title: 'Grindstone Flow'
+          }
+        ]
+      }
+    })
+  })
+
   it('reads a CLI-linked plan only through the selected Flow context', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-plan')
