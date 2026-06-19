@@ -30,8 +30,7 @@ Grindstone reads the first config file found at:
 
 If neither file exists, the repository catalog starts empty and Flow artifacts
 default to the Grindstone state root at `~/.local/state/grindstone/sessions/v1`.
-Supported
-repository TOML keys are top-level arrays of strings:
+Supported repository TOML keys are top-level arrays of strings:
 
 ```toml
 scan_roots = ["~/dev", "../workspace"]
