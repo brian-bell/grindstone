@@ -47,8 +47,8 @@ describe('Grindstone config loader', () => {
         }
       ],
       artifactRoot: {
-        configuredPath: '~/.local/state/wtui/sessions/v1',
-        resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
+        configuredPath: '~/.local/state/grindstone/sessions/v1',
+        resolvedPath: join(root, '.local', 'state', 'grindstone', 'sessions', 'v1')
       },
       defaultAgent: null,
       bootstrapHooks: [],
@@ -56,7 +56,7 @@ describe('Grindstone config loader', () => {
     })
   })
 
-  it('resolves the default wtui artifact root when no config exists', async () => {
+  it('resolves the default Grindstone artifact root when no config exists', async () => {
     const root = await makeTempDir()
 
     await expect(
@@ -68,13 +68,13 @@ describe('Grindstone config loader', () => {
     ).resolves.toMatchObject({
       ok: true,
       artifactRoot: {
-        configuredPath: '~/.local/state/wtui/sessions/v1',
-        resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
+        configuredPath: '~/.local/state/grindstone/sessions/v1',
+        resolvedPath: join(root, '.local', 'state', 'grindstone', 'sessions', 'v1')
       }
     })
   })
 
-  it('resolves the default wtui artifact root below XDG_STATE_HOME when set', async () => {
+  it('resolves the default Grindstone artifact root below XDG_STATE_HOME when set', async () => {
     const root = await makeTempDir()
     const stateRoot = join(root, 'state-home')
 
@@ -90,8 +90,8 @@ describe('Grindstone config loader', () => {
     ).resolves.toMatchObject({
       ok: true,
       artifactRoot: {
-        configuredPath: join(stateRoot, 'wtui', 'sessions', 'v1'),
-        resolvedPath: join(stateRoot, 'wtui', 'sessions', 'v1')
+        configuredPath: join(stateRoot, 'grindstone', 'sessions', 'v1'),
+        resolvedPath: join(stateRoot, 'grindstone', 'sessions', 'v1')
       }
     })
   })
@@ -146,8 +146,8 @@ describe('Grindstone config loader', () => {
       scanRoots: [],
       repos: [],
       artifactRoot: {
-        configuredPath: '~/.local/state/wtui/sessions/v1',
-        resolvedPath: join(root, '.local', 'state', 'wtui', 'sessions', 'v1')
+        configuredPath: '~/.local/state/grindstone/sessions/v1',
+        resolvedPath: join(root, '.local', 'state', 'grindstone', 'sessions', 'v1')
       },
       defaultAgent: null,
       bootstrapHooks: [],

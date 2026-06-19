@@ -302,6 +302,12 @@ describe('terminal session manager', () => {
       idFactory: vi.fn()
         .mockReturnValueOnce('terminal-123')
         .mockReturnValueOnce('launch-123'),
+      env: {
+        GRINDSTONE_STATE_ROOT: join(root, 'ambient-grindstone'),
+        WTUI_FLOW_STATE_ROOT: join(root, 'ambient-flow'),
+        WTUI_PLAN_STATE_ROOT: join(root, 'ambient-plan'),
+        WTUI_SESSION_STATE_ROOT: join(root, 'ambient-session')
+      } as NodeJS.ProcessEnv,
       onEvent: (event) => events.push(event)
     })
 
@@ -345,9 +351,17 @@ describe('terminal session manager', () => {
         args: ['Implement the approved plan.'],
         cwd: join(root, 'worktree'),
         env: expect.objectContaining({
+          GRINDSTONE_STATE_ROOT: artifactRoot,
+          GRINDSTONE_FLOW_ID: 'launch-terminal',
+          GRINDSTONE_PHASE_ID: 'plan',
+          GRINDSTONE_PLAN_ID: 'plan-123',
+          GRINDSTONE_LAUNCH_ID: 'launch-123',
           WTUI_FLOW_ID: 'launch-terminal',
           WTUI_FLOW_PHASE_ID: 'plan',
-          WTUI_LAUNCH_ID: 'launch-123'
+          WTUI_LAUNCH_ID: 'launch-123',
+          WTUI_FLOW_STATE_ROOT: artifactRoot,
+          WTUI_PLAN_STATE_ROOT: artifactRoot,
+          WTUI_SESSION_STATE_ROOT: artifactRoot
         })
       })
     ])

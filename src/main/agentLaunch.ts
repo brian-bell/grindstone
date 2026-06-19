@@ -75,6 +75,17 @@ function buildArgv(context: AgentLaunchContext): string[] {
 
 function buildMetadataEnv(context: AgentLaunchContext): Record<string, string> {
   return withoutBlank({
+    GRINDSTONE_STATE_ROOT: context.artifactRoots.flowStateRoot,
+    GRINDSTONE_AGENT: context.provider,
+    GRINDSTONE_FLOW_ID: context.flowId,
+    GRINDSTONE_PHASE_ID: context.phaseId,
+    GRINDSTONE_PLAN_ID: context.planId,
+    GRINDSTONE_PLAN_PATH: context.planPath,
+    GRINDSTONE_LAUNCH_ID: context.launchId,
+    GRINDSTONE_REPO_PATH: context.repositoryPath,
+    GRINDSTONE_WORKTREE_PATH: context.worktreePath,
+    GRINDSTONE_BRANCH: context.branch,
+    GRINDSTONE_COMMIT: context.commit,
     WTUI_AGENT: context.provider,
     WTUI_FLOW_ID: context.flowId,
     WTUI_FLOW_PHASE_ID: context.phaseId,

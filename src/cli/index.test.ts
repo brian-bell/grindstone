@@ -157,6 +157,66 @@ describe('grindstone CLI', () => {
     expect(readIo.stdout.value).toBe('# Plan\n')
   })
 
+  it('ignores ambient wtui state roots for flow list unless a state root is explicit', async () => {
+    const root = await makeTempDir()
+    const grindstoneRoot = join(root, 'grindstone-state')
+    const wtuiRoot = join(root, 'wtui-state')
+    const configPath = join(root, 'grindstone.toml')
+    await writeFile(configPath, `artifact_root = "${grindstoneRoot}"\n`)
+
+    const grindstoneCreateIo = io('', { WTUI_FLOW_STATE_ROOT: wtuiRoot } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'create',
+      '--config',
+      configPath,
+      '--title',
+      'Grindstone Flow',
+      '--repo-path',
+      '/repo'
+    ], grindstoneCreateIo)).resolves.toBe(0)
+
+    const wtuiCreateIo = io()
+    await expect(runCli([
+      'flow',
+      'create',
+      '--state-root',
+      wtuiRoot,
+      '--title',
+      'wtui Flow',
+      '--repo-path',
+      '/repo'
+    ], wtuiCreateIo)).resolves.toBe(0)
+
+    const defaultListIo = io('', { WTUI_FLOW_STATE_ROOT: wtuiRoot } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'list',
+      '--config',
+      configPath,
+      '--repo-path',
+      '/repo'
+    ], defaultListIo)).resolves.toBe(0)
+    expect(JSON.parse(defaultListIo.stdout.value)).toEqual([
+      expect.objectContaining({ title: 'Grindstone Flow' })
+    ])
+
+    const explicitWtuiListIo = io('', { WTUI_FLOW_STATE_ROOT: join(root, 'ignored') } as NodeJS.ProcessEnv)
+    await expect(runCli([
+      'flow',
+      'list',
+      '--state-root',
+      wtuiRoot,
+      '--config',
+      configPath,
+      '--repo-path',
+      '/repo'
+    ], explicitWtuiListIo)).resolves.toBe(0)
+    expect(JSON.parse(explicitWtuiListIo.stdout.value)).toEqual([
+      expect.objectContaining({ title: 'wtui Flow' })
+    ])
+  })
+
   it('completes PR Creation with structured PR metadata flags', async () => {
     const root = await makeTempDir()
     const createIo = io('', { GRINDSTONE_STATE_ROOT: root } as NodeJS.ProcessEnv)

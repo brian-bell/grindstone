@@ -29,7 +29,8 @@ Grindstone reads the first config file found at:
 2. `${XDG_CONFIG_HOME:-~/.config}/grindstone/config.toml`
 
 If neither file exists, the repository catalog starts empty and Flow artifacts
-default to the wtui state root at `~/.local/state/wtui/sessions/v1`. Supported
+default to the Grindstone state root at `~/.local/state/grindstone/sessions/v1`.
+Supported
 repository TOML keys are top-level arrays of strings:
 
 ```toml
@@ -48,22 +49,22 @@ Configure the artifact root with:
 
 ```toml
 [artifacts]
-root = "~/.local/state/wtui/sessions/v1"
+root = "~/.local/state/grindstone/sessions/v1"
 ```
 
-The artifact root is the wtui state root, so `flows/` and `plans/` are siblings
-below it. Relative artifact roots use the same config-file-relative resolution
-rules as repository paths.
+The artifact root is Grindstone-owned by default, so Flow records, plans,
+launches, and sessions do not appear in a default wtui installation. Relative
+artifact roots use the same config-file-relative resolution rules as repository
+paths. Configured `artifact_root`, legacy `[artifacts].root`, and explicit
+CLI `--state-root` values can still intentionally point at shared storage.
 
 The CLI resolves its artifact root in this order:
 
 1. `--state-root PATH`
 2. `GRINDSTONE_STATE_ROOT`
-3. `WTUI_FLOW_STATE_ROOT`, `WTUI_PLAN_STATE_ROOT`, then
-   `WTUI_SESSION_STATE_ROOT`
-4. configured `artifact_root` or legacy `[artifacts].root`
-5. `${XDG_STATE_HOME}/wtui/sessions/v1` or
-   `~/.local/state/wtui/sessions/v1`
+3. configured `artifact_root` or legacy `[artifacts].root`
+4. `${XDG_STATE_HOME}/grindstone/sessions/v1` or
+   `~/.local/state/grindstone/sessions/v1`
 
 ## Agent CLI
 
@@ -87,6 +88,13 @@ grindstone session-hook ingest --provider codex --flow-id FLOW --phase-id implem
 Explicit metadata flags override `GRINDSTONE_*` environment variables, which
 override the matching `WTUI_*` aliases for Flow id, phase id, plan id, repo
 path, worktree path, branch, commit, and launch id.
+
+Grindstone-launched agent terminals receive both `GRINDSTONE_*` metadata and
+`WTUI_*` aliases, including `WTUI_FLOW_STATE_ROOT`, `WTUI_PLAN_STATE_ROOT`, and
+`WTUI_SESSION_STATE_ROOT` pointing at the configured Grindstone artifact root.
+Those wtui-compatible aliases let `wtui-flow` persist phase progress back to the
+Grindstone Flow record, but ambient `WTUI_*_STATE_ROOT` variables are not used
+as Grindstone's default artifact root.
 
 Session hooks persist normalized transcripts under
 `sessions/<provider>/<session-id>/transcript.jsonl` with private artifact
@@ -149,7 +157,7 @@ Main, preload, and renderer builds are configured in
 
 ## Current Scope
 
-This shell can list existing wtui Flow metadata for the selected repository,
-create Flow records, inspect linked plans from selected Flow context, and accept
-agent-facing CLI updates. It does not yet launch terminals/sessions, manage PR
-workflows, or expose standalone plan/session middle-pane routes.
+This shell can list existing Grindstone Flow metadata for the selected repository,
+create Flow records, launch Flow phases in embedded terminals, inspect linked
+plans from selected Flow context, and accept agent-facing CLI updates. It does
+not yet manage PR workflows or expose standalone plan/session middle-pane routes.

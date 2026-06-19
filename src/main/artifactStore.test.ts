@@ -16,7 +16,7 @@ async function makeTempDir(): Promise<string> {
 }
 
 describe('artifact store helpers', () => {
-  it('resolves artifact roots using CLI and wtui environment precedence before config defaults', async () => {
+  it('resolves artifact roots using explicit and Grindstone environment precedence before config defaults', async () => {
     const root = await makeTempDir()
     const configPath = join(root, 'grindstone.toml')
     await writeFile(configPath, `artifact_root = "${join(root, 'from-config')}"\n`)
@@ -44,9 +44,24 @@ describe('artifact store helpers', () => {
         WTUI_FLOW_STATE_ROOT: join(root, 'flow-env'),
         WTUI_PLAN_STATE_ROOT: join(root, 'plan-env')
       }
-    })).resolves.toBe(join(root, 'flow-env'))
+    })).resolves.toBe(join(root, 'from-config'))
 
     await expect(resolveArtifactRoot({ configPath, env: {} })).resolves.toBe(join(root, 'from-config'))
+  })
+
+  it('falls back to the Grindstone default root when only ambient wtui roots are set', async () => {
+    const root = await makeTempDir()
+
+    await expect(resolveArtifactRoot({
+      cwd: join(root, 'missing-cwd'),
+      env: {
+        XDG_CONFIG_HOME: join(root, 'missing-config'),
+        WTUI_FLOW_STATE_ROOT: join(root, 'flow-env'),
+        WTUI_PLAN_STATE_ROOT: join(root, 'plan-env'),
+        WTUI_SESSION_STATE_ROOT: join(root, 'session-env')
+      },
+      homeDir: root
+    })).resolves.toBe(join(root, '.local', 'state', 'grindstone', 'sessions', 'v1'))
   })
 
   it('rejects invalid config instead of falling back to the default artifact root', async () => {
