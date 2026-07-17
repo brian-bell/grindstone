@@ -1657,6 +1657,75 @@ describe('App shell', () => {
     expect(within(flowPane).queryByRole('region', { name: /linked plan/i })).not.toBeInTheDocument()
   })
 
+  it('applies plan responses only for the latest open request', async () => {
+    const user = userEvent.setup()
+    const planResolvers: Array<(response: LinkedFlowPlanResponse) => void> = []
+    const readFlowPlan = vi.fn(
+      () => new Promise<LinkedFlowPlanResponse>((resolve) => {
+        planResolvers.push(resolve)
+      })
+    )
+    const planResponse = (title: string, body: string): LinkedFlowPlanResponse => ({
+      status: 'ready',
+      metadata: {
+        schema_version: 1,
+        plan_id: 'plan-flow-list',
+        title,
+        status: 'approved',
+        plan_path: '/artifacts/plans/plan-flow-list/plan.md',
+        created_at: '2026-06-15T10:00:00.000Z',
+        updated_at: '2026-06-15T10:00:00.000Z'
+      },
+      body
+    })
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: selectedCatalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      readFlowPlan
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(screen.getByRole('button', { name: /artifact backed flow/i }))
+    const planButton = within(flowPane).getByRole('button', {
+      name: /open plan plan-flow-list for artifact backed flow/i
+    })
+
+    await user.click(planButton)
+    expect(await within(flowPane).findByRole('status', {
+      name: /artifact backed flow linked plan/i
+    })).toBeInTheDocument()
+
+    await user.click(planButton)
+    expect(within(flowPane).queryByRole('status', { name: /linked plan/i }))
+      .not.toBeInTheDocument()
+
+    await act(async () => {
+      planResolvers[0]?.(planResponse('Late Plan', 'Late body'))
+    })
+    expect(within(flowPane).queryByText('Late body')).not.toBeInTheDocument()
+
+    await user.click(planButton)
+    expect(await within(flowPane).findByRole('status', {
+      name: /artifact backed flow linked plan/i
+    })).toBeInTheDocument()
+    await act(async () => {
+      planResolvers[1]?.(planResponse('Current Plan', 'Current body'))
+    })
+    expect(await within(flowPane).findByText('Current body')).toBeInTheDocument()
+    expect(within(flowPane).queryByText('Late body')).not.toBeInTheDocument()
+  })
+
   it('renders Flow terminal tabs and routes terminal controls through scoped preload calls', async () => {
     const user = userEvent.setup()
     const terminalState: InitialWorkspaceState = {

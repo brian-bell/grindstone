@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import type { FlowListRow, InitialWorkspaceState } from '@shared/workspace'
 import { getErrorMessage } from '../utils/errors'
 import { formatFailureSummary, formatFlowTooltip } from '../utils/flowFormat'
@@ -14,6 +14,7 @@ export function FlowDetailView({
   onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
 }): ReactElement {
   const [planView, setPlanView] = useState<FlowPlanViewState | null>(null)
+  const planRequestRef = useRef(0)
   const planDetailsId = `flow-plan-${flow.id}`
   const details = formatFlowTooltip(flow)
 
@@ -22,20 +23,32 @@ export function FlowDetailView({
       return
     }
 
+    // Every toggle invalidates the previous request: a response is applied
+    // only while it is still the latest open request for this panel.
+    planRequestRef.current += 1
+    const requestId = planRequestRef.current
+
     if (planView !== null) {
       setPlanView(null)
       return
     }
 
-    setPlanView({ status: 'loading', planId: flow.planId })
+    const planId = flow.planId
+    setPlanView({ status: 'loading', planId })
 
     try {
       const response = await window.grindstone.workspace.readFlowPlan({ flowId: flow.id })
-      setPlanView(toFlowPlanViewState(flow.planId, response))
+      if (requestId !== planRequestRef.current) {
+        return
+      }
+      setPlanView(toFlowPlanViewState(planId, response))
     } catch (error: unknown) {
+      if (requestId !== planRequestRef.current) {
+        return
+      }
       setPlanView({
         status: 'missing',
-        planId: flow.planId ?? '',
+        planId,
         message: getErrorMessage(error)
       })
     }
