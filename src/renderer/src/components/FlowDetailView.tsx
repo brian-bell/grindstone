@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import type { FlowListRow, InitialWorkspaceState } from '@shared/workspace'
 import { getErrorMessage } from '../utils/errors'
 import { formatFailureSummary, formatFlowTooltip } from '../utils/flowFormat'
@@ -16,10 +16,6 @@ export function FlowDetailView({
   const [planView, setPlanView] = useState<FlowPlanViewState | null>(null)
   const planDetailsId = `flow-plan-${flow.id}`
   const details = formatFlowTooltip(flow)
-
-  useEffect(() => {
-    setPlanView(null)
-  }, [flow.id])
 
   async function handlePlanOpen(): Promise<void> {
     if (flow.planId === undefined) {

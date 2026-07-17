@@ -1575,6 +1575,88 @@ describe('App shell', () => {
     expect(planPanel).toHaveTextContent('Ship the CLI.')
   })
 
+  it('discards in-flight plan responses after switching Flows', async () => {
+    const user = userEvent.setup()
+    let resolvePlan: (response: LinkedFlowPlanResponse) => void = () => undefined
+    const readFlowPlan = vi.fn(
+      () => new Promise<LinkedFlowPlanResponse>((resolve) => {
+        resolvePlan = resolve
+      })
+    )
+    const secondFlow: FlowListRow = {
+      id: 'second-flow',
+      title: 'Second Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
+      createdAt: '2026-06-12T10:00:00.000Z',
+      updatedAt: '2026-06-12T11:00:00.000Z'
+    }
+    const twoFlowState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: { available: true, error: null },
+        flows: [...(selectedCatalogState.flow.status === 'ready'
+          ? selectedCatalogState.flow.flows
+          : []), secondFlow]
+      }
+    }
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(twoFlowState),
+      vi.fn().mockResolvedValue(twoFlowState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: twoFlowState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(twoFlowState),
+      readFlowPlan
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(screen.getByRole('button', { name: /artifact backed flow/i }))
+    await user.click(within(flowPane).getByRole('button', {
+      name: /open plan plan-flow-list for artifact backed flow/i
+    }))
+    expect(await within(flowPane).findByRole('status', {
+      name: /artifact backed flow linked plan/i
+    })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /second flow/i }))
+    expect(await within(flowPane).findByRole('heading', {
+      level: 1,
+      name: 'Second Flow'
+    })).toBeInTheDocument()
+
+    await act(async () => {
+      resolvePlan({
+        status: 'ready',
+        metadata: {
+          schema_version: 1,
+          plan_id: 'plan-flow-list',
+          title: 'Stale Plan',
+          status: 'approved',
+          plan_path: '/artifacts/plans/plan-flow-list/plan.md',
+          created_at: '2026-06-15T10:00:00.000Z',
+          updated_at: '2026-06-15T10:00:00.000Z'
+        },
+        body: 'Stale plan body'
+      })
+    })
+
+    expect(within(flowPane).queryByText('Stale plan body')).not.toBeInTheDocument()
+    expect(within(flowPane).queryByRole('region', { name: /linked plan/i })).not.toBeInTheDocument()
+  })
+
   it('renders Flow terminal tabs and routes terminal controls through scoped preload calls', async () => {
     const user = userEvent.setup()
     const terminalState: InitialWorkspaceState = {

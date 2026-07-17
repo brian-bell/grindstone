@@ -51,9 +51,13 @@ export function FlowWorkspaceStateView({
 
   if (state.status === 'ready') {
     if (selectedFlow !== null) {
+      // Keying by flow id resets detail-local state (plan panel, terminal tab,
+      // phase drafts) on selection change and guarantees in-flight plan reads
+      // from a previously selected Flow resolve into an unmounted view.
       return (
         <FlowDetailView
           flow={selectedFlow}
+          key={selectedFlow.id}
           onWorkspaceUpdate={onWorkspaceUpdate}
         />
       )
