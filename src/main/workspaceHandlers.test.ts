@@ -3154,7 +3154,9 @@ describe('workspace main handlers', () => {
     const sender = {
       sender: {
         id: 1,
-        send: vi.fn()
+        send: vi.fn(),
+        isDestroyed: () => false,
+        isCrashed: () => false
       }
     }
 
