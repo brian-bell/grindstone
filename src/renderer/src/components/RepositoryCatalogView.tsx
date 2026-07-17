@@ -1,5 +1,5 @@
 import { Settings } from 'lucide-react'
-import type { ReactElement } from 'react'
+import type { ReactElement, RefObject } from 'react'
 import type {
   CatalogDiagnostic,
   InitialWorkspaceState,
@@ -11,12 +11,14 @@ import { RepositoryCreatePanel } from './RepositoryCreatePanel'
 export function RepositoryCatalogView({
   isLoading,
   repository,
+  configureButtonRef,
   onSelect,
   onConfigure,
   onWorkspaceUpdate
 }: {
   isLoading: boolean
   repository: RepositoryPaneState
+  configureButtonRef?: RefObject<HTMLButtonElement | null>
   onSelect: (repository: RepositoryRow) => Promise<void>
   onConfigure: () => void
   onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
@@ -39,7 +41,12 @@ export function RepositoryCatalogView({
       <div className="repository-summary">
         <p className="repository-status-title">{repository.title}</p>
         <p>{repository.description}</p>
-        <button className="configure-button" type="button" onClick={onConfigure}>
+        <button
+          className="configure-button"
+          onClick={onConfigure}
+          ref={configureButtonRef}
+          type="button"
+        >
           <Settings aria-hidden="true" size={16} />
           <span>Configure</span>
         </button>

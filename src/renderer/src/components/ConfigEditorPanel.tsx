@@ -1,24 +1,22 @@
 import {
-  PanelRightClose,
   Plus,
   RotateCcw,
   Save,
-  Settings,
   Trash2,
   X
 } from 'lucide-react'
 import {
   useEffect,
+  useRef,
   useState,
-  type ReactElement,
-  type RefObject
+  type KeyboardEvent,
+  type ReactElement
 } from 'react'
 import type {
   CommonConfigUpdateInput,
   ConfigFieldError,
   EditableConfigState
 } from '@shared/config'
-import { RIGHT_PANE_CONTENT_ID } from '../constants'
 import { getErrorMessage } from '../utils/errors'
 import {
   createConfigInput,
@@ -30,19 +28,17 @@ import {
 } from '../utils/configDraft'
 
 export function ConfigEditorPanel({
-  collapseButtonRef,
+  open,
   config,
   loadError,
-  onCancel,
-  onCollapse,
+  onClose,
   onReload,
   onSave
 }: {
-  collapseButtonRef: RefObject<HTMLButtonElement | null>
+  open: boolean
   config: EditableConfigState | null
   loadError: string | null
-  onCancel: () => void
-  onCollapse: () => void
+  onClose: () => void
   onReload: () => Promise<void>
   onSave: (input: CommonConfigUpdateInput) => Promise<ConfigSaveResult>
 }): ReactElement {
@@ -52,11 +48,24 @@ export function ConfigEditorPanel({
   const [isSaving, setIsSaving] = useState(false)
   const [isReloading, setIsReloading] = useState(false)
   const [showReloadAction, setShowReloadAction] = useState(false)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const wasOpenRef = useRef(open)
 
   useEffect(() => {
     setDraft(createDraft(config))
     setFieldErrors([])
   }, [config])
+
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      const firstField = dialogRef.current?.querySelector<HTMLElement>(
+        '.config-panel input, .config-panel select, .config-panel textarea'
+      )
+      ;(firstField ?? closeButtonRef.current)?.focus()
+    }
+    wasOpenRef.current = open
+  }, [open])
 
   const errorsByField = new Map(fieldErrors.map((error) => [error.field, error.message]))
 
@@ -105,125 +114,182 @@ export function ConfigEditorPanel({
     }
   }
 
+  function getFocusableElements(): HTMLElement[] {
+    if (dialogRef.current === null) {
+      return []
+    }
+
+    return [...dialogRef.current.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
+    )].filter((element) => !element.classList.contains('focus-sentinel'))
+  }
+
+  function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+      return
+    }
+
+    if (event.key !== 'Tab') {
+      return
+    }
+
+    const focusable = getFocusableElements()
+    const firstElement = focusable[0]
+    const lastElement = focusable[focusable.length - 1]
+
+    if (firstElement === undefined || lastElement === undefined) {
+      event.preventDefault()
+      return
+    }
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault()
+      lastElement.focus()
+      return
+    }
+
+    if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault()
+      firstElement.focus()
+    }
+  }
+
   return (
-    <>
-      <div className="pane-header config-header">
-        <Settings aria-hidden="true" size={18} />
-        <h2 id="context-pane-title">Common Config</h2>
+    <div className="modal-backdrop" hidden={!open}>
+      <div
+        aria-labelledby="config-dialog-title"
+        aria-modal="true"
+        className="modal-dialog config-dialog"
+        onKeyDown={handleDialogKeyDown}
+        ref={dialogRef}
+        role="dialog"
+      >
+        <span
+          className="focus-sentinel"
+          data-focus-sentinel="true"
+          onFocus={() => getFocusableElements().at(-1)?.focus()}
+          tabIndex={0}
+        />
+        <div className="modal-header">
+          <h2 id="config-dialog-title">Common Config</h2>
+        </div>
+
+        <div className="config-panel">
+          {loadError !== null ? (
+            <div className="form-message error-message" role="alert">
+              {loadError}
+            </div>
+          ) : null}
+
+          {config === null && loadError === null ? (
+            <div className="form-message" role="status">
+              Loading config
+            </div>
+          ) : null}
+
+          <PathListEditor
+            label="Scan roots"
+            fieldName="scan_roots"
+            values={draft.scan_roots}
+            errorsByField={errorsByField}
+            onChange={(scanRoots) => setDraft({ ...draft, scan_roots: scanRoots })}
+          />
+
+          <PathListEditor
+            label="Explicit repositories"
+            fieldName="repos"
+            values={draft.repos}
+            errorsByField={errorsByField}
+            onChange={(repos) => setDraft({ ...draft, repos })}
+          />
+
+          <label className="form-field">
+            <span>Default agent</span>
+            <select
+              aria-label="Default agent"
+              value={draft.default_agent}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  default_agent: event.currentTarget.value as ConfigDraft['default_agent']
+                })
+              }
+            >
+              <option value="">No default</option>
+              <option value="codex">Codex</option>
+              <option value="claude">Claude</option>
+            </select>
+            <FieldError message={errorsByField.get('default_agent')} />
+          </label>
+
+          <label className="form-field">
+            <span>Artifact root</span>
+            <input
+              aria-label="Artifact root"
+              value={draft.artifact_root}
+              onChange={(event) => setDraft({ ...draft, artifact_root: event.currentTarget.value })}
+            />
+            <FieldError message={errorsByField.get('artifact_root')} />
+          </label>
+
+          <BootstrapHookEditor
+            hooks={draft.bootstrap_hooks}
+            errorsByField={errorsByField}
+          />
+
+          {statusMessage !== null ? (
+            <div className="form-message" role={fieldErrors.length > 0 ? 'alert' : 'status'}>
+              {statusMessage}
+            </div>
+          ) : null}
+
+          {showReloadAction ? (
+            <button
+              className="secondary-button reload-button"
+              type="button"
+              onClick={() => void handleReload()}
+            >
+              <RotateCcw aria-hidden="true" size={16} />
+              <span>{isReloading ? 'Reloading config' : 'Reload config'}</span>
+            </button>
+          ) : null}
+
+          <div className="form-actions">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              <X aria-hidden="true" size={16} />
+              <span>Cancel</span>
+            </button>
+            <button
+              className="primary-button"
+              disabled={config === null || loadError !== null || isSaving}
+              type="button"
+              onClick={() => void handleSave()}
+            >
+              <Save aria-hidden="true" size={16} />
+              <span>{isSaving ? 'Saving' : 'Save'}</span>
+            </button>
+          </div>
+        </div>
+
         <button
-          aria-controls={RIGHT_PANE_CONTENT_ID}
-          aria-expanded="true"
-          aria-label="Collapse right pane"
-          className="icon-button context-toggle-button"
-          ref={collapseButtonRef}
-          title="Collapse right pane"
+          aria-label="Close config"
+          className="icon-button modal-close-button"
+          onClick={onClose}
+          ref={closeButtonRef}
           type="button"
-          onClick={onCollapse}
         >
-          <PanelRightClose aria-hidden="true" size={16} />
-        </button>
-        <button className="icon-button" type="button" onClick={onCancel} aria-label="Close config">
           <X aria-hidden="true" size={16} />
         </button>
+        <span
+          className="focus-sentinel"
+          data-focus-sentinel="true"
+          onFocus={() => getFocusableElements()[0]?.focus()}
+          tabIndex={0}
+        />
       </div>
-
-      <div className="config-panel">
-        {loadError !== null ? (
-          <div className="form-message error-message" role="alert">
-            {loadError}
-          </div>
-        ) : null}
-
-        {config === null && loadError === null ? (
-          <div className="form-message" role="status">
-            Loading config
-          </div>
-        ) : null}
-
-        <PathListEditor
-          label="Scan roots"
-          fieldName="scan_roots"
-          values={draft.scan_roots}
-          errorsByField={errorsByField}
-          onChange={(scanRoots) => setDraft({ ...draft, scan_roots: scanRoots })}
-        />
-
-        <PathListEditor
-          label="Explicit repositories"
-          fieldName="repos"
-          values={draft.repos}
-          errorsByField={errorsByField}
-          onChange={(repos) => setDraft({ ...draft, repos })}
-        />
-
-        <label className="form-field">
-          <span>Default agent</span>
-          <select
-            aria-label="Default agent"
-            value={draft.default_agent}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                default_agent: event.currentTarget.value as ConfigDraft['default_agent']
-              })
-            }
-          >
-            <option value="">No default</option>
-            <option value="codex">Codex</option>
-            <option value="claude">Claude</option>
-          </select>
-          <FieldError message={errorsByField.get('default_agent')} />
-        </label>
-
-        <label className="form-field">
-          <span>Artifact root</span>
-          <input
-            aria-label="Artifact root"
-            value={draft.artifact_root}
-            onChange={(event) => setDraft({ ...draft, artifact_root: event.currentTarget.value })}
-          />
-          <FieldError message={errorsByField.get('artifact_root')} />
-        </label>
-
-        <BootstrapHookEditor
-          hooks={draft.bootstrap_hooks}
-          errorsByField={errorsByField}
-        />
-
-        {statusMessage !== null ? (
-          <div className="form-message" role={fieldErrors.length > 0 ? 'alert' : 'status'}>
-            {statusMessage}
-          </div>
-        ) : null}
-
-        {showReloadAction ? (
-          <button
-            className="secondary-button reload-button"
-            type="button"
-            onClick={() => void handleReload()}
-          >
-            <RotateCcw aria-hidden="true" size={16} />
-            <span>{isReloading ? 'Reloading config' : 'Reload config'}</span>
-          </button>
-        ) : null}
-
-        <div className="form-actions">
-          <button className="secondary-button" type="button" onClick={onCancel}>
-            <X aria-hidden="true" size={16} />
-            <span>Cancel</span>
-          </button>
-          <button
-            className="primary-button"
-            disabled={config === null || loadError !== null || isSaving}
-            type="button"
-            onClick={() => void handleSave()}
-          >
-            <Save aria-hidden="true" size={16} />
-            <span>{isSaving ? 'Saving' : 'Save'}</span>
-          </button>
-        </div>
-      </div>
-    </>
+    </div>
   )
 }
 

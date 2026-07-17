@@ -1,15 +1,17 @@
 import type { ReactElement } from 'react'
-import type { FlowPaneState, InitialWorkspaceState } from '@shared/workspace'
-import { FlowCreatePanel } from './FlowCreatePanel'
-import { FlowRecordTable } from './FlowRecordTable'
+import type { FlowListRow, FlowPaneState, InitialWorkspaceState } from '@shared/workspace'
+import { FlowDetailView } from './FlowDetailView'
+import { FlowOverview } from './FlowOverview'
 
 export function FlowWorkspaceStateView({
-  createOpenRequest,
   state,
+  selectedFlow,
+  onSelectFlow,
   onWorkspaceUpdate
 }: {
-  createOpenRequest: number
   state: FlowPaneState
+  selectedFlow: FlowListRow | null
+  onSelectFlow: (flowId: string) => void
   onWorkspaceUpdate: (workspace: InitialWorkspaceState) => void
 }): ReactElement {
   if (state.status === 'loading') {
@@ -48,43 +50,29 @@ export function FlowWorkspaceStateView({
   }
 
   if (state.status === 'ready') {
+    if (selectedFlow !== null) {
+      return (
+        <FlowDetailView
+          flow={selectedFlow}
+          onWorkspaceUpdate={onWorkspaceUpdate}
+        />
+      )
+    }
+
     return (
-      <div className="flow-list-view">
-        <FlowCreatePanel
-          create={state.create}
-          openRequest={createOpenRequest}
-          onWorkspaceUpdate={onWorkspaceUpdate}
-        />
-
-        <div className="flow-list-header">
-          <p className="eyebrow">Flow</p>
-          <h2>{state.repositoryName} Flows</h2>
-          <p>{state.flows.length} {state.flows.length === 1 ? 'Flow' : 'Flows'} found.</p>
-        </div>
-
-        <FlowRecordTable
-          flows={state.flows}
-          onWorkspaceUpdate={onWorkspaceUpdate}
-          repositoryName={state.repositoryName}
-        />
-      </div>
+      <FlowOverview
+        flows={state.flows}
+        repositoryName={state.repositoryName}
+        onSelectFlow={onSelectFlow}
+      />
     )
   }
 
   return (
-    <div className="empty-flow-view">
-      {state.create === undefined ? null : (
-        <FlowCreatePanel
-          create={state.create}
-          openRequest={createOpenRequest}
-          onWorkspaceUpdate={onWorkspaceUpdate}
-        />
-      )}
-      <div className="state-block">
-        <p className="eyebrow">Flow</p>
-        <h2>{state.title}</h2>
-        <p>{state.description}</p>
-      </div>
+    <div className="state-block">
+      <p className="eyebrow">Flow</p>
+      <h2>{state.title}</h2>
+      <p>{state.description}</p>
     </div>
   )
 }
