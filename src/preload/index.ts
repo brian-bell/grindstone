@@ -9,6 +9,7 @@ import type {
   InitialWorkspaceState,
   FlowTerminalSummary,
   LaunchFlowPhaseRequest,
+  ManualUpdateFlowPhaseRequest,
   RecordFlowHumanReviewRequest,
   RecordFlowMergeRequest,
   RecordFlowPullRequestRequest,
@@ -87,6 +88,17 @@ const grindstoneApi = {
         return await invokeTypedIpc(
           ipcRenderer.invoke.bind(ipcRenderer),
           ipcChannels.workspace.launchFlowPhase,
+          request
+        )
+      } catch (error) {
+        throw normalizeIpcError(error)
+      }
+    },
+    async manualUpdateFlowPhase(request: ManualUpdateFlowPhaseRequest): Promise<InitialWorkspaceState> {
+      try {
+        return await invokeTypedIpc(
+          ipcRenderer.invoke.bind(ipcRenderer),
+          ipcChannels.workspace.manualUpdateFlowPhase,
           request
         )
       } catch (error) {

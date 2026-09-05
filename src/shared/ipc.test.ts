@@ -33,6 +33,7 @@ describe('IPC contract', () => {
     expect(ipcChannels.workspace.selectRepository).toBe('workspace:selectRepository')
     expect(ipcChannels.workspace.createFlow).toBe('workspace:createFlow')
     expect(ipcChannels.workspace.launchFlowPhase).toBe('workspace:launchFlowPhase')
+    expect(ipcChannels.workspace.manualUpdateFlowPhase).toBe('workspace:manualUpdateFlowPhase')
     expect(ipcChannels.workspace.skipFlowPhase).toBe('workspace:skipFlowPhase')
     expect(ipcChannels.workspace.completeFlowPhase).toBe('workspace:completeFlowPhase')
     expect(ipcChannels.workspace.recordFlowPullRequest).toBe('workspace:recordFlowPullRequest')
@@ -117,6 +118,15 @@ describe('IPC contract', () => {
     } satisfies IpcRequestMap[LaunchFlowPhaseChannel]
     const launchResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[LaunchFlowPhaseChannel]
 
+    type ManualUpdateFlowPhaseChannel = typeof ipcChannels.workspace.manualUpdateFlowPhase
+    const manualUpdateRequest = {
+      flowId: 'flow-one',
+      phaseId: 'implementation',
+      action: 'restart',
+      notes: 'Retry after fixing state.'
+    } satisfies IpcRequestMap[ManualUpdateFlowPhaseChannel]
+    const manualUpdateResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[ManualUpdateFlowPhaseChannel]
+
     type SkipFlowPhaseChannel = typeof ipcChannels.workspace.skipFlowPhase
     const skipRequest = {
       flowId: 'flow-one',
@@ -164,12 +174,14 @@ describe('IPC contract', () => {
     const recordMergeResponse = defaultInitialWorkspaceState satisfies IpcResponseMap[RecordFlowMergeChannel]
 
     expect(launchRequest.phaseId).toBe('implementation')
+    expect(manualUpdateRequest.action).toBe('restart')
     expect(skipRequest.notes).toBe('Covered by another slice.')
     expect(completeRequest.summary).toBe('Implementation complete.')
     expect(recordPrRequest.pr.number).toBe(12)
     expect(recordReviewRequest.notes).toBe('Fix the review finding.')
     expect(recordMergeRequest.commit).toBe('abcdef1234567890abcdef1234567890abcdef12')
     expect(launchResponse).toEqual(defaultInitialWorkspaceState)
+    expect(manualUpdateResponse).toEqual(defaultInitialWorkspaceState)
     expect(skipResponse).toEqual(defaultInitialWorkspaceState)
     expect(completeResponse).toEqual(defaultInitialWorkspaceState)
     expect(recordPrResponse).toEqual(defaultInitialWorkspaceState)
