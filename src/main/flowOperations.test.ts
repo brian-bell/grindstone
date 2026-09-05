@@ -36,10 +36,10 @@ describe('Flow operations', () => {
 
     expect(actionIds('blocked')).toEqual(['restart'])
     expect(actionIds('needs_attention')).toEqual(['restart'])
-    expect(actionIds('completed')).toEqual(['restart'])
-    expect(actionIds('skipped')).toEqual(['restart'])
+    expect(actionIds('completed')).toEqual([])
+    expect(actionIds('skipped')).toEqual([])
     expect(actionIds('active')).toEqual(['restart', 'block', 'needs_attention'])
-    expect(actionIds('done')).toEqual(['restart'])
+    expect(actionIds('done')).toEqual([])
     expect(actionIds('ready')).toEqual(['block', 'needs_attention'])
     expect(actionIds('running')).toEqual(['block', 'needs_attention'])
     expect(actionIds('pending')).toEqual([])
@@ -67,7 +67,7 @@ describe('Flow operations', () => {
       kind: 'implementation_child',
       generated: true,
       editable: true
-    })).toEqual(['restart'])
+    })).toEqual([])
 
     expect(actionIds('ready', { phase_id: 'pr-creation', kind: 'pr_creation' })).toEqual([])
     expect(actionIds('blocked', { phase_id: 'human-review', kind: 'human_review' })).toEqual([])

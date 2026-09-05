@@ -1934,6 +1934,52 @@ describe('workspace main handlers', () => {
     })
   })
 
+  it.each(['completed', 'skipped', 'done'])(
+    'rejects a stale restart when an implementation child is %s and review is ready',
+    async (settledStatus) => {
+      const root = await makeTempDir()
+      const repoPath = join(root, 'repo-settled-phase')
+      const artifactRoot = join(root, 'artifacts')
+      const flowId = 'flow-settled-phase'
+      await makeGitRepository(repoPath)
+      const metadata = (status: string) => flowMeta(flowId, repoPath, {
+        phases: [
+          {
+            phase_id: 'implementation-child',
+            parent_phase_id: 'implementation',
+            title: 'Implementation child',
+            kind: 'implementation_child',
+            status,
+            order: 3
+          },
+          {
+            phase_id: 'review-loop-1',
+            title: 'Review Loop 1',
+            kind: 'review_loop',
+            status: 'ready',
+            order: 4
+          }
+        ]
+      })
+      await writeFlowMeta(artifactRoot, flowId, metadata('blocked'))
+      const configPath = join(root, 'grindstone.toml')
+      await writeFile(configPath, `repos = ["${repoPath}"]\nartifact_root = "${artifactRoot}"\n`)
+      const state = await loadInitialWorkspaceState({ configPath })
+      await selectRepository({ repositoryId: state.repository.repositories[0]?.id ?? '' })
+
+      // The workspace still offers restart, but persisted work has since settled.
+      await writeFlowMeta(artifactRoot, flowId, metadata(settledStatus))
+      const metaPath = join(artifactRoot, 'flows', flowId, 'meta.json')
+      const before = await readFile(metaPath, 'utf8')
+      await expect(manualUpdateFlowPhaseInWorkspace({
+        flowId,
+        phaseId: 'implementation-child',
+        action: 'restart'
+      })).rejects.toThrow('Manual phase action is not available: restart')
+      expect(await readFile(metaPath, 'utf8')).toBe(before)
+    }
+  )
+
   it('manually updates phases through validated recovery actions and rejects stale merged Flows', async () => {
     const root = await makeTempDir()
     const repoPath = join(root, 'repo-manual-phase')

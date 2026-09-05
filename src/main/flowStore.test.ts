@@ -149,14 +149,7 @@ describe('Flow artifact store', () => {
             kind: 'implementation',
             summary: 'List rendered',
             launchIds: ['wtui-launch-one', 'wtui-launch-two'],
-            manualActions: [
-              {
-                action: 'restart',
-                label: 'Restart',
-                requiresNotes: false,
-                allowsBlankNotes: true
-              }
-            ],
+            manualActions: undefined,
             updatedAt: '2026-06-10T10:30:00.000Z'
           }
         ]

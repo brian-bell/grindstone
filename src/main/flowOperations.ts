@@ -140,7 +140,8 @@ const DEFAULT_PHASE_COMPLETION_PROMOTIONS = new Map([
 ])
 const PHASE_STATUSES_REQUIRING_NOTES = new Set(['blocked', 'needs_attention', 'skipped'])
 const SAFE_PHASE_OUTCOME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
-const MANUAL_RESTART_FROM_STATUSES = new Set(['blocked', 'needs_attention', 'completed', 'skipped', 'active', 'done'])
+// Restarting settled work requires invalidating downstream phases first.
+const MANUAL_RESTART_FROM_STATUSES = new Set(['blocked', 'needs_attention', 'active'])
 const MANUAL_MARK_FROM_STATUSES = new Set(['ready', 'running', 'active'])
 const MANUAL_SKIP_IMPLEMENTATION_CHILD_FROM_STATUSES = new Set([
   'pending',
