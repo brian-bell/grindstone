@@ -22,7 +22,7 @@ const baseContext = {
 }
 
 describe('agent launch command builder', () => {
-  it('builds codex interactive launches with prompt argv and wtui metadata env', () => {
+  it('builds codex interactive launches with prompt argv and wtui-compatible Grindstone metadata env', () => {
     const command = buildAgentLaunchCommand(baseContext)
 
     expect(command).toEqual({
@@ -31,6 +31,17 @@ describe('agent launch command builder', () => {
       cwd: '/worktrees/grindstone-flow-ship-flow',
       initialInput: null,
       env: {
+        GRINDSTONE_STATE_ROOT: '/state',
+        GRINDSTONE_AGENT: 'codex',
+        GRINDSTONE_FLOW_ID: 'ship-flow',
+        GRINDSTONE_PHASE_ID: 'plan',
+        GRINDSTONE_PLAN_ID: 'plan-123',
+        GRINDSTONE_PLAN_PATH: '/state/plans/plan-123/plan.md',
+        GRINDSTONE_LAUNCH_ID: 'launch-123',
+        GRINDSTONE_REPO_PATH: '/repos/grindstone',
+        GRINDSTONE_WORKTREE_PATH: '/worktrees/grindstone-flow-ship-flow',
+        GRINDSTONE_BRANCH: 'flow/ship-flow',
+        GRINDSTONE_COMMIT: 'abc123',
         WTUI_AGENT: 'codex',
         WTUI_FLOW_ID: 'ship-flow',
         WTUI_FLOW_PHASE_ID: 'plan',

@@ -43,13 +43,6 @@ export async function resolveArtifactRoot(
     return resolve(explicitRoot)
   }
 
-  for (const key of ['WTUI_FLOW_STATE_ROOT', 'WTUI_PLAN_STATE_ROOT', 'WTUI_SESSION_STATE_ROOT']) {
-    const value = env[key]
-    if (value !== undefined && value !== '') {
-      return resolve(value)
-    }
-  }
-
   const config = await loadGrindstoneConfig(options)
   if (!config.ok) {
     const message = config.diagnostics[0]?.message ?? 'Unknown config validation error.'

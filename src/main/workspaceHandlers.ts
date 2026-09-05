@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { handleTypedIpc, ipcChannels } from '@shared/ipc'
@@ -26,7 +26,6 @@ import {
   type RepositoryPaneState,
   type RepositoryRow,
   type SkipFlowPhaseRequest,
-  type TerminalEvent,
   type TerminalEventSubscriptionRequest,
   type TerminalEventSubscriptionResponse,
   type TerminalEventUnsubscribeRequest,
@@ -56,6 +55,13 @@ import { createFlowOperations, getFlowPhaseManualActionAffordances } from './flo
 import { runExclusiveFlowMutation } from './flowMutationQueue'
 import { createPlanStore } from './planStore'
 import { scanRepositoryCatalog, type RepositoryCatalogResult } from './repositoryCatalog'
+import {
+  isTerminalEventSender,
+  publishTerminalEventToSubscribers,
+  subscribeTerminalEventSender,
+  unsubscribeTerminalEventSender,
+  type TerminalEventSender
+} from './terminalEventBus'
 import { TerminalSessionManager, type LaunchTerminalRequest } from './terminalSessionManager'
 import {
   createRepository,
@@ -96,17 +102,6 @@ let currentSelectionRequestId = 0
 
 let currentTerminalManager: TerminalManagerPort | undefined
 let currentTerminalManagerArtifactRoot: string | undefined
-
-type TerminalEventSender = {
-  id: number
-  send: (channel: string, payload: unknown) => void
-}
-
-type TerminalEventSubscription = TerminalEventSubscriptionRequest & {
-  sender: TerminalEventSender
-}
-
-const terminalEventSubscriptions = new Map<string, TerminalEventSubscription>()
 
 export async function loadInitialWorkspaceState(
   options: LoadWorkspaceStateOptions = {}
@@ -1339,7 +1334,7 @@ function getTerminalManager(store: FlowStore): TerminalManagerPort {
     currentTerminalManager = new TerminalSessionManager({
       artifactRoot: currentArtifactRoot,
       store,
-      onEvent: publishTerminalEvent
+      onEvent: publishTerminalEventToSubscribers
     })
     currentTerminalManagerArtifactRoot = currentArtifactRoot
   }
@@ -1368,36 +1363,21 @@ async function subscribeTerminalEvents(
     throw new Error(`Flow not found for terminal event subscription: ${request.flowId}`)
   }
 
-  const subscriptionId = randomUUID()
-  terminalEventSubscriptions.set(subscriptionId, {
-    repositoryId: request.repositoryId,
-    flowId: request.flowId,
-    sender: getTerminalEventSender(event)
-  })
+  const sender = getTerminalEventSender(event)
+  const { subscriptionId } = subscribeTerminalEventSender(
+    {
+      repositoryId: request.repositoryId,
+      flowId: request.flowId
+    },
+    sender
+  )
 
   return { subscriptionId }
 }
 
 function unsubscribeTerminalEvents(request: TerminalEventUnsubscribeRequest): undefined {
-  terminalEventSubscriptions.delete(request.subscriptionId)
+  unsubscribeTerminalEventSender(request.subscriptionId)
   return undefined
-}
-
-function publishTerminalEvent(event: TerminalEvent): void {
-  for (const [subscriptionId, subscription] of terminalEventSubscriptions) {
-    if (
-      subscription.repositoryId !== event.repositoryId ||
-      subscription.flowId !== event.flowId
-    ) {
-      continue
-    }
-
-    try {
-      subscription.sender.send(ipcChannels.events.terminal, event)
-    } catch {
-      terminalEventSubscriptions.delete(subscriptionId)
-    }
-  }
 }
 
 function getTerminalEventSender(event: unknown): TerminalEventSender {
@@ -1405,14 +1385,9 @@ function getTerminalEventSender(event: unknown): TerminalEventSender {
     typeof event === 'object' &&
     event !== null &&
     'sender' in event &&
-    typeof event.sender === 'object' &&
-    event.sender !== null &&
-    'id' in event.sender &&
-    typeof event.sender.id === 'number' &&
-    'send' in event.sender &&
-    typeof event.sender.send === 'function'
+    isTerminalEventSender(event.sender)
   ) {
-    return event.sender as TerminalEventSender
+    return event.sender
   }
 
   throw new Error('Terminal event subscription sender is unavailable.')

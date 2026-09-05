@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App, getTerminalOutputAppend } from './App'
+import './styles.css'
 import type {
   LinkedFlowPlanResponse
 } from '@shared/artifacts'
@@ -365,23 +366,45 @@ describe('App shell', () => {
     window.history.pushState({}, '', '/')
   })
 
-  it('opens into the three-pane Flow workspace with default state', async () => {
+  it('opens into the two-pane workspace with default state', async () => {
     setWorkspaceApi(vi.fn().mockResolvedValue(defaultInitialState))
 
     render(<App />)
 
-    expect(await screen.findByRole('region', { name: /^repos$/i })).toBeInTheDocument()
-
-    const repositoryPane = screen.getByRole('region', { name: /^repos$/i })
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
+    const flowsPane = screen.getByRole('region', { name: /^flows$/i })
     const flowPane = screen.getByRole('main', { name: /flow workspace/i })
-    const contextPane = screen.getByRole('region', { name: /contextual hints/i })
 
-    expect(screen.queryByText('Repository Area')).not.toBeInTheDocument()
-    expect(within(repositoryPane).getAllByRole('heading')).toHaveLength(1)
     expect(within(repositoryPane).getByRole('heading', { name: /^repos$/i })).toBeInTheDocument()
     expect(within(repositoryPane).getByText('No repositories configured')).toBeInTheDocument()
+    expect(within(flowsPane).getByRole('heading', { name: /^flows$/i })).toBeInTheDocument()
+    expect(within(flowsPane).getByText('No Flows yet')).toBeInTheDocument()
+    expect(within(flowsPane).queryByRole('button', { name: /new flow/i })).not.toBeInTheDocument()
     expect(within(flowPane).getByText('No Flow selected')).toBeInTheDocument()
-    expect(within(contextPane).getByText('Select a repository')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /contextual hints/i })).not.toBeInTheDocument()
+  })
+
+  it('opens the common config dialog from the repository pane', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+
+    render(<App />)
+
+    const repositoryPane = await screen.findByRole('region', { name: /^repos$/i })
+    expect(screen.queryByRole('dialog', { name: /common config/i })).not.toBeInTheDocument()
+
+    await user.click(within(repositoryPane).getByRole('button', { name: /configure/i }))
+
+    const dialog = await screen.findByRole('dialog', { name: /common config/i })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+
+    within(dialog).getByLabelText('Artifact root').focus()
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog', { name: /common config/i })).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(within(repositoryPane).getByRole('button', { name: /configure/i })).toHaveFocus()
+    )
   })
 
   it('keeps repository loading copy out of secondary left-pane headings', () => {
@@ -447,7 +470,7 @@ describe('App shell', () => {
     expect(launcher).toHaveFocus()
   })
 
-  it('selects a repository through preload and renders its Flow records in a table', async () => {
+  it('selects a repository through preload and inspects its Flows from the sidebar', async () => {
     const user = userEvent.setup()
     const selectRepository = vi.fn().mockResolvedValue(selectedCatalogState)
     setWorkspaceApi(vi.fn().mockResolvedValue(catalogState), selectRepository)
@@ -462,43 +485,88 @@ describe('App shell', () => {
       'aria-pressed',
       'true'
     )
+
+    const flowsPane = screen.getByRole('region', { name: /^flows$/i })
+    const flowItem = within(flowsPane).getByRole('button', { name: /artifact backed flow/i })
+    expect(flowItem).toHaveTextContent('1/2')
+    expect(flowItem).toHaveTextContent('active')
+
     const flowPane = screen.getByRole('main', { name: /flow workspace/i })
-    const flowTable = within(flowPane).getByRole('table', { name: /grindstone flow records/i })
-    expect(within(flowTable).getByRole('columnheader', { name: /flow/i })).toBeInTheDocument()
-    expect(within(flowTable).getByRole('columnheader', { name: /status/i })).toBeInTheDocument()
-    expect(within(flowTable).getByRole('columnheader', { name: /updated/i })).toBeInTheDocument()
-    expect(within(flowTable).getByRole('columnheader', { name: /branch/i })).toBeInTheDocument()
-    expect(within(flowTable).getByRole('columnheader', { name: /plan/i })).toBeInTheDocument()
-    expect(within(flowTable).getByRole('columnheader', { name: /phases/i })).toBeInTheDocument()
+    expect(flowPane).toHaveTextContent('grindstone Flows')
+    expect(flowPane).toHaveTextContent('1 Flow found')
 
-    const rows = within(flowTable).getAllByRole('row')
-    expect(rows).toHaveLength(2)
-    expect(rows[1]).toHaveTextContent('Artifact backed Flow')
-    expect(rows[1]).toHaveTextContent('active')
-    expect(rows[1]).toHaveTextContent('2026-06-11T12:30:00.000Z')
-    expect(rows[1]).toHaveTextContent('flow/list')
-    expect(rows[1]).toHaveTextContent('plan-flow-list')
-    expect(rows[1]).toHaveTextContent('1/2 done, 1 active')
-    expect(rows[1]).not.toHaveTextContent('/repos/grindstone')
-    expect(rows[1]).not.toHaveTextContent('Render list')
-    const detailsButton = within(rows[1]).getByRole('button', {
-      name: /artifact backed flow details/i
-    })
-    expect(detailsButton).toHaveAttribute('aria-expanded', 'false')
-    expect(detailsButton).toHaveAttribute(
-      'title',
-      expect.stringContaining('Repository: /repos/grindstone')
-    )
-    expect(detailsButton).toHaveAttribute(
-      'title',
-      expect.stringContaining('Phase: Render list - completed - Rows are visible')
-    )
+    await user.click(flowItem)
 
-    await user.click(detailsButton)
+    expect(flowItem).toHaveAttribute('aria-pressed', 'true')
+    expect(await within(flowPane).findByRole('heading', {
+      level: 1,
+      name: 'Artifact backed Flow'
+    })).toBeInTheDocument()
+    expect(within(flowPane).getByText('Updated 2026-06-11T12:30:00.000Z')).toBeInTheDocument()
+    expect(within(flowPane).getByText('Branch flow/list')).toBeInTheDocument()
+    expect(within(flowPane).getByText('Repository: /repos/grindstone')).toBeInTheDocument()
+    expect(within(flowPane).getByText('Phase: Render list - completed - Rows are visible'))
+      .toBeInTheDocument()
+    expect(within(flowPane).getByText('Phase: Launch workspace - active')).toBeInTheDocument()
+  })
 
-    expect(detailsButton).toHaveAttribute('aria-expanded', 'true')
-    expect(await within(flowTable).findByRole('region', { name: /artifact backed flow details/i }))
-      .toHaveTextContent('Phase: Launch workspace - active')
+  it('switches the detail view between selected Flows', async () => {
+    const user = userEvent.setup()
+    const secondFlow: FlowListRow = {
+      id: 'second-flow',
+      title: 'Second Flow',
+      status: 'failed',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
+      failure: {
+        stage: 'bootstrap',
+        message: 'npm install failed'
+      },
+      createdAt: '2026-06-12T10:00:00.000Z',
+      updatedAt: '2026-06-12T11:00:00.000Z'
+    }
+    const twoFlowState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: { available: true, error: null },
+        flows: [...(selectedCatalogState.flow.status === 'ready'
+          ? selectedCatalogState.flow.flows
+          : []), secondFlow]
+      }
+    }
+    setWorkspaceApi(vi.fn().mockResolvedValue(twoFlowState))
+
+    render(<App />)
+
+    const flowsPane = await screen.findByRole('region', { name: /^flows$/i })
+    const flowPane = screen.getByRole('main', { name: /flow workspace/i })
+    const firstItem = within(flowsPane).getByRole('button', { name: /artifact backed flow/i })
+    const secondItem = within(flowsPane).getByRole('button', { name: /second flow/i })
+
+    expect(secondItem).toHaveTextContent('failed')
+    expect(secondItem).toHaveTextContent('bootstrap: npm install failed')
+    expect(within(flowPane).getByRole('region', { name: /flows needing attention/i }))
+      .toHaveTextContent('Second Flow')
+
+    await user.click(firstItem)
+    expect(await within(flowPane).findByRole('heading', {
+      level: 1,
+      name: 'Artifact backed Flow'
+    })).toBeInTheDocument()
+    expect(firstItem).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(secondItem)
+    expect(await within(flowPane).findByRole('heading', {
+      level: 1,
+      name: 'Second Flow'
+    })).toBeInTheDocument()
+    expect(secondItem).toHaveAttribute('aria-pressed', 'true')
+    expect(firstItem).toHaveAttribute('aria-pressed', 'false')
+    expect(within(flowPane).getByText('bootstrap: npm install failed')).toBeInTheDocument()
   })
 
   it('renders nested implementation phases and edits generated children through IPC responses', async () => {
@@ -597,14 +665,13 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /phase tree flow details/i }))
-    const phaseTree = within(flowPane).getByRole('region', { name: /phase tree flow details/i })
-    expect(phaseTree).toHaveTextContent('Phase: Implementation - ready')
-    expect(phaseTree).toHaveTextContent('Phase: Build API - pending')
-    expect(phaseTree).toHaveTextContent('Wire the handler')
+    await user.click(screen.getByRole('button', { name: /phase tree flow/i }))
+    expect(within(flowPane).getByText('Phase: Implementation - ready')).toBeInTheDocument()
+    expect(within(flowPane).getByText('Phase: Build API - pending')).toBeInTheDocument()
+    expect(within(flowPane).getByText('Wire the handler')).toBeInTheDocument()
 
-    await user.click(within(phaseTree).getByRole('button', { name: /^edit$/i }))
-    const editForm = within(phaseTree).getByRole('form', { name: /edit build api/i })
+    await user.click(within(flowPane).getByRole('button', { name: /^edit$/i }))
+    const editForm = within(flowPane).getByRole('form', { name: /edit build api/i })
     await user.clear(within(editForm).getByLabelText('Phase title'))
     await user.type(within(editForm).getByLabelText('Phase title'), 'Duplicate title')
     await user.clear(within(editForm).getByLabelText('Order'))
@@ -616,7 +683,7 @@ describe('App shell', () => {
     expect(await within(editForm).findByRole('alert')).toHaveTextContent(
       'Duplicate sibling phase title.'
     )
-    expect(phaseTree).not.toHaveTextContent('Phase: Duplicate title - pending')
+    expect(within(flowPane).queryByText('Phase: Duplicate title - pending')).not.toBeInTheDocument()
 
     await user.clear(within(editForm).getByLabelText('Phase title'))
     await user.type(within(editForm).getByLabelText('Phase title'), 'Build API contract')
@@ -757,9 +824,14 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /launchable flow details/i }))
-    expect(within(flowPane).getByRole('button', { name: /launch repair api/i }))
-      .toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /launchable flow/i }))
+    const repairLaunchButton = within(flowPane).getByRole('button', { name: /launch repair api/i })
+    const repairPhaseLabel = within(flowPane).getByText('Phase: Repair API - needs_attention')
+    expect(repairLaunchButton).toBeInTheDocument()
+    expect(
+      repairLaunchButton.compareDocumentPosition(repairPhaseLabel) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
     await user.click(within(flowPane).getByRole('button', { name: /launch implementation/i }))
 
     expect(launchFlowPhase).toHaveBeenCalledWith({
@@ -900,7 +972,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /review two flow details/i }))
+    await user.click(screen.getByRole('button', { name: /review two flow/i }))
     expect(within(flowPane).getByRole('button', { name: /launch review loop 2/i }))
       .toBeInTheDocument()
     expect(within(flowPane).queryByRole('form', { name: /record pr for review two flow/i }))
@@ -1021,7 +1093,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /pr ready flow details/i }))
+    await user.click(screen.getByRole('button', { name: /pr ready flow/i }))
     const form = within(flowPane).getByRole('form', { name: /record pr for pr ready flow/i })
     expect(within(form).getByLabelText(/head branch/i)).toHaveValue('flow/pr-ready')
     expect(within(form).getByLabelText(/base branch/i)).toHaveValue('main')
@@ -1141,7 +1213,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /reviewable flow details/i }))
+    await user.click(screen.getByRole('button', { name: /reviewable flow/i }))
     const reviewPanel = within(flowPane).getByRole('region', { name: /human review for reviewable flow/i })
     expect(within(reviewPanel).getByText('GitHub PR #13')).toBeInTheDocument()
     expect(within(reviewPanel).queryByRole('region', { name: /merge metadata/i })).not.toBeInTheDocument()
@@ -1249,7 +1321,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /merge ready flow details/i }))
+    await user.click(screen.getByRole('button', { name: /merge ready flow/i }))
     const mergePanel = within(flowPane).getByRole('region', { name: /merge metadata for merge ready flow/i })
 
     await user.click(within(mergePanel).getByRole('button', { name: /record merge/i }))
@@ -1324,14 +1396,13 @@ describe('App shell', () => {
       vi.fn().mockResolvedValue(state),
       vi.fn().mockResolvedValue(state),
       vi.fn().mockResolvedValue(state),
-      vi.fn().mockResolvedValue(state),
       recordFlowPullRequest
     )
 
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /custom pr flow details/i }))
+    await user.click(screen.getByRole('button', { name: /custom pr flow/i }))
 
     expect(within(flowPane).queryByRole('form', { name: /record pr for custom pr flow/i }))
       .not.toBeInTheDocument()
@@ -1448,7 +1519,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /skip child flow details/i }))
+    await user.click(screen.getByRole('button', { name: /skip child flow/i }))
     await user.click(within(flowPane).getByRole('button', { name: /skip build api/i }))
     const skipForm = within(flowPane).getByRole('form', { name: /skip build api/i })
     await user.click(within(skipForm).getByRole('button', { name: /^skip phase$/i }))
@@ -1580,7 +1651,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /restart flow details/i }))
+    await user.click(screen.getByRole('button', { name: /restart flow/i }))
     expect(within(flowPane).queryByRole('button', { name: /restart human review/i }))
       .not.toBeInTheDocument()
 
@@ -1602,7 +1673,7 @@ describe('App shell', () => {
     expect(within(flowPane).getByText('Phase restarted for rerun.')).toBeInTheDocument()
   })
 
-  it('opens a linked plan from selected Flow context', async () => {
+  it('opens a linked plan from the selected Flow detail', async () => {
     const user = userEvent.setup()
     const readFlowPlan = vi.fn().mockResolvedValue({
       status: 'ready',
@@ -1635,6 +1706,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(screen.getByRole('button', { name: /artifact backed flow/i }))
     await user.click(within(flowPane).getByRole('button', {
       name: /open plan plan-flow-list for artifact backed flow/i
     }))
@@ -1645,6 +1717,157 @@ describe('App shell', () => {
     })
     expect(planPanel).toHaveTextContent('Plan: Linked Plan')
     expect(planPanel).toHaveTextContent('Ship the CLI.')
+  })
+
+  it('discards in-flight plan responses after switching Flows', async () => {
+    const user = userEvent.setup()
+    let resolvePlan: (response: LinkedFlowPlanResponse) => void = () => undefined
+    const readFlowPlan = vi.fn(
+      () => new Promise<LinkedFlowPlanResponse>((resolve) => {
+        resolvePlan = resolve
+      })
+    )
+    const secondFlow: FlowListRow = {
+      id: 'second-flow',
+      title: 'Second Flow',
+      status: 'active',
+      repositoryId: '/repos/grindstone',
+      repositoryPath: '/repos/grindstone',
+      merge: { status: 'pending' },
+      createdAt: '2026-06-12T10:00:00.000Z',
+      updatedAt: '2026-06-12T11:00:00.000Z'
+    }
+    const twoFlowState: InitialWorkspaceState = {
+      ...selectedCatalogState,
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: { available: true, error: null },
+        flows: [...(selectedCatalogState.flow.status === 'ready'
+          ? selectedCatalogState.flow.flows
+          : []), secondFlow]
+      }
+    }
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(twoFlowState),
+      vi.fn().mockResolvedValue(twoFlowState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: twoFlowState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(twoFlowState),
+      readFlowPlan
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(screen.getByRole('button', { name: /artifact backed flow/i }))
+    await user.click(within(flowPane).getByRole('button', {
+      name: /open plan plan-flow-list for artifact backed flow/i
+    }))
+    expect(await within(flowPane).findByRole('status', {
+      name: /artifact backed flow linked plan/i
+    })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /second flow/i }))
+    expect(await within(flowPane).findByRole('heading', {
+      level: 1,
+      name: 'Second Flow'
+    })).toBeInTheDocument()
+
+    await act(async () => {
+      resolvePlan({
+        status: 'ready',
+        metadata: {
+          schema_version: 1,
+          plan_id: 'plan-flow-list',
+          title: 'Stale Plan',
+          status: 'approved',
+          plan_path: '/artifacts/plans/plan-flow-list/plan.md',
+          created_at: '2026-06-15T10:00:00.000Z',
+          updated_at: '2026-06-15T10:00:00.000Z'
+        },
+        body: 'Stale plan body'
+      })
+    })
+
+    expect(within(flowPane).queryByText('Stale plan body')).not.toBeInTheDocument()
+    expect(within(flowPane).queryByRole('region', { name: /linked plan/i })).not.toBeInTheDocument()
+  })
+
+  it('applies plan responses only for the latest open request', async () => {
+    const user = userEvent.setup()
+    const planResolvers: Array<(response: LinkedFlowPlanResponse) => void> = []
+    const readFlowPlan = vi.fn(
+      () => new Promise<LinkedFlowPlanResponse>((resolve) => {
+        planResolvers.push(resolve)
+      })
+    )
+    const planResponse = (title: string, body: string): LinkedFlowPlanResponse => ({
+      status: 'ready',
+      metadata: {
+        schema_version: 1,
+        plan_id: 'plan-flow-list',
+        title,
+        status: 'approved',
+        plan_path: '/artifacts/plans/plan-flow-list/plan.md',
+        created_at: '2026-06-15T10:00:00.000Z',
+        updated_at: '2026-06-15T10:00:00.000Z'
+      },
+      body
+    })
+    setWorkspaceApi(
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      vi.fn().mockResolvedValue(editableConfigState),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        workspace: selectedCatalogState,
+        config: editableConfigState
+      } satisfies ConfigUpdateResponse),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(catalogState),
+      vi.fn().mockResolvedValue(selectedCatalogState),
+      readFlowPlan
+    )
+
+    render(<App />)
+
+    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(screen.getByRole('button', { name: /artifact backed flow/i }))
+    const planButton = within(flowPane).getByRole('button', {
+      name: /open plan plan-flow-list for artifact backed flow/i
+    })
+
+    await user.click(planButton)
+    expect(await within(flowPane).findByRole('status', {
+      name: /artifact backed flow linked plan/i
+    })).toBeInTheDocument()
+
+    await user.click(planButton)
+    expect(within(flowPane).queryByRole('status', { name: /linked plan/i }))
+      .not.toBeInTheDocument()
+
+    await act(async () => {
+      planResolvers[0]?.(planResponse('Late Plan', 'Late body'))
+    })
+    expect(within(flowPane).queryByText('Late body')).not.toBeInTheDocument()
+
+    await user.click(planButton)
+    expect(await within(flowPane).findByRole('status', {
+      name: /artifact backed flow linked plan/i
+    })).toBeInTheDocument()
+    await act(async () => {
+      planResolvers[1]?.(planResponse('Current Plan', 'Current body'))
+    })
+    expect(await within(flowPane).findByText('Current body')).toBeInTheDocument()
+    expect(within(flowPane).queryByText('Late body')).not.toBeInTheDocument()
   })
 
   it('renders Flow terminal tabs and routes terminal controls through scoped preload calls', async () => {
@@ -1726,6 +1949,7 @@ describe('App shell', () => {
     render(<App />)
 
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(screen.getByRole('button', { name: /terminal flow/i }))
     const terminalPanel = within(flowPane).getByRole('region', {
       name: /terminal flow terminal sessions/i
     })
@@ -1758,6 +1982,7 @@ describe('App shell', () => {
   })
 
   it('caps live terminal output events to the recent-output limit', async () => {
+    const user = userEvent.setup()
     let terminalHandler: ((event: TerminalEvent) => void) | undefined
     const terminalState: InitialWorkspaceState = {
       ...selectedCatalogState,
@@ -1836,6 +2061,7 @@ describe('App shell', () => {
 
     render(<App />)
     const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
+    await user.click(screen.getByRole('button', { name: /terminal flow/i }))
     const terminalOutput = within(flowPane).getByLabelText(/plan terminal output/i)
     await waitFor(() => {
       expect(terminalHandler).toBeDefined()
@@ -1911,10 +2137,10 @@ describe('App shell', () => {
 
     render(<App />)
 
-    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    expect(within(flowPane).queryByLabelText(/^title$/i)).not.toBeInTheDocument()
+    const flowsPane = await screen.findByRole('region', { name: /^flows$/i })
+    expect(screen.queryByRole('dialog', { name: /create flow/i })).not.toBeInTheDocument()
 
-    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+    await user.click(within(flowsPane).getByRole('button', { name: /new flow/i }))
 
     const dialog = await screen.findByRole('dialog', { name: /create flow/i })
     const titleInput = within(dialog).getByLabelText(/^title$/i)
@@ -1937,42 +2163,49 @@ describe('App shell', () => {
       instructions: 'Build the path',
       baseRef: 'main'
     } satisfies CreateFlowRequest)
-    expect(await within(flowPane).findByText('Ship workspace creation')).toBeInTheDocument()
-    expect(within(flowPane).getByText('flow/ship-workspace-creation')).toBeInTheDocument()
+    const createdItem = await within(flowsPane).findByRole('button', {
+      name: /ship workspace creation/i
+    })
+    expect(createdItem).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: /create flow/i })).not.toBeInTheDocument()
 
-    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+    await user.click(createdItem)
+    expect(
+      await within(screen.getByRole('main', { name: /flow workspace/i }))
+        .findByText('Branch flow/ship-workspace-creation')
+    ).toBeInTheDocument()
+
+    await user.click(within(flowsPane).getByRole('button', { name: /new flow/i }))
     expect(within(await screen.findByRole('dialog', { name: /create flow/i })).getByLabelText(/^title$/i))
       .toHaveValue('')
 
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: /create flow/i })).not.toBeInTheDocument()
-    expect(within(flowPane).getByRole('button', { name: /new flow/i })).toHaveFocus()
+    expect(within(flowsPane).getByRole('button', { name: /new flow/i })).toHaveFocus()
   })
 
-  it('opens Flow creation from the enabled right-pane shortcut', async () => {
-    const user = userEvent.setup()
-    const stateWithEnabledShortcut: InitialWorkspaceState = {
+  it('disables New Flow when creation is unavailable', async () => {
+    const unavailableState: InitialWorkspaceState = {
       ...selectedCatalogState,
-      shortcuts: selectedCatalogState.shortcuts.map((shortcut) =>
-        shortcut.id === 'new-flow'
-          ? { ...shortcut, disabled: false }
-          : shortcut
-      )
+      flow: {
+        status: 'ready',
+        repositoryId: '/repos/grindstone',
+        repositoryName: 'grindstone',
+        create: {
+          available: false,
+          error: null
+        },
+        flows: selectedCatalogState.flow.status === 'ready'
+          ? selectedCatalogState.flow.flows
+          : []
+      }
     }
-    setWorkspaceApi(vi.fn().mockResolvedValue(stateWithEnabledShortcut))
+    setWorkspaceApi(vi.fn().mockResolvedValue(unavailableState))
 
     render(<App />)
 
-    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    expect(within(flowPane).queryByLabelText(/^title$/i)).not.toBeInTheDocument()
-    const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
-    const newFlowShortcut = within(contextPane).getByRole('button', { name: /new flow/i })
-    expect(newFlowShortcut).toBeEnabled()
-
-    await user.click(newFlowShortcut)
-
-    expect(await screen.findByRole('dialog', { name: /create flow/i })).toBeInTheDocument()
+    const flowsPane = await screen.findByRole('region', { name: /^flows$/i })
+    expect(within(flowsPane).getByRole('button', { name: /new flow/i })).toBeDisabled()
   })
 
   it('keeps failed Flow creation input in the modal and renders persisted start failures', async () => {
@@ -2031,8 +2264,8 @@ describe('App shell', () => {
 
     render(<App />)
 
-    const flowPane = await screen.findByRole('main', { name: /flow workspace/i })
-    await user.click(within(flowPane).getByRole('button', { name: /new flow/i }))
+    const flowsPane = await screen.findByRole('region', { name: /^flows$/i })
+    await user.click(within(flowsPane).getByRole('button', { name: /new flow/i }))
 
     const dialog = await screen.findByRole('dialog', { name: /create flow/i })
     await user.type(within(dialog).getByLabelText(/^title$/i), 'Broken bootstrap')
@@ -2041,23 +2274,15 @@ describe('App shell', () => {
 
     expect(await within(dialog).findByRole('alert', { name: /flow creation error/i }))
       .toHaveTextContent('npm install failed')
-    const failedRows = within(
-      within(flowPane).getByRole('table', { name: /grindstone flow records/i })
-    ).getAllByRole('row')
-    const failedRow = failedRows[1]
-    expect(failedRow).toHaveTextContent('Broken bootstrap')
-    expect(failedRow).toHaveTextContent('failed')
-    expect(failedRow).toHaveTextContent('bootstrap: npm install failed')
-    expect(failedRow).not.toHaveTextContent('missing package')
-    const detailsButton = within(failedRow as HTMLElement).getByRole('button', {
-      name: /broken bootstrap details/i
-    })
-    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Failure: bootstrap'))
-    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Command: npm install'))
-    expect(detailsButton).toHaveAttribute('title', expect.stringContaining('Output: missing package'))
-    await user.click(detailsButton)
-    expect(await within(flowPane).findByRole('region', { name: /broken bootstrap details/i }))
-      .toHaveTextContent('Output: missing package')
+
+    const failedItem = within(flowsPane).getByRole('button', { name: /broken bootstrap/i })
+    expect(failedItem).toHaveTextContent('failed')
+    expect(failedItem).toHaveTextContent('bootstrap: npm install failed')
+    expect(failedItem).not.toHaveTextContent('missing package')
+
+    await user.click(failedItem)
+    const flowPane = screen.getByRole('main', { name: /flow workspace/i })
+    expect(await within(flowPane).findByText('Output: missing package')).toBeInTheDocument()
     expect(within(dialog).getByLabelText(/^title$/i)).toHaveValue('Broken bootstrap')
   })
 
@@ -2080,7 +2305,7 @@ describe('App shell', () => {
     )
 
     resolveSelection(selectedCatalogState)
-    expect(await screen.findByText('Artifact backed Flow')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /artifact backed flow/i })).toBeInTheDocument()
   })
 
   it('keeps the latest repository selection when earlier IPC responses finish later', async () => {
@@ -2107,13 +2332,14 @@ describe('App shell', () => {
     await act(async () => {
       resolveBeta(betaSelectedCatalogState)
     })
-    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
+    expect(await screen.findByRole('button', { name: /beta flow/i })).toBeInTheDocument()
 
     await act(async () => {
       resolveAlpha(alphaSelectedCatalogState)
     })
-    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('Beta Flow')
-    expect(screen.getByRole('main', { name: /flow workspace/i })).not.toHaveTextContent('Alpha Flow')
+    expect(screen.getByRole('button', { name: /beta flow/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /alpha flow/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('main', { name: /flow workspace/i })).toHaveTextContent('beta Flows')
     expect(within(repositoryPane).getByRole('button', { name: /beta/i })).toHaveAttribute('aria-pressed', 'true')
   })
 
@@ -2171,20 +2397,6 @@ describe('App shell', () => {
       await screen.findByRole('alert', { name: /flow workspace error/i })
     ).toHaveTextContent('Only Flow workspace routes are available in this shell.')
     expect(screen.queryByText('No Flow selected')).not.toBeInTheDocument()
-  })
-
-  it('renders disabled Flow shortcut affordances in the right pane', async () => {
-    setWorkspaceApi(vi.fn().mockResolvedValue(defaultInitialState))
-
-    render(<App />)
-
-    const contextPane = await screen.findByRole('region', { name: /contextual hints/i })
-    const newFlow = within(contextPane).getByRole('button', { name: /new flow/i })
-    const continueFlow = within(contextPane).getByRole('button', { name: /continue flow/i })
-
-    expect(newFlow).toBeDisabled()
-    expect(continueFlow).toBeDisabled()
-    expect(within(contextPane).getByText(/Plans and sessions stay attached/i)).toBeInTheDocument()
   })
 
   it('disables repository creation when no scan roots are configured', async () => {
@@ -2453,7 +2665,7 @@ describe('App shell', () => {
       .toHaveTextContent('new-repo')
   })
 
-  it('opens the common config panel with existing editable values', async () => {
+  it('opens the common config dialog with existing editable values', async () => {
     const user = userEvent.setup()
     setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
 
@@ -2461,13 +2673,34 @@ describe('App shell', () => {
 
     await user.click(await screen.findByRole('button', { name: /configure/i }))
 
-    expect(await screen.findByRole('region', { name: /common config/i })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: /common config/i })).toBeInTheDocument()
     expect(screen.getByLabelText('Scan root 1')).toHaveValue('/repos')
     expect(screen.getByLabelText('Repository 1')).toHaveValue('/repos/grindstone')
     expect(screen.getByLabelText('Default agent')).toHaveValue('codex')
     expect(screen.getByLabelText('Artifact root')).toHaveValue('./artifacts')
     expect(screen.getByLabelText('Hook 1 command')).toHaveValue('npm install')
     expect(screen.getByLabelText('Hook 1 environment')).toHaveValue('NODE_ENV=test')
+  })
+
+  it('preserves unsaved common config edits when closing and reopening the dialog', async () => {
+    const user = userEvent.setup()
+    setWorkspaceApi(vi.fn().mockResolvedValue(catalogState))
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /configure/i }))
+    const dialog = await screen.findByRole('dialog', { name: /common config/i })
+    await user.clear(within(dialog).getByLabelText('Artifact root'))
+    await user.type(within(dialog).getByLabelText('Artifact root'), './draft-artifacts')
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog', { name: /common config/i })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /configure/i }))
+
+    expect(await screen.findByRole('dialog', { name: /common config/i })).toBeInTheDocument()
+    expect(screen.getByLabelText('Artifact root')).toHaveValue('./draft-artifacts')
   })
 
   it('does not save an empty draft when editable config fails to load', async () => {

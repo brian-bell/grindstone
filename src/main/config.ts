@@ -53,7 +53,7 @@ type RawConfig = {
   [key: string]: unknown
 }
 
-const DEFAULT_ARTIFACT_ROOT = '~/.local/state/wtui/sessions/v1'
+const DEFAULT_ARTIFACT_ROOT = '~/.local/state/grindstone/sessions/v1'
 
 const EDITABLE_CONFIG_KEYS = [
   'scan_roots',
@@ -308,7 +308,7 @@ function getDefaultArtifactRoot(options: LoadGrindstoneConfigOptions): string {
 
   return xdgStateHome === undefined || xdgStateHome === ''
     ? DEFAULT_ARTIFACT_ROOT
-    : join(xdgStateHome, 'wtui', 'sessions', 'v1')
+    : join(xdgStateHome, 'grindstone', 'sessions', 'v1')
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
